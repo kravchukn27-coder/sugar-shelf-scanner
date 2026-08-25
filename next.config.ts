@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {
-  output: "standalone",
-};
+// Railway starts this app with `next start`. Keep Next's normal build output so
+// the server and its hashed CSS/JS assets are deployed together.
+const nextConfig: NextConfig = {};
 
 export default nextConfig;
