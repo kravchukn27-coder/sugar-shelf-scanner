@@ -130,6 +130,10 @@ export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEn
       body: JSON.stringify({
         contents: [{ parts: [{ text: promptFor(input.context) }, { inline_data: { mime_type: input.mimeType, data: input.imageBase64.replace(/^data:[^;]+;base64,/, "") } }] }],
         generationConfig: {
+          // Shelf recognition is latency-sensitive. Gemini 3.7 Flash defaults
+          // to medium reasoning; low retains multimodal detection while
+          // avoiding an unnecessarily long deliberation for each camera frame.
+          thinkingConfig: { thinkingLevel: "low" },
           responseMimeType: "application/json",
           responseSchema: {
             type: "OBJECT",
