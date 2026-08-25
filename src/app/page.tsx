@@ -1,13 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AnalyzeScanResponse, Detection } from "@/lib/contracts/scan";
+import type { AnalyzeScanResponse, Detection, PreflightScanResponse } from "@/lib/contracts/scan";
 
 const FRAME_INTERVAL = 650;
-const RESULT_SETTLE_MS = 2_000;
+const EMPTY_RESULT_COOLDOWN_MS = 4_000;
+const ERROR_COOLDOWN_MS = 6_000;
 type CameraState = "starting" | "live" | "unsupported" | "error";
-type ScanFeedback = "idle" | "analyzing" | "found" | "empty" | "error";
+type ScanFeedback = "idle" | "preflight" | "analyzing" | "found" | "empty" | "uncertain" | "error";
 const bandCopy = { green: "Low sugar", yellow: "Moderate sugar", orange: "High sugar", red: "Very high sugar", unknown: "Needs a check" } as const;
+
+function isEligibleDetection(detection: Detection) {
+  return detection.confidence >= 0.55 && Boolean(detection.visualCandidate.brand || detection.visualCandidate.name);
+}
 
 function Chevron({ up = false }: { up?: boolean }) { return <svg aria-hidden="true" className={up ? "chevron up" : "chevron"} viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>; }
 function CloseIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17" /></svg>; }
@@ -29,51 +34,100 @@ export default function HomePage() {
   const [uploadUrl, setUploadUrl] = useState<string | null>(null);
   const [frozenFrame, setFrozenFrame] = useState<string | null>(null);
   const detections = scan?.detections ?? [];
-  const activeDetections = detections.filter((d) => d.confidence >= 0.55);
+  const activeDetections = detections.filter(isEligibleDetection);
 
-  const analyzeFrame = useCallback(async (source: HTMLVideoElement | HTMLImageElement) => {
+  const captureFrame = useCallback((source: HTMLVideoElement | HTMLImageElement, targetWidth: number, quality: number) => {
     const canvas = canvasRef.current;
     const hasSize = "videoWidth" in source ? source.videoWidth > 0 : source.naturalWidth > 0;
-    if (!canvas || requestInFlight.current || isSheetOpen || !hasSize) return;
-    requestInFlight.current = true;
-    setIsScanning(true);
-    setScanFeedback("analyzing");
+    if (!canvas || !hasSize) return null;
     const width = "videoWidth" in source ? source.videoWidth : source.naturalWidth;
     const height = "videoHeight" in source ? source.videoHeight : source.naturalHeight;
-    canvas.width = 960;
-    canvas.height = Math.max(1, Math.round((height / width) * 960));
+    canvas.width = targetWidth;
+    canvas.height = Math.max(1, Math.round((height / width) * targetWidth));
     canvas.getContext("2d")?.drawImage(source, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", quality);
+  }, []);
+
+  const analyzeConfirmedCandidate = useCallback(async (source: HTMLVideoElement | HTMLImageElement) => {
+    // Take a new high-resolution photo after preflight. For a live camera this
+    // avoids analysing the deliberately small gate frame.
+    const imageDataUrl = captureFrame(source, 960, 0.7);
+    if (!imageDataUrl) {
+      setScanFeedback("error");
+      return ERROR_COOLDOWN_MS;
+    }
     const frameId = `frame-${++frameIndex.current}`;
-    const imageDataUrl = canvas.toDataURL("image/jpeg", 0.7);
     const isLiveCameraFrame = source instanceof HTMLVideoElement;
-    let keepFrozenFrame = false;
-    if (isLiveCameraFrame) setFrozenFrame(imageDataUrl);
+    setScanFeedback("analyzing");
+    let retryCooldown = EMPTY_RESULT_COOLDOWN_MS;
     try {
       const imageBase64 = imageDataUrl.split(",")[1];
       const response = await fetch("/api/scan/analyze", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ imageBase64, mimeType: "image/jpeg", context: "shelf", clientFrameId: frameId }) });
       if (!response.ok) {
+        retryCooldown = ERROR_COOLDOWN_MS;
+        setScanFeedback("error");
+        return retryCooldown;
+      }
+      const nextScan = await response.json() as AnalyzeScanResponse;
+      const hasEligibleDetection = nextScan.detections.some(isEligibleDetection);
+      if (hasEligibleDetection) {
+        setScan(nextScan);
+        // The UI only becomes a still photograph after Gemini has confirmed a
+        // packaged product. This is what makes the capture feel intentional.
+        if (isLiveCameraFrame) setFrozenFrame(imageDataUrl);
+        setScanFeedback("found");
+      } else {
+        setScanFeedback("empty");
+      }
+    } catch {
+      retryCooldown = ERROR_COOLDOWN_MS;
+      setScanFeedback("error");
+    } finally {
+      // The caller owns the in-flight lock so preflight + analysis are one
+      // atomic scan and can never overlap with a second camera interval.
+    }
+    return retryCooldown;
+  }, [captureFrame]);
+
+  const preflightFrame = useCallback(async (source: HTMLVideoElement | HTMLImageElement) => {
+    const isLiveCameraFrame = source instanceof HTMLVideoElement;
+    if (requestInFlight.current || isSheetOpen) return;
+    const imageDataUrl = captureFrame(source, 448, 0.55);
+    if (!imageDataUrl) return;
+
+    requestInFlight.current = true;
+    setIsScanning(true);
+    setScan(null);
+    setScanFeedback("preflight");
+    let retryCooldown = EMPTY_RESULT_COOLDOWN_MS;
+    try {
+      const response = await fetch("/api/scan/preflight", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ imageBase64: imageDataUrl.split(",")[1], mimeType: "image/jpeg", context: "shelf", clientFrameId: `preflight-${++frameIndex.current}` }),
+      });
+      if (!response.ok) {
+        retryCooldown = ERROR_COOLDOWN_MS;
         setScanFeedback("error");
         return;
       }
-      const nextScan = await response.json() as AnalyzeScanResponse;
-      setScan(nextScan);
-      keepFrozenFrame = nextScan.detections.some((detection) => detection.confidence >= 0.55);
-      setScanFeedback(keepFrozenFrame ? "found" : "empty");
+      const preflight = await response.json() as PreflightScanResponse;
+      const isCandidate = preflight.decision === "candidate" && preflight.packagedProductCount >= 1 && preflight.confidence >= 0.75;
+      if (!isCandidate) {
+        retryCooldown = preflight.decision === "uncertain" ? EMPTY_RESULT_COOLDOWN_MS : EMPTY_RESULT_COOLDOWN_MS;
+        setScanFeedback(preflight.decision === "uncertain" ? "uncertain" : "empty");
+        return;
+      }
+      retryCooldown = await analyzeConfirmedCandidate(source);
     } catch {
+      retryCooldown = ERROR_COOLDOWN_MS;
       setScanFeedback("error");
     } finally {
       requestInFlight.current = false;
-      nextScanAllowedAt.current = Date.now() + RESULT_SETTLE_MS;
+      nextScanAllowedAt.current = Date.now() + (isLiveCameraFrame ? retryCooldown : Number.MAX_SAFE_INTEGER);
       setIsScanning(false);
-      // An automatic camera attempt that finds nothing returns to the live
-      // preview after the result message. Uploaded photos stay visible.
-      if (isLiveCameraFrame && !keepFrozenFrame) {
-        window.setTimeout(() => {
-          setFrozenFrame((current) => current === imageDataUrl ? null : current);
-        }, RESULT_SETTLE_MS);
-      }
     }
-  }, [isSheetOpen]);
+  }, [analyzeConfirmedCandidate, captureFrame, isSheetOpen]);
 
   useEffect(() => {
     let active = true;
@@ -92,26 +146,33 @@ export default function HomePage() {
   useEffect(() => {
     if (cameraState !== "live" || isSheetOpen || uploadUrl || frozenFrame) return;
     const timer = window.setInterval(() => {
-      if (videoRef.current?.readyState && !requestInFlight.current && Date.now() >= nextScanAllowedAt.current) void analyzeFrame(videoRef.current);
+      // The browser cannot reliably tell a product from a document or a person.
+      // Keep the preview live and let Gemini make that decision; only a positive
+      // response freezes the submitted frame.
+      if (videoRef.current?.readyState && !requestInFlight.current && Date.now() >= nextScanAllowedAt.current) void preflightFrame(videoRef.current);
     }, FRAME_INTERVAL);
     return () => window.clearInterval(timer);
-  }, [analyzeFrame, cameraState, frozenFrame, isSheetOpen, uploadUrl]);
+  }, [cameraState, frozenFrame, isSheetOpen, preflightFrame, uploadUrl]);
   useEffect(() => {
     if (!uploadUrl || isSheetOpen) return;
-    const image = new Image(); image.onload = () => void analyzeFrame(image); image.src = uploadUrl;
-  }, [analyzeFrame, isSheetOpen, uploadUrl]);
+    const image = new Image(); image.onload = () => void preflightFrame(image); image.src = uploadUrl;
+  }, [isSheetOpen, preflightFrame, uploadUrl]);
   function onUpload(file: File | undefined) { if (!file) return; setUploadUrl((oldUrl) => { if (oldUrl) URL.revokeObjectURL(oldUrl); return URL.createObjectURL(file); }); setFrozenFrame(null); setCameraState("live"); setScan(null); setScanFeedback("idle"); }
   function closeSheet() { setIsSheetOpen(false); setSelectedId(null); }
   function clearScan() { setScan(null); setUploadUrl(null); setFrozenFrame(null); setScanFeedback("idle"); nextScanAllowedAt.current = Date.now() + 800; }
-  const cameraMessage = isScanning
-    ? "Analyzing the product in frame…"
+  const cameraMessage = scanFeedback === "preflight"
+    ? "Looking for packaged products…"
+    : scanFeedback === "analyzing"
+      ? "Product found — checking details…"
     : scanFeedback === "empty"
       ? "No packaged products found — move closer"
+      : scanFeedback === "uncertain"
+        ? "Move closer to a packaged product"
       : scanFeedback === "error"
         ? "Couldn’t analyze this frame — trying again"
         : activeDetections.length
           ? `${activeDetections.length} products found`
-          : "Point at a shelf to scan";
+          : "Point at packaged products to scan";
 
   return <main className="scanner-shell">
     <section className="camera-scene" aria-label="Sugar shelf scanner">
@@ -120,7 +181,7 @@ export default function HomePage() {
       <div className="camera-vignette" />
       <header className="camera-controls"><span className="round-control" aria-label="Shelf scanner"><ScanIcon /></span><span className="live-indicator"><i /> {frozenFrame || uploadUrl ? "CAPTURED" : "LIVE"}</span><button className="round-control" onClick={clearScan} aria-label="Clear scan"><CloseIcon /></button></header>
       {activeDetections.map((detection) => <ProductOverlay key={detection.id} detection={detection} selected={selectedId === detection.id} onSelect={() => setSelectedId(detection.id)} />)}
-      {isScanning && activeDetections.length === 0 && <div className="processing-frame" aria-hidden="true"><span>Analyzing</span></div>}
+      {isScanning && !frozenFrame && <div className="processing-frame" aria-hidden="true"><span>{scanFeedback === "analyzing" ? "Product found" : "Looking"}</span></div>}
       <div className={`camera-copy ${scanFeedback}`} aria-live="polite">{cameraMessage}<span>Photos are sent for analysis and are not saved.</span></div>
       <label className="gallery-button" aria-label="Choose a shelf photo"><input type="file" accept="image/*" capture="environment" onChange={(event) => onUpload(event.target.files?.[0])} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label>
       {(cameraState === "error" || cameraState === "unsupported") && <div className="camera-notice">Camera unavailable. Choose a shelf photo instead.</div>}

@@ -4,8 +4,13 @@ const serverEnvSchema = z.object({
   VISION_PROVIDER: z.enum(["mock", "gemini"]).default("mock"),
   GEMINI_API_KEY: z.string().min(1).optional(),
   GEMINI_VISION_MODEL: z.string().min(1).default("gemini-2.5-flash"),
+  GEMINI_PREFLIGHT_MODEL: z.string().min(1).default("gemini-2.5-flash-lite"),
   DATABASE_URL: z.string().url().optional(),
   RATE_LIMIT_SECRET: z.string().min(16).optional(),
+  // Optional: enables the free USDA Branded Foods fallback. Never expose it to iOS.
+  USDA_FDC_API_KEY: z.string().min(1).optional(),
+  // Open Food Facts asks integrators to identify their app and contact address.
+  OPEN_FOOD_FACTS_USER_AGENT: z.string().min(1).optional(),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
