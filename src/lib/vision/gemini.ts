@@ -46,6 +46,21 @@ export class VisionRequestError extends Error {
   }
 }
 
+async function throwGeminiProviderError(response: Response, action: "analyze" | "preflight"): Promise<never> {
+  const payload = await response.json().catch(() => null) as { error?: { message?: unknown } } | null;
+  const providerMessage = typeof payload?.error?.message === "string"
+    ? payload.error.message.replace(/\s+/g, " ").slice(0, 240)
+    : "No diagnostic message was returned.";
+  // This contains only Gemini's validation message; never log request bodies,
+  // image data, or credentials.
+  console.warn(`Gemini ${action} rejected the request (${response.status}): ${providerMessage}`);
+  throw new VisionRequestError(
+    `Vision provider could not ${action} this frame: ${providerMessage}`,
+    response.status >= 400 && response.status < 500 ? 422 : 502,
+    "provider_error",
+  );
+}
+
 function imageByteLength(base64: string) {
   const encoded = base64.replace(/^data:[^;]+;base64,/, "").replace(/\s/g, "");
   if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return -1;
@@ -188,7 +203,7 @@ export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEn
     });
 
     if (!response.ok) {
-      throw new VisionRequestError("Vision provider could not analyze this frame.", response.status >= 400 && response.status < 500 ? 422 : 502, "provider_error");
+      await throwGeminiProviderError(response, "analyze");
     }
     const parsed = parseGeminiText(await response.json(), geminiResponseSchema);
     const detections = parsed.detections.map(toDetection).filter((item): item is Detection => item !== null);
@@ -250,7 +265,7 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
     });
 
     if (!response.ok) {
-      throw new VisionRequestError("Vision provider could not preflight this frame.", response.status >= 400 && response.status < 500 ? 422 : 502, "provider_error");
+      await throwGeminiProviderError(response, "preflight");
     }
     const parsed = parseGeminiText(await response.json(), geminiPreflightResponseSchema);
     // Keep the invariant meaningful even if a model returns internally
