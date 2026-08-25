@@ -4,7 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { AnalyzeScanResponse, Detection } from "@/lib/contracts/scan";
 
 const FRAME_INTERVAL = 650;
+const RESULT_SETTLE_MS = 2_000;
 type CameraState = "starting" | "live" | "unsupported" | "error";
+type ScanFeedback = "idle" | "analyzing" | "found" | "empty" | "error";
 const bandCopy = { green: "Low sugar", yellow: "Moderate sugar", orange: "High sugar", red: "Very high sugar", unknown: "Needs a check" } as const;
 
 function Chevron({ up = false }: { up?: boolean }) { return <svg aria-hidden="true" className={up ? "chevron up" : "chevron"} viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>; }
@@ -16,10 +18,12 @@ export default function HomePage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const requestInFlight = useRef(false);
+  const nextScanAllowedAt = useRef(0);
   const frameIndex = useRef(0);
   const [cameraState, setCameraState] = useState<CameraState>("starting");
   const [scan, setScan] = useState<AnalyzeScanResponse | null>(null);
   const [isScanning, setIsScanning] = useState(false);
+  const [scanFeedback, setScanFeedback] = useState<ScanFeedback>("idle");
   const [isSheetOpen, setIsSheetOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [uploadUrl, setUploadUrl] = useState<string | null>(null);
@@ -32,6 +36,7 @@ export default function HomePage() {
     if (!canvas || requestInFlight.current || isSheetOpen || !hasSize) return;
     requestInFlight.current = true;
     setIsScanning(true);
+    setScanFeedback("analyzing");
     const width = "videoWidth" in source ? source.videoWidth : source.naturalWidth;
     const height = "videoHeight" in source ? source.videoHeight : source.naturalHeight;
     canvas.width = 960;
@@ -41,9 +46,20 @@ export default function HomePage() {
     try {
       const imageBase64 = canvas.toDataURL("image/jpeg", 0.7).split(",")[1];
       const response = await fetch("/api/scan/analyze", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ imageBase64, mimeType: "image/jpeg", context: "shelf", clientFrameId: frameId }) });
-      if (response.ok) setScan(await response.json() as AnalyzeScanResponse);
-    } catch { /* Keep last stable result during a transient network failure. */ }
-    finally { requestInFlight.current = false; setIsScanning(false); }
+      if (!response.ok) {
+        setScanFeedback("error");
+        return;
+      }
+      const nextScan = await response.json() as AnalyzeScanResponse;
+      setScan(nextScan);
+      setScanFeedback(nextScan.detections.some((detection) => detection.confidence >= 0.55) ? "found" : "empty");
+    } catch {
+      setScanFeedback("error");
+    } finally {
+      requestInFlight.current = false;
+      nextScanAllowedAt.current = Date.now() + RESULT_SETTLE_MS;
+      setIsScanning(false);
+    }
   }, [isSheetOpen]);
 
   useEffect(() => {
@@ -62,15 +78,26 @@ export default function HomePage() {
   }, []);
   useEffect(() => {
     if (cameraState !== "live" || isSheetOpen || uploadUrl) return;
-    const timer = window.setInterval(() => { if (videoRef.current?.readyState && !requestInFlight.current) void analyzeFrame(videoRef.current); }, FRAME_INTERVAL);
+    const timer = window.setInterval(() => {
+      if (videoRef.current?.readyState && !requestInFlight.current && Date.now() >= nextScanAllowedAt.current) void analyzeFrame(videoRef.current);
+    }, FRAME_INTERVAL);
     return () => window.clearInterval(timer);
   }, [analyzeFrame, cameraState, isSheetOpen, uploadUrl]);
   useEffect(() => {
     if (!uploadUrl || isSheetOpen) return;
     const image = new Image(); image.onload = () => void analyzeFrame(image); image.src = uploadUrl;
   }, [analyzeFrame, isSheetOpen, uploadUrl]);
-  function onUpload(file: File | undefined) { if (!file) return; setUploadUrl((oldUrl) => { if (oldUrl) URL.revokeObjectURL(oldUrl); return URL.createObjectURL(file); }); setCameraState("live"); setScan(null); }
+  function onUpload(file: File | undefined) { if (!file) return; setUploadUrl((oldUrl) => { if (oldUrl) URL.revokeObjectURL(oldUrl); return URL.createObjectURL(file); }); setCameraState("live"); setScan(null); setScanFeedback("idle"); }
   function closeSheet() { setIsSheetOpen(false); setSelectedId(null); }
+  const cameraMessage = isScanning
+    ? "Analyzing the product in frame…"
+    : scanFeedback === "empty"
+      ? "No packaged products found — move closer"
+      : scanFeedback === "error"
+        ? "Couldn’t analyze this frame — trying again"
+        : activeDetections.length
+          ? `${activeDetections.length} products found`
+          : "Point at a shelf to scan";
 
   return <main className="scanner-shell">
     <section className="camera-scene" aria-label="Sugar shelf scanner">
@@ -78,11 +105,12 @@ export default function HomePage() {
       <div className="camera-vignette" />
       <header className="camera-controls"><span className="round-control" aria-label="Shelf scanner"><ScanIcon /></span><span className="live-indicator"><i /> LIVE</span><button className="round-control" onClick={() => { setScan(null); setUploadUrl(null); }} aria-label="Clear scan"><CloseIcon /></button></header>
       {activeDetections.map((detection) => <ProductOverlay key={detection.id} detection={detection} selected={selectedId === detection.id} onSelect={() => setSelectedId(detection.id)} />)}
-      <div className="camera-copy" aria-live="polite">{isScanning ? "Looking at the shelf…" : activeDetections.length ? `${activeDetections.length} products found` : "Point at a shelf to scan"}<span>Photos are sent for analysis and are not saved.</span></div>
+      {isScanning && activeDetections.length === 0 && <div className="processing-frame" aria-hidden="true"><span>Analyzing</span></div>}
+      <div className={`camera-copy ${scanFeedback}`} aria-live="polite">{cameraMessage}<span>Photos are sent for analysis and are not saved.</span></div>
       <label className="gallery-button" aria-label="Choose a shelf photo"><input type="file" accept="image/*" capture="environment" onChange={(event) => onUpload(event.target.files?.[0])} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label>
       {(cameraState === "error" || cameraState === "unsupported") && <div className="camera-notice">Camera unavailable. Choose a shelf photo instead.</div>}
     </section>
-    <button className="result-handle" onClick={() => setIsSheetOpen(true)} disabled={!activeDetections.length}><span className="handle-dot" /><span>{activeDetections.length ? `${activeDetections.length} products found` : "Scanning shelf"}</span><span className="handle-detail">Details</span><Chevron /></button>
+    <button className="result-handle" onClick={() => setIsSheetOpen(true)} disabled={!activeDetections.length}><span className={`handle-dot ${scanFeedback}`} /><span>{activeDetections.length ? `${activeDetections.length} products found` : scanFeedback === "empty" ? "No products found" : scanFeedback === "error" ? "Try the next frame" : "Scanning shelf"}</span><span className="handle-detail">Details</span><Chevron /></button>
     {isSheetOpen && <ResultsSheet detections={activeDetections} selectedId={selectedId} onSelect={setSelectedId} onClose={closeSheet} />}
     <canvas ref={canvasRef} className="hidden-canvas" />
   </main>;
