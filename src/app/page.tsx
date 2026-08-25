@@ -27,6 +27,7 @@ export default function HomePage() {
   const [isSheetOpen, setIsSheetOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [uploadUrl, setUploadUrl] = useState<string | null>(null);
+  const [frozenFrame, setFrozenFrame] = useState<string | null>(null);
   const detections = scan?.detections ?? [];
   const activeDetections = detections.filter((d) => d.confidence >= 0.55);
 
@@ -43,8 +44,12 @@ export default function HomePage() {
     canvas.height = Math.max(1, Math.round((height / width) * 960));
     canvas.getContext("2d")?.drawImage(source, 0, 0, canvas.width, canvas.height);
     const frameId = `frame-${++frameIndex.current}`;
+    const imageDataUrl = canvas.toDataURL("image/jpeg", 0.7);
+    const isLiveCameraFrame = source instanceof HTMLVideoElement;
+    let keepFrozenFrame = false;
+    if (isLiveCameraFrame) setFrozenFrame(imageDataUrl);
     try {
-      const imageBase64 = canvas.toDataURL("image/jpeg", 0.7).split(",")[1];
+      const imageBase64 = imageDataUrl.split(",")[1];
       const response = await fetch("/api/scan/analyze", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ imageBase64, mimeType: "image/jpeg", context: "shelf", clientFrameId: frameId }) });
       if (!response.ok) {
         setScanFeedback("error");
@@ -52,13 +57,21 @@ export default function HomePage() {
       }
       const nextScan = await response.json() as AnalyzeScanResponse;
       setScan(nextScan);
-      setScanFeedback(nextScan.detections.some((detection) => detection.confidence >= 0.55) ? "found" : "empty");
+      keepFrozenFrame = nextScan.detections.some((detection) => detection.confidence >= 0.55);
+      setScanFeedback(keepFrozenFrame ? "found" : "empty");
     } catch {
       setScanFeedback("error");
     } finally {
       requestInFlight.current = false;
       nextScanAllowedAt.current = Date.now() + RESULT_SETTLE_MS;
       setIsScanning(false);
+      // An automatic camera attempt that finds nothing returns to the live
+      // preview after the result message. Uploaded photos stay visible.
+      if (isLiveCameraFrame && !keepFrozenFrame) {
+        window.setTimeout(() => {
+          setFrozenFrame((current) => current === imageDataUrl ? null : current);
+        }, RESULT_SETTLE_MS);
+      }
     }
   }, [isSheetOpen]);
 
@@ -70,25 +83,26 @@ export default function HomePage() {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 1920 } }, audio: false });
         if (!active) return stream.getTracks().forEach((track) => track.stop());
         streamRef.current = stream;
-        if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); setCameraState("live"); }
+        if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); nextScanAllowedAt.current = Date.now() + 1_000; setCameraState("live"); }
       } catch { setCameraState("error"); }
     }
     void startCamera();
     return () => { active = false; streamRef.current?.getTracks().forEach((track) => track.stop()); };
   }, []);
   useEffect(() => {
-    if (cameraState !== "live" || isSheetOpen || uploadUrl) return;
+    if (cameraState !== "live" || isSheetOpen || uploadUrl || frozenFrame) return;
     const timer = window.setInterval(() => {
       if (videoRef.current?.readyState && !requestInFlight.current && Date.now() >= nextScanAllowedAt.current) void analyzeFrame(videoRef.current);
     }, FRAME_INTERVAL);
     return () => window.clearInterval(timer);
-  }, [analyzeFrame, cameraState, isSheetOpen, uploadUrl]);
+  }, [analyzeFrame, cameraState, frozenFrame, isSheetOpen, uploadUrl]);
   useEffect(() => {
     if (!uploadUrl || isSheetOpen) return;
     const image = new Image(); image.onload = () => void analyzeFrame(image); image.src = uploadUrl;
   }, [analyzeFrame, isSheetOpen, uploadUrl]);
-  function onUpload(file: File | undefined) { if (!file) return; setUploadUrl((oldUrl) => { if (oldUrl) URL.revokeObjectURL(oldUrl); return URL.createObjectURL(file); }); setCameraState("live"); setScan(null); setScanFeedback("idle"); }
+  function onUpload(file: File | undefined) { if (!file) return; setUploadUrl((oldUrl) => { if (oldUrl) URL.revokeObjectURL(oldUrl); return URL.createObjectURL(file); }); setFrozenFrame(null); setCameraState("live"); setScan(null); setScanFeedback("idle"); }
   function closeSheet() { setIsSheetOpen(false); setSelectedId(null); }
+  function clearScan() { setScan(null); setUploadUrl(null); setFrozenFrame(null); setScanFeedback("idle"); nextScanAllowedAt.current = Date.now() + 800; }
   const cameraMessage = isScanning
     ? "Analyzing the product in frame…"
     : scanFeedback === "empty"
@@ -102,8 +116,9 @@ export default function HomePage() {
   return <main className="scanner-shell">
     <section className="camera-scene" aria-label="Sugar shelf scanner">
       {uploadUrl ? <img className="camera-preview" src={uploadUrl} alt="Selected shelf" /> : <video ref={videoRef} className="camera-preview" muted playsInline />}
+      {frozenFrame && <img className="camera-preview frozen-preview" src={frozenFrame} alt="Captured shelf frame" />}
       <div className="camera-vignette" />
-      <header className="camera-controls"><span className="round-control" aria-label="Shelf scanner"><ScanIcon /></span><span className="live-indicator"><i /> LIVE</span><button className="round-control" onClick={() => { setScan(null); setUploadUrl(null); }} aria-label="Clear scan"><CloseIcon /></button></header>
+      <header className="camera-controls"><span className="round-control" aria-label="Shelf scanner"><ScanIcon /></span><span className="live-indicator"><i /> {frozenFrame || uploadUrl ? "CAPTURED" : "LIVE"}</span><button className="round-control" onClick={clearScan} aria-label="Clear scan"><CloseIcon /></button></header>
       {activeDetections.map((detection) => <ProductOverlay key={detection.id} detection={detection} selected={selectedId === detection.id} onSelect={() => setSelectedId(detection.id)} />)}
       {isScanning && activeDetections.length === 0 && <div className="processing-frame" aria-hidden="true"><span>Analyzing</span></div>}
       <div className={`camera-copy ${scanFeedback}`} aria-live="polite">{cameraMessage}<span>Photos are sent for analysis and are not saved.</span></div>

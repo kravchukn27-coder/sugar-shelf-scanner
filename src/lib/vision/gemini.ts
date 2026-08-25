@@ -3,7 +3,10 @@ import type { AnalyzeScanRequest, AnalyzeScanResponse, Detection } from "@/lib/c
 import type { NormalizedBox, ScoreBand } from "@/lib/contracts/product";
 import type { ServerEnv } from "@/lib/env";
 
-const GEMINI_TIMEOUT_MS = 12_000;
+// Multimodal detection on a full shelf can take longer than a text response.
+// The scanner freezes the captured frame while waiting, so prefer a reliable
+// result over cancelling a valid request at the former 12-second threshold.
+const GEMINI_TIMEOUT_MS = 30_000;
 const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 const MAX_DETECTIONS = 12;
 
