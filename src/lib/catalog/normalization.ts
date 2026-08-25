@@ -23,6 +23,10 @@ export interface MatchBreakdown {
 }
 
 const STOP_WORDS = new Set(["and", "the", "with", "for", "of", "a", "an", "pack", "package"]);
+const CATALOG_TITLE_CONTEXT_TOKENS = new Set([
+  "beer", "lager", "ale", "beverage", "drink", "soda", "water", "bottle", "bottles", "can", "cans",
+  "mexican", "imported", "original", "regular", "food", "product",
+]);
 const UNIT_ALIASES: Record<string, NormalizedPackSize["unit"]> = {
   g: "g", gram: "g", grams: "g", kg: "g", oz: "g", lb: "g",
   ml: "ml", l: "ml", litre: "ml", liter: "ml", litres: "ml", liters: "ml", "fl oz": "ml",
@@ -44,7 +48,18 @@ export function normalizedTokens(value: string | null | undefined): string[] {
 }
 
 export function normalizePackSize(value: string | null | undefined): NormalizedPackSize | null {
-  const text = normalizeText(value).replace(/fluid ounces/g, "fl oz").replace(/fluid ounce/g, "fl oz");
+  // Keep decimal separators: generic text normalization deliberately replaces
+  // punctuation, but doing that here would turn "1.55 oz" into "1 55 oz".
+  const text = (value ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/,/g, ".")
+    .replace(/[^a-z0-9.]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/fluid ounces/g, "fl oz")
+    .replace(/fluid ounce/g, "fl oz");
   const match = text.match(/(\d+(?:\.\d+)?)\s*(fl oz|oz|kg|lb|gram|grams|g|litres|liters|litre|liter|ml|l|ct|count|pcs|pieces)\b/);
   if (!match) return null;
   const rawQuantity = Number(match[1]);
@@ -71,6 +86,34 @@ function tokenSimilarity(left: string | null | undefined, right: string | null |
   return intersection / Math.max(a.size, b.size);
 }
 
+/**
+ * Source catalogs commonly append category words to a package title (for
+ * example, "Corona Extra Mexican Lager Beer"). OCR generally returns the
+ * shorter, visible package name. Preserve that useful asymmetry without
+ * treating a brand repeated as the name as SKU evidence.
+ */
+function candidateTokenCoverage(candidate: string | null | undefined, product: string | null | undefined, requireContextOnly = false): number {
+  const candidateTokens = new Set(normalizedTokens(candidate));
+  const productTokens = new Set(normalizedTokens(product));
+  if (!candidateTokens.size || !productTokens.size) return 0;
+  // A catalog may append a product category to the title, but a missing
+  // flavour/variant (such as "Cherry") is not safe to infer from a shorter
+  // vision result.
+  if (requireContextOnly) {
+    for (const token of productTokens) {
+      if (!candidateTokens.has(token) && !CATALOG_TITLE_CONTEXT_TOKENS.has(token)) return 0;
+    }
+  }
+  let shared = 0;
+  for (const token of candidateTokens) if (productTokens.has(token)) shared += 1;
+  return shared / candidateTokens.size;
+}
+
+function hasDistinctSkuToken(candidate: MatchFields): boolean {
+  const brandTokens = new Set(normalizedTokens(candidate.brand));
+  return normalizedTokens(candidate.name).some((token) => !brandTokens.has(token));
+}
+
 function packSimilarity(left: string | null | undefined, right: string | null | undefined): number {
   const a = normalizePackSize(left);
   const b = normalizePackSize(right);
@@ -81,15 +124,17 @@ function packSimilarity(left: string | null | undefined, right: string | null | 
 
 /** Pure, deterministic product ranking. A brand-only recognition can never confirm a SKU. */
 export function scoreCatalogMatch(candidate: MatchFields, product: MatchFields): MatchBreakdown {
-  const brand = tokenSimilarity(candidate.brand, product.brand);
-  const name = tokenSimilarity(candidate.name, product.name);
+  // The candidate is the shorter side here: accept a catalog brand/title that
+  // adds descriptive words, but never use that relaxation on its own.
+  const brand = Math.max(tokenSimilarity(candidate.brand, product.brand), candidateTokenCoverage(candidate.brand, product.brand));
+  const name = Math.max(tokenSimilarity(candidate.name, product.name), candidateTokenCoverage(candidate.name, product.name, true));
   const flavour = tokenSimilarity(candidate.flavour, product.flavour);
   const packSize = packSimilarity(candidate.packSize, product.packSize);
   const flavourWeight = candidate.flavour && product.flavour ? 0.12 : 0;
   const packWeight = candidate.packSize && product.packSize ? 0.08 : 0;
   const coreWeight = 1 - flavourWeight - packWeight;
   const confidence = Number((brand * coreWeight * 0.45 + name * coreWeight * 0.55 + flavour * flavourWeight + packSize * packWeight).toFixed(3));
-  const decision = brand > 0 && name >= 0.6 && confidence >= CATALOG_CONFIRM_THRESHOLD
+  const decision = brand > 0 && hasDistinctSkuToken(candidate) && name >= 0.6 && confidence >= CATALOG_CONFIRM_THRESHOLD
     ? "confirmed"
     : confidence >= CATALOG_REVIEW_THRESHOLD
       ? "review"

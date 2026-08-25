@@ -1,6 +1,7 @@
 import { createSugarScore } from "@/lib/scoring/sugar-score";
 import type { CatalogFeedback, CatalogMatch, CatalogProduct, ProductCatalogProvider, VisualCandidate } from "./types";
 import { scoreCatalogMatch } from "./normalization";
+import { logCatalogSourceTelemetry, type CatalogSource, type CatalogSourceOperation } from "./source-telemetry";
 
 type FetchLike = typeof fetch;
 
@@ -29,6 +30,12 @@ const NEGATIVE_CACHE_TTL_MS = 5 * 60 * 1_000;
 const MAX_CACHE_ENTRIES = 250;
 
 type CacheEntry<T> = { value: T; expiresAt: number };
+type RemoteFetchResult =
+  | { kind: "response"; response: Response }
+  | { kind: "timeout" }
+  | { kind: "http_error" };
+
+type SourceRequest = { source: CatalogSource; operation: CatalogSourceOperation };
 
 // This cache intentionally lives in the server process, not the browser. It
 // makes repeated shelf scans cheap and keeps temporary upstream incidents from
@@ -148,41 +155,70 @@ export class FreeProductCatalog implements ProductCatalogProvider {
 
   private async fetchOpenFoodFactsByBarcode(gtin: string): Promise<CatalogProduct | null> {
     if (!gtin) return null;
-    const products = await this.cached(`off:barcode:${gtin}`, async () => {
-      const response = await this.fetchWithTimeout(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(gtin)}.json?fields=code,product_name,brands,quantity,nutriments`, {
+    const products = await this.cached(`off:barcode:${gtin}`, { source: "open_food_facts", operation: "barcode" }, async () => {
+      const startedAt = Date.now();
+      const result = await this.fetchWithTimeout(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(gtin)}.json?fields=code,product_name,brands,quantity,nutriments`, {
         headers: { "user-agent": this.userAgent },
       });
-      if (!response?.ok) return [];
-      const payload = await response.json() as { product?: OpenFoodFactsProduct };
-      const product = payload.product ? openFoodFactsProduct(payload.product, new Date().toISOString()) : null;
-      return product ? [product] : [];
+      if (result.kind !== "response") return this.logSourceFailure({ source: "open_food_facts", operation: "barcode" }, result.kind, startedAt);
+      if (!result.response.ok) return this.logSourceFailure({ source: "open_food_facts", operation: "barcode" }, "http_error", startedAt);
+      try {
+        const payload = await result.response.json() as { product?: OpenFoodFactsProduct };
+        if (!payload || typeof payload !== "object") return this.logSourceFailure({ source: "open_food_facts", operation: "barcode" }, "invalid_payload", startedAt);
+        const product = payload.product ? openFoodFactsProduct(payload.product, new Date().toISOString()) : null;
+        this.logSourceSuccess({ source: "open_food_facts", operation: "barcode" }, startedAt, payload.product ? 1 : 0);
+        return product ? [product] : [];
+      } catch {
+        return this.logSourceFailure({ source: "open_food_facts", operation: "barcode" }, "invalid_payload", startedAt);
+      }
     });
     return products[0] ?? null;
   }
 
   private async searchOpenFoodFacts(query: string, limit: number): Promise<CatalogProduct[]> {
-    return this.cached(`off:search:${query.toLowerCase()}:${limit}`, async () => {
+    return this.cached(`off:search:${query.toLowerCase()}:${limit}`, { source: "open_food_facts", operation: "search" }, async () => {
+      const startedAt = Date.now();
       const params = new URLSearchParams({ search_terms: query, search_simple: "1", action: "process", json: "1", page_size: String(Math.min(limit, 3)), fields: "code,product_name,brands,quantity,nutriments" });
-      const response = await this.fetchWithTimeout(`https://world.openfoodfacts.org/cgi/search.pl?${params}`, {
+      const result = await this.fetchWithTimeout(`https://world.openfoodfacts.org/cgi/search.pl?${params}`, {
         headers: { "user-agent": this.userAgent },
       });
-      if (!response?.ok) return [];
-      const payload = await response.json() as { products?: OpenFoodFactsProduct[] };
-      const observedAt = new Date().toISOString();
-      return (payload.products ?? []).map((product) => openFoodFactsProduct(product, observedAt)).filter((product): product is CatalogProduct => product !== null);
+      if (result.kind !== "response") return this.logSourceFailure({ source: "open_food_facts", operation: "search" }, result.kind, startedAt);
+      if (!result.response.ok) return this.logSourceFailure({ source: "open_food_facts", operation: "search" }, "http_error", startedAt);
+      try {
+        const payload = await result.response.json() as { products?: OpenFoodFactsProduct[] };
+        if (!payload || !Array.isArray(payload.products)) return this.logSourceFailure({ source: "open_food_facts", operation: "search" }, "invalid_payload", startedAt);
+        const observedAt = new Date().toISOString();
+        const products = payload.products.map((product) => openFoodFactsProduct(product, observedAt)).filter((product): product is CatalogProduct => product !== null);
+        this.logSourceSuccess({ source: "open_food_facts", operation: "search" }, startedAt, payload.products.length);
+        return products;
+      } catch {
+        return this.logSourceFailure({ source: "open_food_facts", operation: "search" }, "invalid_payload", startedAt);
+      }
     });
   }
 
   private async fetchUsdaByQuery(query: string, limit = 1): Promise<CatalogProduct[]> {
     const apiKey = this.options.usdaApiKey;
-    if (!apiKey) return [];
-    return this.cached(`usda:search:${query.toLowerCase()}:${limit}`, async () => {
+    if (!apiKey) {
+      logCatalogSourceTelemetry({ source: "usda_food_data_central", operation: "search", outcome: "disabled", durationMs: 0, candidateCount: 0, cacheHit: false });
+      return [];
+    }
+    return this.cached(`usda:search:${query.toLowerCase()}:${limit}`, { source: "usda_food_data_central", operation: "search" }, async () => {
+      const startedAt = Date.now();
       const params = new URLSearchParams({ api_key: apiKey, query, dataType: "Branded", pageSize: String(Math.min(limit, 3)) });
-      const response = await this.fetchWithTimeout(`https://api.nal.usda.gov/fdc/v1/foods/search?${params}`);
-      if (!response?.ok) return [];
-      const payload = await response.json() as { foods?: UsdaFood[] };
-      const observedAt = new Date().toISOString();
-      return (payload.foods ?? []).map((food) => usdaFoodProduct(food, observedAt)).filter((product): product is CatalogProduct => product !== null);
+      const result = await this.fetchWithTimeout(`https://api.nal.usda.gov/fdc/v1/foods/search?${params}`);
+      if (result.kind !== "response") return this.logSourceFailure({ source: "usda_food_data_central", operation: "search" }, result.kind, startedAt);
+      if (!result.response.ok) return this.logSourceFailure({ source: "usda_food_data_central", operation: "search" }, "http_error", startedAt);
+      try {
+        const payload = await result.response.json() as { foods?: UsdaFood[] };
+        if (!payload || !Array.isArray(payload.foods)) return this.logSourceFailure({ source: "usda_food_data_central", operation: "search" }, "invalid_payload", startedAt);
+        const observedAt = new Date().toISOString();
+        const products = payload.foods.map((food) => usdaFoodProduct(food, observedAt)).filter((product): product is CatalogProduct => product !== null);
+        this.logSourceSuccess({ source: "usda_food_data_central", operation: "search" }, startedAt, payload.foods.length);
+        return products;
+      } catch {
+        return this.logSourceFailure({ source: "usda_food_data_central", operation: "search" }, "invalid_payload", startedAt);
+      }
     });
   }
 
@@ -190,25 +226,41 @@ export class FreeProductCatalog implements ProductCatalogProvider {
     return this.options.openFoodFactsUserAgent ?? "SugarShelfScanner/0.1 (https://sugar.no)";
   }
 
-  private async fetchWithTimeout(input: string, init?: RequestInit): Promise<Response | null> {
+  private async fetchWithTimeout(input: string, init?: RequestInit): Promise<RemoteFetchResult> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REMOTE_TIMEOUT_MS);
     try {
-      return await this.fetch(input, { ...init, signal: controller.signal });
-    } catch {
-      return null;
+      return { kind: "response", response: await this.fetch(input, { ...init, signal: controller.signal }) };
+    } catch (error) {
+      return { kind: error instanceof Error && error.name === "AbortError" ? "timeout" : "http_error" };
     } finally {
       clearTimeout(timer);
     }
   }
 
-  private async cached(key: string, load: () => Promise<CatalogProduct[]>): Promise<CatalogProduct[]> {
+  private logSourceSuccess(request: SourceRequest, startedAt: number, candidateCount: number) {
+    logCatalogSourceTelemetry({ ...request, outcome: "success", durationMs: Date.now() - startedAt, candidateCount, cacheHit: false });
+  }
+
+  private logSourceFailure(request: SourceRequest, outcome: "http_error" | "timeout" | "invalid_payload", startedAt: number): CatalogProduct[] {
+    logCatalogSourceTelemetry({ ...request, outcome, durationMs: Date.now() - startedAt, candidateCount: 0, cacheHit: false });
+    return [];
+  }
+
+  private async cached(key: string, requestMetadata: SourceRequest, load: () => Promise<CatalogProduct[]>): Promise<CatalogProduct[]> {
     const now = Date.now();
     const existing = remoteCache.get(key);
-    if (existing && existing.expiresAt > now) return existing.value;
+    if (existing && existing.expiresAt > now) {
+      logCatalogSourceTelemetry({ ...requestMetadata, outcome: "success", durationMs: 0, candidateCount: existing.value.length, cacheHit: true });
+      return existing.value;
+    }
 
     const pending = inFlightRemoteLoads.get(key);
-    if (pending) return pending;
+    if (pending) {
+      const value = await pending;
+      logCatalogSourceTelemetry({ ...requestMetadata, outcome: "success", durationMs: 0, candidateCount: value.length, cacheHit: true });
+      return value;
+    }
 
     const request = load().catch(() => []).then((value) => {
       // Cache unsuccessful results briefly too. This provides a circuit-breaker
