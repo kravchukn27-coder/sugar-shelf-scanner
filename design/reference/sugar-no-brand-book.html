@@ -1,0 +1,419 @@
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Work+Sans:wght@400;500;600;700&family=Nunito:wght@600;700;800;900&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<title>Sugar.no Brand Book</title>
+
+<style>
+  :root {
+    --doc-bg: #f4f7fb;
+    --doc-bg-alt: #eaeff6;
+    --surface: #ffffff;
+    --surface-sunken: #f2f0f6;
+    --border: #e2e1ea;
+    --ink: #17171b;
+    --ink-soft: #423f49;
+    --muted: #726d7c;
+    --accent: #2f6fef;
+    --accent-ink: #ffffff;
+    --ember: #ff5a45;
+    --vital: #4fce78;
+    --gold: #e8b23e;
+    --code-bg: #eceaf3;
+    --shadow: 0 1px 2px rgba(23,20,35,.04), 0 8px 24px rgba(23,20,35,.06);
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --display: 'Baloo 2', ui-rounded, system-ui, sans-serif;
+    --body-font: 'Work Sans', -apple-system, sans-serif;
+    --product-font: 'Nunito', ui-rounded, -apple-system, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --doc-bg: #101014;
+      --doc-bg-alt: #15151b;
+      --surface: #1a1a21;
+      --surface-sunken: #212027;
+      --border: #2c2b34;
+      --ink: #f2f1f6;
+      --ink-soft: #cfccd8;
+      --muted: #a19cad;
+      --accent: #6d9aff;
+      --accent-ink: #0c1220;
+      --ember: #ff7b68;
+      --vital: #6ee395;
+      --gold: #f3c765;
+      --code-bg: #232230;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 30px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --doc-bg: #101014;
+    --doc-bg-alt: #15151b;
+    --surface: #1a1a21;
+    --surface-sunken: #212027;
+    --border: #2c2b34;
+    --ink: #f2f1f6;
+    --ink-soft: #cfccd8;
+    --muted: #a19cad;
+    --accent: #6d9aff;
+    --accent-ink: #0c1220;
+    --ember: #ff7b68;
+    --vital: #6ee395;
+    --gold: #f3c765;
+    --code-bg: #232230;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 30px rgba(0,0,0,.4);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--doc-bg);
+    color: var(--ink);
+    font-family: var(--body-font);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 24px 120px; }
+
+  /* ---------- Masthead ---------- */
+  .masthead {
+    padding: 64px 24px 48px;
+    background: linear-gradient(180deg, var(--doc-bg-alt), var(--doc-bg) 85%);
+    border-bottom: 1px solid var(--border);
+  }
+  .masthead-inner { max-width: 980px; margin: 0 auto; }
+  .kicker {
+    font-family: var(--mono); font-size: 12px; font-weight: 500;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--accent);
+    display: flex; align-items: center; gap: 8px; margin-bottom: 18px;
+  }
+  .kicker::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+  h1.product-name {
+    font-family: var(--display); font-weight: 800; font-size: clamp(40px, 7vw, 64px);
+    line-height: .98; letter-spacing: -.01em; margin: 0 0 14px; text-wrap: balance;
+  }
+  .masthead p.dek {
+    font-size: 17px; line-height: 1.55; color: var(--ink-soft); max-width: 62ch; margin: 0 0 22px;
+  }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 10px 22px; font-size: 13px; color: var(--muted); }
+  .meta-row strong { color: var(--ink-soft); font-weight: 600; }
+
+  /* ---------- Section scaffolding ---------- */
+  section.block { padding: 56px 0; border-bottom: 1px solid var(--border); }
+  section.block:last-of-type { border-bottom: none; }
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 20px; margin-bottom: 28px; flex-wrap: wrap; }
+  .section-num { font-family: var(--mono); font-size: 12px; color: var(--accent); font-weight: 500; }
+  h2 {
+    font-family: var(--display); font-weight: 700; font-size: 28px; letter-spacing: -.01em;
+    margin: 4px 0 0; text-wrap: balance;
+  }
+  .section-note { font-size: 14px; color: var(--muted); max-width: 46ch; text-align: right; line-height: 1.5; }
+  @media (max-width: 640px) { .section-note { text-align: left; } }
+  p.lede { font-size: 15.5px; line-height: 1.65; color: var(--ink-soft); max-width: 68ch; }
+
+  /* ---------- Color swatches ---------- */
+  .swatch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+  .swatch {
+    border-radius: 18px; overflow: hidden; border: 1px solid var(--border); background: var(--surface); box-shadow: var(--shadow);
+  }
+  .swatch-fill { height: 84px; }
+  .swatch-body { padding: 12px 14px 14px; }
+  .swatch-name { font-weight: 700; font-size: 14px; }
+  .swatch-role { font-size: 11.5px; color: var(--muted); margin: 2px 0 8px; }
+  .swatch-hex { font-family: var(--mono); font-size: 11.5px; color: var(--ink-soft); display: flex; justify-content: space-between; }
+  .swatch-hex span:last-child { color: var(--muted); }
+  .estimate-flag {
+    font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--gold); margin-top: 6px;
+  }
+
+  /* ---------- Type scale ---------- */
+  .type-row { display: grid; grid-template-columns: 120px 1fr; gap: 18px; align-items: baseline; padding: 18px 0; border-top: 1px solid var(--border); }
+  .type-row:first-of-type { border-top: none; }
+  .type-tag { font-family: var(--mono); font-size: 11px; color: var(--muted); line-height: 1.5; }
+  .type-tag b { display: block; color: var(--ink-soft); font-size: 12px; font-family: var(--body-font); font-weight: 600; margin-bottom: 2px; }
+  .type-sample { font-family: var(--product-font); color: var(--ink); }
+  .ts-display { font-size: 34px; font-weight: 800; letter-spacing: -.015em; }
+  .ts-title { font-size: 27px; font-weight: 800; letter-spacing: -.01em; }
+  .ts-heading { font-size: 19px; font-weight: 800; }
+  .ts-body { font-size: 15px; font-weight: 600; }
+  .ts-label { font-size: 13px; font-weight: 700; color: var(--ink-soft); }
+  .ts-caption { font-size: 10.5px; font-weight: 700; color: var(--muted); letter-spacing: .01em; }
+  .font-stack-note { margin-top: 20px; padding: 14px 16px; background: var(--surface-sunken); border-radius: 12px; font-family: var(--mono); font-size: 12px; color: var(--ink-soft); line-height: 1.6; }
+
+  /* ---------- Component gallery ---------- */
+  .comp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+  .comp-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 22px 18px;
+    display: flex; flex-direction: column; align-items: center; gap: 16px; box-shadow: var(--shadow);
+  }
+  .comp-card figcaption { font-size: 12px; color: var(--muted); text-align: center; line-height: 1.5; }
+  .comp-card figcaption b { display: block; color: var(--ink-soft); font-size: 12.5px; font-weight: 700; margin-bottom: 2px; }
+  .demo-stage { min-height: 56px; display: flex; align-items: center; justify-content: center; }
+
+  .pill-black {
+    font-family: var(--product-font); font-weight: 800; font-size: 14px; color: #fff;
+    background: #131215; border-radius: 999px; padding: 12px 22px; border: none;
+  }
+  .pill-blue {
+    font-family: var(--product-font); font-weight: 800; font-size: 14px; color: #fff;
+    background: var(--accent); border-radius: 999px; padding: 12px 22px; display: inline-flex; align-items: center; gap: 8px;
+  }
+  .pill-outline {
+    font-family: var(--product-font); font-weight: 800; font-size: 13px; color: #46424e;
+    background: #fff; border: 1.5px solid #e4e1ea; border-radius: 999px; padding: 10px 20px; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .icon-glass {
+    width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center;
+    background: rgba(20,18,24,.55); backdrop-filter: blur(6px); color: #fff; border: 1px solid rgba(255,255,255,.12);
+  }
+  .icon-flat {
+    width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+    background: #f0eef4; color: #38333d;
+  }
+  .fab-black {
+    width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center;
+    background: #131215; color: #fff; font-size: 22px; font-weight: 400; box-shadow: 0 8px 18px rgba(0,0,0,.25);
+  }
+  .icon-glass svg, .icon-flat svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* mini nutrition card sample */
+  .mini-card { width: 100%; background: #fff; border-radius: 18px; padding: 14px 16px; box-shadow: 0 4px 16px rgba(30,20,50,.06); }
+  .mini-card-head { display: flex; justify-content: space-between; font-family: var(--product-font); font-weight: 800; font-size: 13px; color: #17171b; margin-bottom: 10px; }
+  .mini-card-head span { color: var(--accent); font-size: 12px; font-weight: 700; }
+  .mini-track { height: 5px; border-radius: 3px; background: #eceaf1; overflow: hidden; margin: 6px 0 4px; }
+  .mini-track i { display: block; height: 100%; width: 0%; background: #d8d5e0; }
+  .mini-label { font-size: 10.5px; color: #56515c; font-weight: 700; }
+  .mini-val { font-family: var(--product-font); font-size: 13px; font-weight: 800; color: #17171b; }
+
+  /* row sample */
+  .mini-row { width: 100%; display: flex; align-items: center; gap: 10px; }
+  .mini-row .icon-flat { width: 34px; height: 34px; background: #f5eee0; font-size: 15px; }
+  .mini-row-text { font-family: var(--product-font); font-weight: 800; font-size: 13px; color: #211e26; flex: 1; }
+
+  /* ---------- Camera screen deep-dive ---------- */
+  .camera-lab { display: grid; grid-template-columns: minmax(260px, 320px) 1fr; gap: 40px; align-items: start; }
+  @media (max-width: 760px) { .camera-lab { grid-template-columns: 1fr; } }
+
+  .phone {
+    position: relative; width: 100%; max-width: 320px; aspect-ratio: 9 / 19.5;
+    border-radius: 42px; background: #000; overflow: hidden; margin: 0 auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,.35), 0 0 0 8px #0a0a0a, 0 0 0 9px #333;
+  }
+  .cam-feed {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(120% 90% at 30% 15%, rgba(255,255,255,.06), transparent 60%),
+      linear-gradient(155deg, #35322f 0%, #1c1a1c 45%, #100f11 100%);
+  }
+  .cam-vignette { position: absolute; inset: 0; background: radial-gradient(120% 75% at 50% 42%, transparent 45%, rgba(0,0,0,.55) 100%); }
+  .cam-topbar { position: absolute; top: 16px; left: 16px; right: 16px; display: flex; justify-content: space-between; z-index: 3; }
+  .cam-guide {
+    position: absolute; left: 13%; right: 13%; top: 22%; bottom: 30%;
+    border: 1.5px solid rgba(255,255,255,.75); border-radius: 26px;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.18) inset, 0 0 0 999px rgba(0,0,0,.38);
+    z-index: 2;
+  }
+  .cam-hint {
+    position: absolute; left: 10%; right: 10%; bottom: 24%; transform: translateY(50%);
+    z-index: 4; background: rgba(18,16,20,.78); backdrop-filter: blur(6px);
+    color: #fff; font-family: var(--product-font); font-weight: 700; font-size: 10.5px; text-align: center;
+    padding: 9px 14px; border-radius: 999px; line-height: 1.3;
+  }
+  .cam-bottom { position: absolute; left: 20px; right: 20px; bottom: 22px; display: flex; align-items: center; justify-content: space-between; z-index: 4; }
+  .cam-gallery { width: 42px; height: 42px; border-radius: 13px; background: rgba(20,18,24,.55); backdrop-filter: blur(6px); display: grid; place-items: center; border: 1px solid rgba(255,255,255,.12); }
+  .cam-shutter { width: 66px; height: 66px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 3px rgba(255,255,255,.25); margin: 0 auto; }
+  .cam-gallery svg { width: 17px; height: 17px; fill: none; stroke: #fff; stroke-width: 2; }
+  .cam-spacer { width: 42px; }
+
+  .callouts { display: flex; flex-direction: column; gap: 0; }
+  .callout {
+    display: grid; grid-template-columns: 28px 1fr; gap: 12px;
+    padding: 16px 0; border-top: 1px solid var(--border);
+  }
+  .callout:first-child { border-top: none; padding-top: 0; }
+  .callout-num {
+    width: 26px; height: 26px; border-radius: 50%; background: var(--surface-sunken); color: var(--ink-soft);
+    font-family: var(--mono); font-size: 11px; font-weight: 600; display: grid; place-items: center;
+  }
+  .callout h4 { margin: 0 0 4px; font-size: 14px; font-weight: 700; }
+  .callout p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.55; }
+  .callout .spec { margin-top: 6px; font-family: var(--mono); font-size: 11px; color: var(--accent); }
+
+  /* ---------- gap analysis ---------- */
+  .gap-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .gap-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; padding: 0 14px 10px; }
+  .gap-table td { padding: 14px; background: var(--surface); border-top: 1px solid var(--border); vertical-align: top; }
+  .gap-table tr:first-child td { border-top: none; }
+  .gap-table td:first-child { font-weight: 700; border-radius: 12px 0 0 12px; }
+  .gap-table td:last-child { border-radius: 0 12px 12px 0; }
+  .gap-table-wrap { overflow-x: auto; border-radius: 12px; }
+  .tag { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .02em; padding: 3px 9px; border-radius: 999px; margin-bottom: 6px; }
+  .tag.high { background: color-mix(in srgb, var(--ember) 16%, transparent); color: var(--ember); }
+  .tag.med { background: color-mix(in srgb, var(--gold) 20%, transparent); color: color-mix(in srgb, var(--gold) 70%, var(--ink)); }
+
+  /* ---------- spacing/radius ---------- */
+  .scale-strip { display: flex; align-items: flex-end; gap: 18px; flex-wrap: wrap; }
+  .scale-item { text-align: center; }
+  .scale-box { background: var(--accent); opacity: .85; border-radius: 4px; margin: 0 auto 8px; }
+  .scale-item span { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .radius-strip { display: flex; gap: 16px; flex-wrap: wrap; }
+  .radius-box { width: 68px; height: 68px; background: var(--surface); border: 1.5px solid var(--border); display: grid; place-items: center; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  footer.colophon { padding: 40px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.7; }
+  footer.colophon a { color: var(--accent); }
+</style>
+
+<div class="masthead">
+  <div class="masthead-inner">
+    <div class="kicker">Reference extraction · v1</div>
+    <h1 class="product-name">Sugar.no</h1>
+    <p class="dek">A visual brand book reverse-engineered from the shipped iOS app <em>Sugar.no – Blood Sugar Tracker</em> (Intendum Ltd), built to give the Sugar Shelf Scanner demo a matching identity — palette, type, components, and a full anatomy of the camera screen.</p>
+    <div class="meta-row">
+      <span><strong>Source</strong> App Store listing + 6 device screenshots</span>
+      <span><strong>Category</strong> Health &amp; Fitness</span>
+      <span><strong>Status</strong> Colors are eye-estimated from screenshots, not pixel-sampled — verify before final lock</span>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <section class="block">
+    <div class="section-head">
+      <div><div class="section-num">01</div><h2>Palette</h2></div>
+      <p class="section-note">Cool, low-saturation neutrals with two working accents — a signal blue for actions and links, and a warm ember reserved for the one "you are here" moment in the nav.</p>
+    </div>
+    <div class="swatch-grid">
+      <div class="swatch"><div class="swatch-fill" style="background:linear-gradient(160deg,#dbe9fb,#f7fafd)"></div><div class="swatch-body"><div class="swatch-name">Sky Mist</div><div class="swatch-role">Home screen background wash</div><div class="swatch-hex"><span>#DBE9FB → #FFF</span><span>gradient</span></div></div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:#FFFFFF"></div><div class="swatch-body"><div class="swatch-name">Paper</div><div class="swatch-role">Card &amp; sheet surface</div><div class="swatch-hex"><span>#FFFFFF</span><span>surface</span></div></div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:#17171B"></div><div class="swatch-body"><div class="swatch-name">Ink</div><div class="swatch-role">Primary text, primary CTA fill</div><div class="swatch-hex"><span>#17171B</span><span>text/900</span></div></div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:#726D7C"></div><div class="swatch-body"><div class="swatch-name">Slate</div><div class="swatch-role">Secondary text, meta labels</div><div class="swatch-hex"><span>#726D7C</span><span>text/500</span></div><div class="estimate-flag">estimated</div></div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:#2F6FEF"></div><div class="swatch-body"><div class="swatch-name">Signal Blue</div><div class="swatch-role">"See all", Camera/Gallery CTA, profile glyphs</div><div class="swatch-hex"><span>#2F6FEF</span><span>accent</span></div><div class="estimate-flag">estimated</div></div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:#FF5A45"></div><div class="swatch-body"><div class="swatch-name">Ember</div><div class="swatch-role">Active tab-bar label only</div><div class="swatch-hex"><span>#FF5A45</span><span>state</span></div><div class="estimate-flag">estimated</div></div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:#4FCE78"></div><div class="swatch-body"><div class="swatch-name">Vital Green</div><div class="swatch-role">Wellness-score mascot glow, over food photo</div><div class="swatch-hex"><span>#4FCE78</span><span>brand motif</span></div><div class="estimate-flag">estimated</div></div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:linear-gradient(135deg,#f6d98a,#ecb548)"></div><div class="swatch-body"><div class="swatch-name">Honey</div><div class="swatch-role">Premium upsell card only</div><div class="swatch-hex"><span>#F6D98A → #ECB548</span><span>promo</span></div><div class="estimate-flag">estimated</div></div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:#F0EEF4"></div><div class="swatch-body"><div class="swatch-name">Fog</div><div class="swatch-role">Icon chips, dividers, unfilled progress track</div><div class="swatch-hex"><span>#F0EEF4</span><span>surface/sunken</span></div></div></div>
+      <div class="swatch"><div class="swatch-fill" style="background:#0A0A0C"></div><div class="swatch-body"><div class="swatch-name">Void</div><div class="swatch-role">Camera scene background</div><div class="swatch-hex"><span>#0A0A0C</span><span>from manifest.webmanifest</span></div></div></div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <div><div class="section-num">02</div><h2>Type</h2></div>
+      <p class="section-note">A single rounded system voice, no serif or mono anywhere in-product. Weight does the hierarchy work, not size alone — everything sits in the 700–900 range once it's a number or a label.</p>
+    </div>
+    <div class="type-row"><div class="type-tag"><b>Display</b>34 / 800 / -1.5%</div><div class="type-sample ts-display">Today</div></div>
+    <div class="type-row"><div class="type-tag"><b>Screen title</b>27 / 800 / -1%</div><div class="type-sample ts-title">Log Meal</div></div>
+    <div class="type-row"><div class="type-tag"><b>Card heading</b>19 / 800</div><div class="type-sample ts-heading">Nutrition · Meals · Mealtime</div></div>
+    <div class="type-row"><div class="type-tag"><b>Body / row label</b>15 / 600</div><div class="type-sample ts-body">Add Breakfast, Personal Details, Contact Support</div></div>
+    <div class="type-row"><div class="type-tag"><b>Meta / secondary</b>13 / 700</div><div class="type-sample ts-label">Added sugar · Confirmed product · 0/25</div></div>
+    <div class="type-row"><div class="type-tag"><b>Caption / footer</b>10.5 / 700</div><div class="type-sample ts-caption">ID: 5478 (TAP TO COPY) · VERSION 4.4.3-BUILD:2</div></div>
+    <div class="font-stack-note">product font-stack: ui-rounded, "SF Pro Rounded", -apple-system, sans-serif<br>web fallback (non-Apple): "Nunito", sans-serif — closest free match to SF Pro Rounded's ball terminals and even-weight numerals<br><span style="color:var(--ink-soft)">note — this matches src/app/globals.css:1 in the demo exactly. No font change needed, only weight/size discipline.</span></div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <div><div class="section-num">03</div><h2>Components</h2></div>
+      <p class="section-note">Three button families, never mixed on one surface: solid ink for the one primary action, solid blue for upload/attach actions, outline for a secondary confirm.</p>
+    </div>
+    <div class="comp-grid">
+      <figure class="comp-card"><div class="demo-stage"><button class="pill-black">+ Log Meal</button></div><figcaption><b>Primary pill</b>#131215 fill, white text, fully rounded, ~46px tall</figcaption></figure>
+      <figure class="comp-card"><div class="demo-stage"><button class="pill-blue">📷 Camera, Gallery</button></div><figcaption><b>Action pill</b>Signal Blue fill, used once per screen for the "attach/scan" verb</figcaption></figure>
+      <figure class="comp-card"><div class="demo-stage"><button class="pill-outline">✓ Log Meal</button></div><figcaption><b>Outline confirm</b>White fill, 1.5px Fog border, sits under the primary field</figcaption></figure>
+      <figure class="comp-card"><div class="demo-stage" style="gap:14px;display:flex"><span class="icon-flat"><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span><span class="fab-black">+</span></div><figcaption><b>Icon / FAB</b>Flat grey circle for light screens, black FAB floats above the tab bar</figcaption></figure>
+      <figure class="comp-card"><div class="demo-stage" style="background:#111; border-radius:14px; width:100%; padding:14px 0;"><span class="icon-glass"><svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg></span></div><figcaption><b>Glass icon (camera only)</b>rgba(20,18,24,.55) + blur(6px), the one dark-glass button style in the app</figcaption></figure>
+      <figure class="comp-card">
+        <div class="demo-stage mini-card">
+          <div class="mini-card-head"><span>🥦 Nutrition</span><span>See all</span></div>
+          <div class="mini-label">Added sugar <span style="float:right" class="mini-val">0/25</span></div>
+          <div class="mini-track"><i></i></div>
+        </div>
+        <figcaption><b>Stat row</b>Icon-labelled progress track, Fog fill, value right-aligned in Ink</figcaption>
+      </figure>
+      <figure class="comp-card">
+        <div class="demo-stage mini-row"><span class="icon-flat" style="background:#f5eee0">🥪</span><span class="mini-row-text">Add Breakfast</span><span class="fab-black" style="width:30px;height:30px;font-size:16px">+</span></div>
+        <figcaption><b>List row</b>Emoji-in-tint-circle leading, black micro-FAB trailing, 1px Fog divider between rows</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <div><div class="section-num">04</div><h2>Camera screen — full anatomy</h2></div>
+      <p class="section-note">The screen you asked me to focus on. It's the plainest screen in the app by design: one guide frame, one hint, one shutter — nothing competes with the frame.</p>
+    </div>
+    <div class="camera-lab">
+      <div class="phone">
+        <div class="cam-feed"></div>
+        <div class="cam-vignette"></div>
+        <div class="cam-topbar">
+          <span class="icon-glass"><svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6h3l-7 12 1-8H8z"/></svg></span>
+          <span class="icon-glass"><svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg></span>
+        </div>
+        <div class="cam-guide"></div>
+        <div class="cam-hint">Scan your meal ⌐¬ to see its sugar impact 📸</div>
+        <div class="cam-bottom">
+          <span class="cam-gallery"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5"/></svg></span>
+          <span class="cam-shutter"></span>
+          <span class="cam-spacer"></span>
+        </div>
+      </div>
+      <div class="callouts">
+        <div class="callout"><div class="callout-num">1</div><div><h4>Top corners — glass icon pair only</h4><p>Flash (left) and close (right). No status pill, no live/ready label, no third control. Two buttons, both circular, both the same rgba-black-blur glass.</p><div class="spec">42px circle · rgba(20,18,24,.55) · blur(6px) · 1px rgba(255,255,255,.12) border</div></div></div>
+        <div class="callout"><div class="callout-num">2</div><div><h4>One guide frame, not per-object boxes</h4><p>A single rounded rectangle centered in the upper two-thirds of the frame. Everything outside it is dimmed by the vignette; nothing inside is labelled until after capture.</p><div class="spec">1.5px rgba(255,255,255,.75) stroke · 26px radius · heavy outer vignette via box-shadow-inset trick</div></div></div>
+        <div class="callout"><div class="callout-num">3</div><div><h4>Hint pill straddles the frame's lower edge</h4><p>Instructional copy ("Scan your meal to see its sugar impact") sits in a dark rounded pill that overlaps the bottom of the guide rather than floating free in open space — it reads as part of the frame, not a toast.</p><div class="spec">rgba(18,16,20,.78) fill · blur(6px) · fully rounded · centered, ~80% width</div></div></div>
+        <div class="callout"><div class="callout-num">4</div><div><h4>Bottom row is shutter-first</h4><p>Gallery is a small rounded-square glass button, off to one side. The shutter is the only large, unambiguous, centered element on the whole screen — pure white filled circle, no icon inside it.</p><div class="spec">shutter 66px circle, solid white · gallery 42px rounded-square, 13px radius</div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <div><div class="section-num">05</div><h2>Scales</h2></div>
+      <p class="section-note">Radius and spacing both step in the same rough progression the rest of the system uses — nothing arbitrary, everything a multiple of 4.</p>
+    </div>
+    <p class="lede" style="margin-bottom:18px">Corner radius, by element size:</p>
+    <div class="radius-strip">
+      <div class="radius-box" style="border-radius:8px">8 chip</div>
+      <div class="radius-box" style="border-radius:13px">13 icon</div>
+      <div class="radius-box" style="border-radius:18px">18 row</div>
+      <div class="radius-box" style="border-radius:24px">24 card</div>
+      <div class="radius-box" style="border-radius:30px">30 sheet</div>
+      <div class="radius-box" style="border-radius:999px">∞ pill</div>
+    </div>
+    <p class="lede" style="margin:28px 0 18px">Spacing scale (px):</p>
+    <div class="scale-strip">
+      <div class="scale-item"><div class="scale-box" style="width:4px;height:4px"></div><span>4</span></div>
+      <div class="scale-item"><div class="scale-box" style="width:8px;height:8px"></div><span>8</span></div>
+      <div class="scale-item"><div class="scale-box" style="width:12px;height:12px"></div><span>12</span></div>
+      <div class="scale-item"><div class="scale-box" style="width:16px;height:16px"></div><span>16</span></div>
+      <div class="scale-item"><div class="scale-box" style="width:22px;height:22px"></div><span>22</span></div>
+      <div class="scale-item"><div class="scale-box" style="width:28px;height:28px"></div><span>28</span></div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="section-head">
+      <div><div class="section-num">06</div><h2>Gap analysis vs. the demo</h2></div>
+      <p class="section-note">What src/app/page.tsx + globals.css already gets right, and what pulls it away from this identity — ranked by how visible the mismatch is.</p>
+    </div>
+    <div class="gap-table-wrap">
+      <table class="gap-table">
+        <thead><tr><th style="width:22%">Element</th><th>Demo today</th><th>Sugar.no reference</th></tr></thead>
+        <tbody>
+          <tr><td><span class="tag high">High</span><br>Camera top bar</td><td>Left icon is a static scanner glyph or torch toggle, center shows a "LIVE / READY / CAPTURED" text badge with pulsing dot, right is close.</td><td>Just two glass circles — flash, close. No status text on screen at all; state is implied by the UI around it, not spelled out.</td></tr>
+          <tr><td><span class="tag high">High</span><br>Product framing</td><td>Colored bounding boxes per detected product (green/yellow/orange/red) with a floating label — this is the demo's core value and should stay.</td><td>No live per-object detection shown; single static guide frame. The demo's overlay concept has no direct source equivalent — keep it, but restyle the box stroke/label chip to match §3–4's material (glass, rounded, same radius scale).</td></tr>
+          <tr><td><span class="tag med">Medium</span><br>Shutter / capture</td><td>No manual shutter — fully automatic preflight+analyze loop on a timer.</td><td>Manual white shutter circle is the visual anchor of the whole screen.</td></tr>
+          <tr><td><span class="tag med">Medium</span><br>Bottom sheet &amp; rows</td><td>Already very close: rounded sheet, grabber, icon+label rows, chevron. Font stack already matches (§2).</td><td>Row icons are tinted circles (pastel, per-category), not the demo's plain score-orb dot — could adopt for the sheet's non-score metadata rows.</td></tr>
+          <tr><td><span class="tag med">Medium</span><br>Result handle / pill</td><td>White pill floating above safe-area, correct family.</td><td>No direct equivalent, but the black-pill + ember-active-state language (nav) suggests the handle's accent dot should use Signal Blue or Vital Green, not the current pale blue.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer class="colophon">
+    Compiled from <a href="https://apps.apple.com/es/app/sugar-no-blood-sugar-tracker/id6744766266?l=en-GB">Sugar.no on the App Store</a> and six user-supplied device screenshots (Today × 2, Log Meal, Camera, Mealtime sheet, Profile). All hex values marked <span style="color:var(--gold);font-weight:700">estimated</span> were read visually, not pixel-sampled — re-check against source screenshots before hard-coding into production CSS.
+  </footer>
+
+</div>

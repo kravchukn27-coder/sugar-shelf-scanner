@@ -1,0 +1,395 @@
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Work+Sans:wght@400;500;600;700&family=Nunito:wght@600;700;800;900&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<title>Sugar Shelf Scanner Redesign</title>
+
+<style>
+  :root {
+    --doc-bg: #f4f7fb;
+    --doc-bg-alt: #eaeff6;
+    --surface: #ffffff;
+    --surface-sunken: #f2f0f6;
+    --border: #e2e1ea;
+    --ink: #17171b;
+    --ink-soft: #423f49;
+    --muted: #726d7c;
+    --accent: #2f6fef;
+    --ember: #ff5a45;
+    --vital: #4fce78;
+    --gold: #e8b23e;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --display: 'Baloo 2', ui-rounded, system-ui, sans-serif;
+    --body-font: 'Work Sans', -apple-system, sans-serif;
+    --product-font: ui-rounded, "SF Pro Rounded", -apple-system, 'Nunito', sans-serif;
+    --shadow: 0 1px 2px rgba(23,20,35,.04), 0 8px 24px rgba(23,20,35,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --doc-bg: #101014; --doc-bg-alt: #15151b; --surface: #1a1a21; --surface-sunken: #212027;
+      --border: #2c2b34; --ink: #f2f1f6; --ink-soft: #cfccd8; --muted: #a19cad;
+      --accent: #6d9aff; --ember: #ff7b68; --vital: #6ee395; --gold: #f3c765;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 30px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --doc-bg: #101014; --doc-bg-alt: #15151b; --surface: #1a1a21; --surface-sunken: #212027;
+    --border: #2c2b34; --ink: #f2f1f6; --ink-soft: #cfccd8; --muted: #a19cad;
+    --accent: #6d9aff; --ember: #ff7b68; --vital: #6ee395; --gold: #f3c765;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 30px rgba(0,0,0,.4);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--doc-bg); color: var(--ink); font-family: var(--body-font); -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px 100px; }
+
+  .masthead { padding: 56px 24px 40px; background: linear-gradient(180deg, var(--doc-bg-alt), var(--doc-bg) 85%); border-bottom: 1px solid var(--border); }
+  .masthead-inner { max-width: 1180px; margin: 0 auto; }
+  .kicker { font-family: var(--mono); font-size: 12px; font-weight: 500; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+  .kicker::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+  h1 { font-family: var(--display); font-weight: 800; font-size: clamp(32px, 5vw, 46px); line-height: 1.04; letter-spacing: -.01em; margin: 0 0 12px; text-wrap: balance; }
+  .masthead p.dek { font-size: 16px; line-height: 1.55; color: var(--ink-soft); max-width: 68ch; margin: 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+  .legend span { font-size: 12px; font-weight: 600; color: var(--ink-soft); background: var(--surface); border: 1px solid var(--border); padding: 6px 12px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+  .gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 30px; padding: 48px 0; }
+  .screen-card { display: flex; flex-direction: column; align-items: center; }
+  .screen-tag { font-family: var(--mono); font-size: 11px; color: var(--accent); font-weight: 600; margin-bottom: 10px; }
+  .caption { margin-top: 16px; max-width: 300px; text-align: center; }
+  .caption h3 { font-family: var(--display); font-size: 16px; font-weight: 700; margin: 0 0 6px; }
+  .caption p { font-size: 12.5px; line-height: 1.55; color: var(--muted); margin: 0; }
+
+  /* ---- phone shell ---- */
+  .phone { position: relative; width: 100%; max-width: 300px; aspect-ratio: 9/19.5; border-radius: 40px; background: #000; overflow: hidden;
+    box-shadow: 0 20px 50px rgba(0,0,0,.3), 0 0 0 8px #0a0a0a, 0 0 0 9px #333; font-family: var(--product-font); }
+  .shelf-photo { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .shelf-photo.dim { filter: brightness(.62) saturate(.8); }
+  .shelf-photo.blurry { filter: blur(2.5px) brightness(.58) saturate(.75); }
+  .dim-overlay { position: absolute; inset: 0; z-index: 1; background: rgba(9,8,10,.4); }
+  .vignette { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,.5), transparent 24%, transparent 62%, rgba(0,0,0,.72)); z-index: 1; }
+  .void { position: absolute; inset: 0; background: radial-gradient(120% 90% at 50% 30%, #232022, #0b0a0c 70%); }
+  .sky { position: absolute; inset: 0; background: linear-gradient(165deg, #dbe9fb 0%, #eef4fc 42%, #ffffff 100%); }
+
+  .topbar { position: absolute; top: 16px; left: 16px; right: 16px; display: flex; align-items: center; justify-content: space-between; z-index: 5; }
+  .topbar.end { justify-content: flex-end; }
+  .glass { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: rgba(20,18,24,.55); backdrop-filter: blur(6px); border: 1px solid rgba(255,255,255,.12); color: #fff; }
+  .glass.warm { background: rgba(232,178,62,.92); color: #2c2010; }
+  .glass.flat { background: #f0eef4; border: none; color: #423f49; box-shadow: 0 2px 8px rgba(30,40,70,.08); }
+  .glass svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  .guide { position: absolute; left: 5%; right: 5%; top: 13%; bottom: 21%; border: 1.5px solid rgba(255,255,255,.72); border-radius: 26px; box-shadow: 0 0 0 999px rgba(0,0,0,.32); z-index: 2; }
+  .hint { position: absolute; left: 8%; right: 8%; bottom: 21%; transform: translateY(50%); z-index: 4; background: rgba(18,16,20,.78); backdrop-filter: blur(6px); color: #fff; font-weight: 700; font-size: 10px; text-align: center; padding: 8px 12px; border-radius: 999px; line-height: 1.3; }
+
+  .gallery-btn { position: absolute; z-index: 6; left: 16px; bottom: 18px; width: 42px; height: 42px; border-radius: 13px; background: rgba(20,18,24,.55); backdrop-filter: blur(6px); border: 1px solid rgba(255,255,255,.12); display: grid; place-items: center; color: #fff; }
+  .gallery-btn.faint { opacity: .38; }
+  .gallery-btn svg { width: 16px; height: 16px; fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  .prompt { position: absolute; z-index: 5; left: 20px; right: 20px; top: 50%; transform: translateY(-50%); display: grid; justify-items: center; gap: 14px; text-align: center; }
+  .prompt strong { max-width: 220px; font-size: 18px; font-weight: 800; letter-spacing: -.01em; color: #fff; text-shadow: 0 2px 10px rgba(0,0,0,.5); line-height: 1.15; }
+  .prompt strong.warn { color: #ffe6a9; }
+  .prompt strong.dark { color: #17171b; text-shadow: none; max-width: 200px; }
+  .prompt strong.warn-light { color: #d9483a; text-shadow: none; max-width: 210px; }
+  .prompt p.sub { margin: -8px 0 0; max-width: 220px; font-size: 11px; font-weight: 600; color: #726d7c; line-height: 1.4; }
+  .prompt button { min-height: 38px; padding: 0 18px; border-radius: 999px; background: #131215; color: #fff; font-family: var(--product-font); font-size: 12.5px; font-weight: 800; border: none; box-shadow: 0 8px 20px rgba(0,0,0,.3); }
+  .prompt button.on-light { background: linear-gradient(180deg, #5b9dff, #1f66e8); box-shadow: 0 10px 22px rgba(31,102,232,.35); }
+
+  .alert-card { position: absolute; z-index: 5; left: 20px; right: 20px; top: 50%; transform: translateY(-50%);
+    background: rgba(16,14,18,.86); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,.1);
+    border-radius: 22px; padding: 22px 20px; display: grid; justify-items: center; gap: 12px; text-align: center;
+    box-shadow: 0 14px 34px rgba(0,0,0,.35); }
+  .alert-card strong { max-width: 220px; font-size: 15.5px; font-weight: 800; letter-spacing: -.005em; color: #fff; line-height: 1.25; }
+  .alert-card p.sub { margin: -4px 0 0; max-width: 220px; font-size: 10.5px; font-weight: 600; color: rgba(255,255,255,.6); line-height: 1.4; }
+  .alert-card button { min-height: 36px; padding: 0 18px; border-radius: 999px; background: #fff; color: #17171b; font-family: var(--product-font); font-size: 12px; font-weight: 800; border: none; margin-top: 2px; }
+
+  .copy { position: absolute; z-index: 5; bottom: 84px; left: 20px; right: 20px; text-align: center; color: #fff; font-weight: 750; font-size: 12.5px; text-shadow: 0 2px 8px rgba(0,0,0,.5); }
+  .copy small { display: block; margin: 5px auto 0; max-width: 220px; color: rgba(255,255,255,.62); font-size: 9px; font-weight: 500; }
+
+  .spinner { position: absolute; z-index: 6; left: 50%; top: 50%; width: 26px; height: 26px; margin: -13px; border: 2.5px solid rgba(255,255,255,.22); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+  .processing-pill { position: absolute; z-index: 5; left: 12%; right: 12%; bottom: 30%; transform: translateY(50%);
+    background: rgba(16,14,18,.8); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,.1);
+    border-radius: 999px; padding: 9px 14px; text-align: center; color: #fff; font-weight: 750; font-size: 11px; }
+  .processing-pill small { display: block; margin-top: 3px; color: rgba(255,255,255,.55); font-size: 8.5px; font-weight: 500; }
+
+  .overlay { position: absolute; z-index: 3; border: 2px solid var(--score); border-radius: 10px; background: color-mix(in srgb, var(--score) 8%, transparent); box-shadow: 0 0 0 1px rgba(255,255,255,.25) inset, 0 0 12px color-mix(in srgb, var(--score) 45%, transparent); }
+  .overlay.sel { box-shadow: 0 0 0 2px #fff inset, 0 0 18px var(--score); }
+  .overlay-check { position: absolute; top: 6px; right: 6px; width: 17px; height: 17px; border-radius: 50%; background: #fff; display: grid; place-items: center; box-shadow: 0 2px 6px rgba(0,0,0,.25); }
+  .overlay-check svg { width: 10px; height: 10px; stroke: var(--score); stroke-width: 3; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .overlay-label { position: absolute; top: -21px; left: -1px; white-space: nowrap; color: #1d1b22; background: #fff; border-radius: 8px; padding: 3px 6px; font-size: 8px; line-height: 1; font-weight: 800; box-shadow: 0 2px 6px rgba(0,0,0,.18); }
+  .overlay.g { --score: #8be473; } .overlay.y { --score: #f7dd68; } .overlay.o { --score: #ff9d55; } .overlay.r { --score: #fb656d; }
+
+  .handle { position: absolute; z-index: 8; left: 50%; bottom: 12px; transform: translateX(-50%); width: 82%; min-height: 38px; padding: 0 12px; display: flex; align-items: center; gap: 7px; border-radius: 20px; background: rgba(255,255,255,.97); color: #16141b; box-shadow: 0 8px 22px rgba(0,0,0,.3); font-size: 10.5px; font-weight: 800; }
+  .handle-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vital); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vital) 25%, transparent); }
+  .handle-detail { margin-left: auto; color: #726d7c; font-size: 9.5px; font-weight: 650; }
+  .handle svg { width: 12px; height: 12px; fill: none; stroke: #726d7c; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+
+  .sheet { position: absolute; z-index: 12; inset: auto 0 0; padding: 8px 12px 16px; border-radius: 22px 22px 0 0; color: #17141d; background: #f8f7fd; box-shadow: 0 -12px 32px rgba(0,0,0,.3); max-height: 68%; overflow: hidden; }
+  .sheet-header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; min-height: 26px; font-size: 11.5px; font-weight: 850; }
+  .sheet-header b:last-child { justify-self: end; }
+  .sheet-grabber { width: 30px; height: 4px; border-radius: 4px; justify-self: start; background: #d6d1dc; }
+  .sheet-close { justify-self: end; width: 22px; height: 22px; border-radius: 50%; background: #f0eef4; display: grid; place-items: center; }
+  .sheet-close svg { width: 10px; height: 10px; stroke: #423f49; stroke-width: 2.4; fill: none; stroke-linecap: round; }
+  .sheet-intro { margin: 4px 4px 9px; color: #726d7c; font-size: 9.5px; }
+  .row { border-radius: 15px; background: #fff; box-shadow: 0 3px 12px rgba(64,45,79,.05); margin-bottom: 6px; overflow: hidden; }
+  .row-main { display: flex; align-items: center; padding: 9px 10px; gap: 9px; }
+  .orb { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 9px; display: grid; place-items: center;
+    background: color-mix(in srgb, var(--score) 18%, white); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--score) 55%, white); }
+  .orb svg { width: 13px; height: 13px; fill: none; stroke: color-mix(in srgb, var(--score) 78%, black); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .orb.g { --score: #6bcb52; } .orb.y { --score: #e0c53f; } .orb.o { --score: #ff9d55; } .orb.r { --score: #fb656d; }
+  .row-name { display: grid; gap: 3px; min-width: 0; }
+  .row-name strong { font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status-tag { justify-self: start; font-size: 7.5px; font-weight: 800; letter-spacing: .01em; padding: 2px 6px; border-radius: 999px; line-height: 1.5; }
+  .status-tag.confirmed { background: color-mix(in srgb, var(--vital) 20%, white); color: color-mix(in srgb, var(--vital) 55%, #17171b); }
+  .status-tag.estimate { background: color-mix(in srgb, var(--accent) 16%, white); color: var(--accent); }
+  .status-tag.unconfirmed { background: #eeecf2; color: #837e8c; }
+  .row-val { margin-left: auto; color: #27212c; font-size: 11.5px; font-weight: 850; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .row-val small { display: block; color: #726d7c; font-size: 7.5px; font-weight: 650; text-align: right; }
+  .row-chev { width: 12px; height: 12px; stroke: #89828e; stroke-width: 2.2; fill: none; }
+  .row-detail { display: grid; gap: 9px; margin: 0 10px 10px 44px; padding: 9px 0 0; border-top: 1px solid #f0edf3; color: #726d7c; font-size: 9px; }
+  .row-detail > div { display: flex; justify-content: space-between; }
+  .row-detail strong { color: #2b2630; font-variant-numeric: tabular-nums; }
+  .meter-label { display: flex; justify-content: space-between; font-size: 9px; margin-bottom: 5px; }
+  .meter-track { position: relative; height: 5px; border-radius: 3px; overflow: visible;
+    background: linear-gradient(90deg,#8be473 0 25%,#f7dd68 25% 50%,#ff9d55 50% 75%,#fb656d 75% 100%); }
+  .meter-marker { position: absolute; top: 50%; width: 9px; height: 9px; border-radius: 50%; background: #fff; border: 2px solid #17171b; transform: translate(-50%,-50%); box-shadow: 0 1px 3px rgba(0,0,0,.35); }
+
+  .notes { padding: 48px 0 8px; }
+  .notes h2 { font-family: var(--display); font-size: 22px; font-weight: 700; margin: 0 0 20px; }
+  .note-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .note-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 16px 18px; box-shadow: var(--shadow); }
+  .note-card .n { font-family: var(--mono); font-size: 10px; color: var(--accent); font-weight: 600; margin-bottom: 6px; }
+  .note-card h4 { margin: 0 0 5px; font-size: 13.5px; font-weight: 700; }
+  .note-card p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+
+  footer.colophon { padding: 40px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.7; border-top: 1px solid var(--border); margin-top: 20px; }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="wallGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4c443d"/>
+      <stop offset="1" stop-color="#221d1a"/>
+    </linearGradient>
+    <linearGradient id="shelfWood" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8a6b4f"/>
+      <stop offset="1" stop-color="#5e4732"/>
+    </linearGradient>
+    <symbol id="shelf-scene" viewBox="0 0 400 700">
+      <rect width="400" height="700" fill="url(#wallGrad)"/>
+      <g opacity=".5">
+        <rect x="14" y="120" width="66" height="120" rx="8" fill="#c8a15c"/>
+        <rect x="98" y="104" width="60" height="140" rx="8" fill="#8fae7a"/>
+        <rect x="300" y="112" width="68" height="132" rx="8" fill="#b9705f"/>
+        <rect x="220" y="96" width="58" height="150" rx="8" fill="#7d93b8"/>
+      </g>
+      <rect x="0" y="430" width="400" height="24" fill="url(#shelfWood)"/>
+      <rect x="0" y="430" width="400" height="4" fill="#a3855f" opacity=".6"/>
+      <g>
+        <rect x="34" y="230" width="56" height="196" rx="14" fill="#3f8f5c"/>
+        <rect x="52" y="205" width="20" height="34" rx="6" fill="#2c6b43"/>
+        <rect x="42" y="300" width="40" height="58" rx="6" fill="#ffffff" opacity=".92"/>
+        <rect x="48" y="316" width="28" height="4" rx="2" fill="#3f8f5c"/>
+        <rect x="48" y="326" width="20" height="4" rx="2" fill="#8fc7a3"/>
+        <rect x="112" y="260" width="92" height="166" rx="10" fill="#e0523f"/>
+        <rect x="126" y="284" width="64" height="46" rx="6" fill="#ffffff" opacity=".94"/>
+        <rect x="134" y="298" width="44" height="5" rx="2.5" fill="#e0523f"/>
+        <rect x="134" y="310" width="30" height="5" rx="2.5" fill="#f2a89c"/>
+        <rect x="222" y="250" width="86" height="176" rx="10" fill="#eec24a"/>
+        <rect x="236" y="272" width="58" height="42" rx="6" fill="#ffffff" opacity=".94"/>
+        <rect x="244" y="286" width="40" height="5" rx="2.5" fill="#c99423"/>
+        <rect x="244" y="297" width="26" height="5" rx="2.5" fill="#f2d998"/>
+        <rect x="326" y="286" width="50" height="140" rx="10" fill="#3d6fce"/>
+        <rect x="326" y="316" width="50" height="34" fill="#ffffff" opacity=".92"/>
+        <rect x="334" y="326" width="34" height="5" rx="2.5" fill="#3d6fce"/>
+        <rect x="334" y="336" width="22" height="5" rx="2.5" fill="#9ab6ea"/>
+      </g>
+      <g opacity=".22">
+        <rect x="0" y="0" width="400" height="700" fill="url(#wallGrad)"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="masthead">
+  <div class="masthead-inner">
+    <div class="kicker">Redesign concept · static mockup, no code touched</div>
+    <h1>Sugar Shelf Scanner, restyled to Sugar.no</h1>
+    <p class="dek">All six states the live demo can be in — camera off, live search, analyzing, results, results with the sheet open, and the failure prompt — rebuilt with the palette, glass buttons and single-frame camera language from the Sugar.no brand book. Nothing here is wired to real code; it's for sign-off before touching <code>src/app/page.tsx</code>.</p>
+    <div class="legend">
+      <span><i style="background:#2f6fef"></i> Signal Blue — links, action pill</span>
+      <span><i style="background:#4fce78"></i> Vital — result-handle accent</span>
+      <span><i style="background:#e8b23e"></i> Honey — torch active</span>
+      <span><i style="background:#8be473"></i> Low sugar</span>
+      <span><i style="background:#f7dd68"></i> Moderate</span>
+      <span><i style="background:#ff9d55"></i> High</span>
+      <span><i style="background:#fb656d"></i> Very high</span>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="gallery">
+
+    <!-- 1. camera off -->
+    <div class="screen-card">
+      <div class="screen-tag">state · camera_off</div>
+      <div class="phone">
+        <div class="sky"></div>
+        <div class="topbar end">
+          <span class="glass flat"><svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg></span>
+        </div>
+        <div class="prompt"><strong class="dark">Scan products for sugar</strong><p class="sub">Point your camera at a shelf to check what's inside</p><button class="on-light">Start scanning</button></div>
+        <span class="gallery-btn" style="background:#eceef4;border:none;box-shadow:0 2px 8px rgba(30,40,70,.08)"><svg viewBox="0 0 24 24" style="stroke:#38333d"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01"/></svg></span>
+      </div>
+      <div class="caption">
+        <h3>Camera off</h3>
+        <p>No live feed showing yet, so no reason to stay black — swapped in the Sky Mist gradient from the Today screen. Scan-icon badge is gone (going away in code anyway), leaving just close, top right. CTA moved from solid ink to the Signal Blue gradient pill, matching "Camera, Gallery" in Sugar.no's Log Meal screen.</p>
+      </div>
+    </div>
+
+    <!-- 2. live searching -->
+    <div class="screen-card">
+      <div class="screen-tag">state · live_searching</div>
+      <div class="phone">
+        <svg class="shelf-photo" viewBox="0 0 400 700" preserveAspectRatio="xMidYMid slice"><use href="#shelf-scene"/></svg>
+        <div class="vignette"></div>
+        <div class="topbar">
+          <span class="glass warm"><svg viewBox="0 0 24 24"><path d="M9 3h6l-1 6h3l-7 12 1-8H8z"/></svg></span>
+          <span class="glass"><svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg></span>
+        </div>
+        <div class="guide"></div>
+        <div class="hint">Point your camera at products</div>
+        <span class="gallery-btn"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01"/></svg></span>
+      </div>
+      <div class="caption">
+        <h3>Live search</h3>
+        <p>The scan-icon badge is replaced by the torch toggle (now Honey when active, not yellow). Hint copy moved into a dark glass pill straddling the guide's lower edge, like Sugar.no's "Scan your meal" label.</p>
+      </div>
+    </div>
+
+    <!-- 3. captured / analyzing -->
+    <div class="screen-card">
+      <div class="screen-tag">state · captured_analyzing</div>
+      <div class="phone">
+        <svg class="shelf-photo" viewBox="0 0 400 700" preserveAspectRatio="xMidYMid slice"><use href="#shelf-scene"/></svg>
+        <div class="dim-overlay"></div>
+        <div class="vignette"></div>
+        <div class="topbar end">
+          <span class="glass"><svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg></span>
+        </div>
+        <span class="spinner"></span>
+        <div class="processing-pill">Product found — checking details…<small>Photos are sent for analysis and are not saved.</small></div>
+      </div>
+      <div class="caption">
+        <h3>Analyzing</h3>
+        <p>Barcode badge and gallery button both gone — nothing to scan or pick mid-analysis, so nothing to tap but close. Spinner accented in Signal Blue instead of plain white, the one moment the brand color shows through motion. Copy moved into the same glass pill as the hint/error states, instead of bare shadowed text — one legibility rule for the whole camera scene now, not three.</p>
+      </div>
+    </div>
+
+    <!-- 4. results -->
+    <div class="screen-card">
+      <div class="screen-tag">state · results</div>
+      <div class="phone">
+        <svg class="shelf-photo" viewBox="0 0 400 700" preserveAspectRatio="xMidYMid slice"><use href="#shelf-scene"/></svg>
+        <div class="vignette"></div>
+        <div class="topbar end">
+          <span class="glass"><svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg></span>
+        </div>
+        <div class="overlay g" style="left:6%;top:27%;width:16%;height:38%"><span class="overlay-label">Low</span></div>
+        <div class="overlay r sel" style="left:26%;top:34%;width:25%;height:29%"><span class="overlay-label">Very high</span><span class="overlay-check"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span></div>
+        <div class="overlay o" style="left:53%;top:33%;width:23%;height:31%"><span class="overlay-label">High</span></div>
+        <span class="gallery-btn faint"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01"/></svg></span>
+        <div class="handle"><span class="handle-dot"></span><span>3 products found</span><span class="handle-detail">Details</span><svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></div>
+      </div>
+      <div class="caption">
+        <h3>Results</h3>
+        <p>Dropped the floating "N products found" copy — it just repeated the handle pill below, and was bare text over an unpredictable photo like the old error state. Selected box now gets an explicit check mark, not just a glow. Gallery button fades to secondary since there's nothing to re-pick from mid-results. Barcode badge removed too — same reasoning as Analyzing, results isn't a moment to start a new scan.</p>
+      </div>
+    </div>
+
+    <!-- 5. results — sheet open -->
+    <div class="screen-card">
+      <div class="screen-tag">state · results + sheet</div>
+      <div class="phone">
+        <svg class="shelf-photo" viewBox="0 0 400 700" preserveAspectRatio="xMidYMid slice"><use href="#shelf-scene"/></svg>
+        <div class="vignette"></div>
+        <div class="topbar end">
+          <span class="glass"><svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg></span>
+        </div>
+        <div class="sheet">
+          <div class="sheet-header"><span class="sheet-grabber"></span><b>3 products found</b><span class="sheet-close"><svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg></span></div>
+          <p class="sheet-intro">Tap a product to see its sugar impact.</p>
+          <div class="row">
+            <div class="row-main">
+              <span class="orb g"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4-9-4Zm0 0v10l9 4 9-4V7M12 11v10"/></svg></span>
+              <span class="row-name"><strong>Oatly · Barista</strong><span class="status-tag confirmed">Confirmed</span></span>
+              <span class="row-val">4g<small>/100g</small></span>
+              <svg class="row-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-main">
+              <span class="orb o"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4-9-4Zm0 0v10l9 4 9-4V7M12 11v10"/></svg></span>
+              <span class="row-name"><strong>Kellogg's · Corn Flakes</strong><span class="status-tag estimate">AI estimate</span></span>
+              <span class="row-val">17g<small>/100g</small></span>
+              <svg class="row-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+          </div>
+          <div class="row">
+            <div class="row-main">
+              <span class="orb r"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4-9-4Zm0 0v10l9 4 9-4V7M12 11v10"/></svg></span>
+              <span class="row-name"><strong>Coca-Cola · Original</strong><span class="status-tag confirmed">Confirmed</span></span>
+              <span class="row-val">39g<small>/100g</small></span>
+              <svg class="row-chev" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg>
+            </div>
+            <div class="row-detail">
+              <div style="display:block">
+                <div class="meter-label"><span>Sugar level</span><strong>Very high sugar</strong></div>
+                <div class="meter-track"><span class="meter-marker" style="left:92%"></span></div>
+              </div>
+              <div><span>Protein</span><strong>0g / 100g</strong></div>
+              <div><span>Source</span><strong>Open Food Facts</strong></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="caption">
+        <h3>Details sheet</h3>
+        <p>Orb is now an icon-in-tint-circle like Sugar.no's meal icons, color moved from a solid fill to the tint + ring. Status became a small colored tag instead of caption text. Sugar level is a green→red meter with a marker, echoing the Nutrition card's tracks. Values use tabular figures so the g/100g column lines up row to row.</p>
+      </div>
+    </div>
+
+    <!-- 6. failure / no scene -->
+    <div class="screen-card">
+      <div class="screen-tag">state · no_scene / error</div>
+      <div class="phone">
+        <svg class="shelf-photo blurry" viewBox="0 0 400 700" preserveAspectRatio="xMidYMid slice"><use href="#shelf-scene"/></svg>
+        <div class="vignette"></div>
+        <div class="topbar">
+          <span class="glass"><svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3m18 0v3a2 2 0 0 1-2 2h-3M8 12h8"/></svg></span>
+          <span class="glass"><svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg></span>
+        </div>
+        <div class="alert-card"><strong>No packaged products found — move closer</strong><p class="sub">Try holding the camera steadier, closer to the label</p><button>Try again</button></div>
+        <span class="gallery-btn"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01"/></svg></span>
+      </div>
+      <div class="caption">
+        <h3>No scene / error</h3>
+        <p>Back over the real (dimmed) frame — that photo is the whole reason the state exists. Message now sits in a solid glass card instead of bare shadowed text, so it stays legible no matter what's behind it (a wall, a window, anything). Same card material as the live-search hint pill.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="notes">
+    <h2>Reading this mockup</h2>
+    <div class="note-grid">
+      <div class="note-card"><div class="n">applies to</div><h4>src/app/page.tsx + globals.css</h4><p>Every element above maps 1:1 to a class already in <code>globals.css</code> — this is a restyle, not a rebuild. No new states, no new interaction logic.</p></div>
+      <div class="note-card"><div class="n">biggest visual delta</div><h4>Top bar simplification</h4><p>The live text badge (READY / LIVE / CAPTURED + pulsing dot) is gone from all six screens. If that status is still needed for QA/debugging, it can move to a dev-only overlay instead of shipping UI.</p></div>
+      <div class="note-card"><div class="n">kept on purpose</div><h4>Per-product overlay boxes</h4><p>Sugar.no has no multi-object detection screen to borrow from — this is the demo's own invention and its main differentiator, so it stays, just re-skinned to the same glass/radius language as everything else.</p></div>
+      <div class="note-card"><div class="n">next step</div><h4>Sign off, then port</h4><p>Once a direction here is approved, the actual change is CSS-only in <code>globals.css</code> plus trimming the live-indicator markup in <code>page.tsx</code> — no logic changes.</p></div>
+    </div>
+  </div>
+
+  <footer class="colophon">Companion to the Sugar.no Brand Book. Colors and component shapes are pulled from that reference; semantic sugar-band colors (green/yellow/orange/red) are unchanged from the current demo since they carry meaning Sugar.no doesn't have an equivalent for.</footer>
+</div>
