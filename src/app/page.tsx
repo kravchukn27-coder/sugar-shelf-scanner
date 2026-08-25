@@ -11,9 +11,12 @@ const bandCopy = { green: "Low sugar", yellow: "Moderate sugar", orange: "High s
 const sourceCopy = { curated: "Sugar catalog", open_food_facts: "Open Food Facts", usda_food_data_central: "USDA FoodData Central", commercial: "Verified provider" } as const;
 const eligible = (d: Detection) => d.confidence >= .55 && Boolean(d.visualCandidate.brand || d.visualCandidate.name);
 const displaySugar = (value: number | null | undefined) => formatSugarPer100g(value) ?? "—";
+type TorchTrack = { getCapabilities?: () => { torch?: boolean } };
+const supportsTorch = (track: MediaStreamTrack | undefined) => Boolean((track as unknown as TorchTrack | undefined)?.getCapabilities?.().torch);
 function Chevron({ up = false }: { up?: boolean }) { return <svg aria-hidden="true" className={up ? "chevron up" : "chevron"} viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>; }
 function CloseIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17" /></svg>; }
 function ScanIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3m18 0v3a2 2 0 0 1-2 2h-3M8 12h8" /></svg>; }
+function TorchIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 3h6l-1 6h3l-7 12 1-8H8z" /></svg>; }
 
 export default function HomePage() {
   const videoRef = useRef<HTMLVideoElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0);
@@ -23,9 +26,10 @@ export default function HomePage() {
   const [frozen, setFrozen] = useState<string | null>(null);
   const [uploadUrl, setUploadUrl] = useState<string | null>(null);
   const [sheet, setSheet] = useState(false), [selected, setSelected] = useState<string | null>(null);
+  const [torchAvailable, setTorchAvailable] = useState(false), [torchOn, setTorchOn] = useState(false);
   const groups = groupRepeatedDetections((scan?.detections ?? []).filter(eligible));
   const dispatch = useCallback((event: ScannerLifecycleEvent) => setState((current) => transitionScannerLifecycle(current, event)), []);
-  const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
+  const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
   const clearResult = useCallback(() => { setScan(null); setFrozen(null); setFailure(null); setSheet(false); setSelected(null); }, []);
 
   const capture = useCallback((source: HTMLVideoElement | HTMLImageElement, width: number, quality: number) => {
@@ -71,10 +75,11 @@ export default function HomePage() {
 
   const start = useCallback(async () => {
     const id = ++session.current; stopStream(); clearResult(); setUploadUrl(null); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
-    try { const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 1920 } }, audio: false }); if (id !== session.current || !videoRef.current) { stream.getTracks().forEach((t) => t.stop()); return; } streamRef.current = stream; videoRef.current.srcObject = stream; await videoRef.current.play(); if (id !== session.current) { stream.getTracks().forEach((t) => t.stop()); if (videoRef.current) videoRef.current.srcObject = null; streamRef.current = null; } }
+    try { const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 1920 } }, audio: false }); if (id !== session.current || !videoRef.current) { stream.getTracks().forEach((t) => t.stop()); return; } streamRef.current = stream; setTorchAvailable(supportsTorch(stream.getVideoTracks()[0])); videoRef.current.srcObject = stream; await videoRef.current.play(); if (id !== session.current) { stream.getTracks().forEach((t) => t.stop()); if (videoRef.current) videoRef.current.srcObject = null; streamRef.current = null; } }
     catch { if (id === session.current) { setFailure("Camera unavailable. Check permission and try again."); setState((current) => transitionScannerLifecycle(current, "ANALYZE_FAILURE")); } }
   }, [clearResult, stopStream]);
   const close = useCallback(() => { session.current += 1; stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
+  const toggleTorch = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !torchOn; if (!track || !supportsTorch(track)) return setTorchAvailable(false); try { await track.applyConstraints({ advanced: [{ torch: next } as unknown as MediaTrackConstraintSet] }); setTorchOn(next); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
   const retry = useCallback(() => { if (!uploadUrl) void start(); else { session.current += 1; clearResult(); dispatch("RETRY"); } }, [clearResult, dispatch, start, uploadUrl]);
   function upload(file: File | undefined) { if (!file) return; session.current += 1; stopStream(); clearResult(); setUploadUrl((old) => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(file); }); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY")); }
   useEffect(() => () => { session.current += 1; stopStream(); }, [stopStream]);
@@ -84,7 +89,7 @@ export default function HomePage() {
 
   return <main className="scanner-shell"><section className="camera-scene" aria-label="Sugar shelf scanner">
     {uploadUrl ? <img className="camera-preview" src={uploadUrl} alt="Selected shelf" /> : <video ref={videoRef} className="camera-preview" muted playsInline />}{frozen && <img className="camera-preview frozen-preview" src={frozen} alt="Captured shelf frame" />}<div className="camera-vignette" />
-    <header className="camera-controls"><span className="round-control" aria-label="Shelf scanner"><ScanIcon /></span><span className="live-indicator"><i /> {captured || uploadUrl ? "CAPTURED" : state === "camera_off" ? "READY" : "LIVE"}</span><button className="round-control" onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
+    <header className="camera-controls">{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : <span className="round-control" aria-label="Shelf scanner"><ScanIcon /></span>}<span className="live-indicator"><i /> {captured || uploadUrl ? "CAPTURED" : state === "camera_off" ? "READY" : "LIVE"}</span><button className="round-control" onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
     {groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { setSelected(group.detection.id); setSheet(true); }} />)}
     {state === "live_searching" && !uploadUrl && <><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint">Point your camera at a shelf</p></>}
     {state === "captured_analyzing" && <span className="scan-spinner" aria-label="Checking product details" />}
