@@ -7,7 +7,7 @@ const FRAME_INTERVAL = 650;
 const EMPTY_RESULT_COOLDOWN_MS = 4_000;
 const ERROR_COOLDOWN_MS = 6_000;
 type CameraState = "starting" | "live" | "unsupported" | "error";
-type ScanFeedback = "idle" | "preflight" | "analyzing" | "found" | "empty" | "uncertain" | "error";
+type ScanFeedback = "idle" | "preflight" | "analyzing" | "found" | "empty" | "uncertain" | "unresolved" | "error";
 const bandCopy = { green: "Low sugar", yellow: "Moderate sugar", orange: "High sugar", red: "Very high sugar", unknown: "Needs a check" } as const;
 
 function isEligibleDetection(detection: Detection) {
@@ -75,6 +75,9 @@ export default function HomePage() {
     }
     const frameId = `frame-${++frameIndex.current}`;
     const isLiveCameraFrame = source instanceof HTMLVideoElement;
+    // A positive preflight is the intentional, shutterless capture moment.
+    // Keep this exact frame visible while full Gemini recognition finishes.
+    if (isLiveCameraFrame) setFrozenFrame(imageDataUrl);
     setScanFeedback("analyzing");
     let retryCooldown = EMPTY_RESULT_COOLDOWN_MS;
     try {
@@ -89,12 +92,11 @@ export default function HomePage() {
       const hasEligibleDetection = nextScan.detections.some(isEligibleDetection);
       if (hasEligibleDetection) {
         setScan(nextScan);
-        // The UI only becomes a still photograph after Gemini has confirmed a
-        // packaged product. This is what makes the capture feel intentional.
-        if (isLiveCameraFrame) setFrozenFrame(imageDataUrl);
         setScanFeedback("found");
       } else {
-        setScanFeedback("empty");
+        // Do not quietly resume the camera after it intentionally captured a
+        // product. The user sees a stable outcome and can explicitly restart.
+        setScanFeedback("unresolved");
       }
     } catch {
       retryCooldown = ERROR_COOLDOWN_MS;
@@ -185,8 +187,10 @@ export default function HomePage() {
       ? "No packaged products found — move closer"
       : scanFeedback === "uncertain"
         ? "Move closer to a packaged product"
+      : scanFeedback === "unresolved"
+        ? "Couldn’t identify this product — tap × to scan again"
       : scanFeedback === "error"
-        ? "Couldn’t analyze this frame — trying again"
+        ? frozenFrame ? "Couldn’t analyze this capture — tap × to scan again" : "Couldn’t analyze this frame — trying again"
         : activeDetections.length
           ? `${activeDetections.length} products found`
           : "Point at packaged products to scan";
@@ -203,7 +207,7 @@ export default function HomePage() {
       <label className="gallery-button" aria-label="Choose a shelf photo"><input type="file" accept="image/*" onChange={(event) => onUpload(event.target.files?.[0])} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label>
       {(cameraState === "error" || cameraState === "unsupported") && <div className="camera-notice">Camera unavailable. Choose a shelf photo instead.</div>}
     </section>
-    <button className="result-handle" onClick={() => setIsSheetOpen(true)} disabled={!activeDetections.length}><span className={`handle-dot ${scanFeedback}`} /><span>{activeDetections.length ? `${activeDetections.length} products found` : scanFeedback === "empty" ? "No products found" : scanFeedback === "error" ? "Try the next frame" : "Scanning shelf"}</span><span className="handle-detail">Details</span><Chevron /></button>
+    <button className="result-handle" onClick={() => setIsSheetOpen(true)} disabled={!activeDetections.length}><span className={`handle-dot ${scanFeedback}`} /><span>{activeDetections.length ? `${activeDetections.length} products found` : scanFeedback === "empty" ? "No products found" : scanFeedback === "unresolved" || scanFeedback === "error" ? "Scan again" : "Scanning shelf"}</span><span className="handle-detail">Details</span><Chevron /></button>
     {isSheetOpen && <ResultsSheet detections={activeDetections} selectedId={selectedId} onSelect={setSelectedId} onClose={closeSheet} />}
     <canvas ref={canvasRef} className="hidden-canvas" />
   </main>;
