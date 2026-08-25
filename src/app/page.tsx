@@ -9,6 +9,7 @@ const ERROR_COOLDOWN_MS = 6_000;
 type CameraState = "starting" | "live" | "unsupported" | "error";
 type ScanFeedback = "idle" | "preflight" | "analyzing" | "found" | "empty" | "uncertain" | "unresolved" | "error";
 const bandCopy = { green: "Low sugar", yellow: "Moderate sugar", orange: "High sugar", red: "Very high sugar", unknown: "Needs a check" } as const;
+const sourceCopy = { curated: "Sugar catalog", open_food_facts: "Open Food Facts", usda_food_data_central: "USDA FoodData Central", commercial: "Verified provider" } as const;
 
 function isEligibleDetection(detection: Detection) {
   return detection.confidence >= 0.55 && Boolean(detection.visualCandidate.brand || detection.visualCandidate.name);
@@ -215,12 +216,19 @@ export default function HomePage() {
 
 function ProductOverlay({ detection, selected, onSelect }: { detection: Detection; selected: boolean; onSelect: () => void }) {
   const { box, score } = detection;
-  return <button className={`product-overlay ${score.band} ${selected ? "selected" : ""}`} onClick={onSelect} style={{ left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.width * 100}%`, height: `${box.height * 100}%` }} aria-label={`View ${detection.visualCandidate.name ?? "product"}`}><span className="overlay-label">{score.sugarPer100g === null ? "Check" : `${bandCopy[score.band]} · ${score.sugarPer100g}g`}</span>{detection.status === "estimate" && <span className="estimate-chip">AI</span>}</button>;
+  const isConfirmed = detection.status === "confirmed";
+  const visualBand = isConfirmed ? score.band : "unknown";
+  const label = score.sugarPer100g === null
+    ? "Needs confirmation"
+    : isConfirmed ? `${bandCopy[score.band]} · ${score.sugarPer100g}g` : `AI estimate · ${score.sugarPer100g}g`;
+  return <button className={`product-overlay ${visualBand} ${selected ? "selected" : ""}`} onClick={onSelect} style={{ left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.width * 100}%`, height: `${box.height * 100}%` }} aria-label={`View ${detection.visualCandidate.name ?? "product"}`}><span className="overlay-label">{label}</span>{detection.status === "estimate" && <span className="estimate-chip">AI</span>}</button>;
 }
 
 function ResultsSheet({ detections, selectedId, onSelect, onClose }: { detections: Detection[]; selectedId: string | null; onSelect: (id: string | null) => void; onClose: () => void }) {
   return <section className="result-sheet" aria-label="Recognized products"><div className="sheet-header"><button className="sheet-grabber" onClick={onClose} aria-label="Close details" /><span>{detections.length} products found</span><button onClick={onClose} aria-label="Close product list"><CloseIcon /></button></div><p className="sheet-intro">Tap a product to see its sugar impact.</p><div className="product-list">{detections.map((detection) => {
     const open = selectedId === detection.id; const title = [detection.visualCandidate.brand, detection.visualCandidate.name].filter(Boolean).join(" · ");
-    return <article key={detection.id} className={`product-row ${open ? "open" : ""}`}><button className="product-summary" onClick={() => onSelect(open ? null : detection.id)}><span className={`score-orb ${detection.score.band}`} /><span className="product-name"><strong>{title || "Unidentified product"}</strong><small>{detection.status === "confirmed" ? "Confirmed product" : detection.status === "estimate" ? "AI estimate" : "Needs confirmation"}</small></span><span className="sugar-value">{detection.score.sugarPer100g === null ? "—" : `${detection.score.sugarPer100g}g`}<small>/100g</small></span><Chevron up={open} /></button>{open && <div className="product-details"><div><span>Sugar score</span><strong>{bandCopy[detection.score.band]}</strong></div><div><span>Protein</span><strong>{detection.product?.proteinPer100g ? `${detection.product.proteinPer100g}g / 100g` : "Not confirmed"}</strong></div>{detection.status !== "confirmed" && <div className="confirmation-actions"><button>Scan barcode</button><button>Nutrition label</button></div>}{detection.estimateReason && <p>{detection.estimateReason}</p>}</div>}</article>;
+    const isConfirmed = detection.status === "confirmed";
+    const provenance = detection.product?.provenance;
+    return <article key={detection.id} className={`product-row ${open ? "open" : ""}`}><button className="product-summary" onClick={() => onSelect(open ? null : detection.id)}><span className={`score-orb ${isConfirmed ? detection.score.band : "unknown"}`} /><span className="product-name"><strong>{title || "Unidentified product"}</strong><small>{isConfirmed ? "Confirmed product" : detection.status === "estimate" ? "AI estimate — needs confirmation" : "Needs confirmation"}</small></span><span className="sugar-value">{detection.score.sugarPer100g === null ? "—" : `${detection.score.sugarPer100g}g`}<small>/100g</small></span><Chevron up={open} /></button>{open && <div className="product-details"><div><span>Sugar score</span><strong>{isConfirmed ? bandCopy[detection.score.band] : "Not confirmed"}</strong></div><div><span>Protein</span><strong>{detection.product?.proteinPer100g ? `${detection.product.proteinPer100g}g / 100g` : "Not confirmed"}</strong></div>{provenance && <div><span>Source</span><strong>{sourceCopy[provenance.source]}</strong></div>}{detection.status !== "confirmed" && <div className="confirmation-actions"><button>Scan barcode</button><button>Nutrition label</button></div>}{detection.estimateReason && <p>{detection.estimateReason}</p>}</div>}</article>;
   })}</div></section>;
 }

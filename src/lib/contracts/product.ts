@@ -22,6 +22,17 @@ export const scoreSchema = z.object({
 });
 export type SugarScore = z.infer<typeof scoreSchema>;
 
+// `observedAt` is when Sugar read or imported the source record. It is not a
+// claim about when Open Food Facts or USDA last changed the item. `lastVerifiedAt`
+// is only populated when our catalog has an explicit verification timestamp.
+export const productProvenanceSchema = z.object({
+  source: z.enum(["curated", "open_food_facts", "usda_food_data_central", "commercial"]),
+  sourceRecordId: z.string().min(1).max(256),
+  observedAt: z.string().datetime(),
+  lastVerifiedAt: z.string().datetime().nullable(),
+});
+export type ProductProvenance = z.infer<typeof productProvenanceSchema>;
+
 export const productSummarySchema = z.object({
   id: z.string().min(1),
   gtin: z.string().nullable(),
@@ -31,5 +42,7 @@ export const productSummarySchema = z.object({
   imageUrl: z.string().url().nullable(),
   proteinPer100g: z.number().nonnegative().nullable(),
   score: scoreSchema,
+  // Estimates and unresolved visual detections have no catalog provenance.
+  provenance: productProvenanceSchema.optional(),
 });
 export type ProductSummary = z.infer<typeof productSummarySchema>;

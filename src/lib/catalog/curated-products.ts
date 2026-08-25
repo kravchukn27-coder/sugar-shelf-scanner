@@ -22,7 +22,7 @@ function product(
     referenceImages: [],
     proteinPer100g,
     score: createSugarScore(sugarPer100g, "catalog"),
-    provenance: { source: "curated", sourceRecordId: id, lastVerifiedAt: VERIFIED_AT },
+    provenance: { source: "curated", sourceRecordId: id, observedAt: VERIFIED_AT, lastVerifiedAt: VERIFIED_AT },
   };
 }
 

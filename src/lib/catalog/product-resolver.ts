@@ -1,17 +1,42 @@
 import { createSugarScore } from "@/lib/scoring/sugar-score";
-import type { ProductCatalogProvider, ResolvedProduct, VisualCandidate } from "./types";
+import type { CatalogProduct, ProductCatalogProvider, ResolvedProduct, VisualCandidate } from "./types";
 
-export const CONFIRMED_MATCH_THRESHOLD = 0.78;
+// This is intentionally aligned with scoreCatalogMatch's "confirmed" band.
+// A plausible textual result may still be useful as a future UI suggestion,
+// but must not turn an AI nutrition estimate into a confirmed catalog fact.
+export const CONFIRMED_MATCH_THRESHOLD = 0.88;
 export const MIN_VISION_CONFIDENCE_FOR_CONFIRMATION = 0.65;
+
+function hasConfirmedCatalogNutrition(product: CatalogProduct): boolean {
+  return product.score.source === "catalog"
+    && typeof product.score.sugarPer100g === "number"
+    && Number.isFinite(product.score.sugarPer100g)
+    && product.score.sugarPer100g >= 0;
+}
 
 export class ProductResolver {
   public constructor(private readonly catalog: ProductCatalogProvider) {}
 
   public async resolve(candidate: VisualCandidate): Promise<ResolvedProduct> {
+    const gtin = candidate.gtin?.replace(/\D/g, "") ?? "";
+    if (gtin.length >= 8 && gtin.length <= 14) {
+      const barcodeProduct = await this.catalog.lookupBarcode(gtin);
+      if (barcodeProduct && hasConfirmedCatalogNutrition(barcodeProduct)) {
+        return {
+          status: "confirmed",
+          product: barcodeProduct,
+          score: barcodeProduct.score,
+          estimateReason: null,
+          matchConfidence: 1,
+        };
+      }
+    }
+
     const [bestMatch] = await this.catalog.searchCandidates(candidate, 1);
     if (
       bestMatch &&
       bestMatch.confidence >= CONFIRMED_MATCH_THRESHOLD &&
+      hasConfirmedCatalogNutrition(bestMatch.product) &&
       candidate.confidence >= MIN_VISION_CONFIDENCE_FOR_CONFIRMATION
     ) {
       return {

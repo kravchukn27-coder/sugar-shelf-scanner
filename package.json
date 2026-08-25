@@ -8,7 +8,9 @@
     "postbuild": "mkdir -p .next/standalone/.next && cp -R .next/static .next/standalone/.next/static && cp -R public .next/standalone/public",
     "start": "node .next/standalone/server.js",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "clean:next": "node scripts/clean-next.mjs",
+    "verify": "npm run clean:next && npm run build && npm run typecheck"
   },
   "dependencies": {
     "next": "15.5.23",

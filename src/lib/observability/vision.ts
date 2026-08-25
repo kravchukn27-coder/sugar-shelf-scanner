@@ -1,0 +1,24 @@
+/**
+ * Minimal, privacy-safe timing telemetry for the vision provider.
+ *
+ * Keep this payload deliberately narrow: never add request IDs, image sizes,
+ * OCR text, product candidates, provider bodies, or credentials here. Railway
+ * collects stdout, so every field must be safe to retain outside the request.
+ */
+export type VisionOperation = "preflight" | "analyze";
+export type VisionOutcome = "success" | "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response" | "not_configured" | "unexpected_error";
+
+type VisionTelemetry = {
+  operation: VisionOperation;
+  model: string;
+  durationMs: number;
+  timeoutMs: number;
+  outcome: VisionOutcome;
+  status: number;
+};
+
+export function logVisionTelemetry(metric: VisionTelemetry) {
+  // JSON makes this easy to query in Railway logs without relying on text
+  // parsing. `model` is configuration, not customer or product data.
+  console.info(JSON.stringify({ event: "vision_request", ...metric }));
+}
