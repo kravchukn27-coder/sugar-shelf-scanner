@@ -77,6 +77,14 @@ function promptFor(context: AnalyzeScanRequest["context"]) {
 Return JSON only, matching the supplied schema. Each box_2d is [ymin, xmin, ymax, xmax] normalized to integers or decimals in 0..1000 relative to the entire image. Use only a box for a visible product package. Identify brand, product name, and pack size when legible. estimatedSugarPer100g is a visual estimate only; omit it when it cannot be responsibly inferred. confidence reflects visual identification certainty, not nutrition certainty. Return an empty detections array when no qualifying packaged product is visible.`;
 }
 
+function thinkingConfigFor(model: string) {
+  // Gemini 3 uses thinkingLevel while Gemini 2.5 uses thinkingBudget. Keeping
+  // this branch server-side makes a Railway model change safe.
+  return model.startsWith("gemini-2.5-")
+    ? { thinkingBudget: 0 }
+    : { thinkingLevel: "low" };
+}
+
 function parseGeminiText(payload: unknown) {
   const text = z
     .object({
@@ -133,10 +141,9 @@ export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEn
       body: JSON.stringify({
         contents: [{ parts: [{ text: promptFor(input.context) }, { inline_data: { mime_type: input.mimeType, data: input.imageBase64.replace(/^data:[^;]+;base64,/, "") } }] }],
         generationConfig: {
-          // Shelf recognition is latency-sensitive. Gemini 3.7 Flash defaults
-          // to medium reasoning; low retains multimodal detection while
-          // avoiding an unnecessarily long deliberation for each camera frame.
-          thinkingConfig: { thinkingLevel: "low" },
+          // Shelf recognition is latency-sensitive. Configure the supported
+          // low-latency thinking mode for the model selected in Railway.
+          thinkingConfig: thinkingConfigFor(env.GEMINI_VISION_MODEL),
           responseMimeType: "application/json",
           responseSchema: {
             type: "OBJECT",
