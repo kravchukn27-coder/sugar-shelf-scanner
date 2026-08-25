@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type PointerEvent, useCallback, useEffect, useRef, useState } from "react";
 import type { AnalyzeScanResponse, Detection, PreflightScanResponse } from "@/lib/contracts/scan";
 
 const FRAME_INTERVAL = 650;
@@ -180,6 +180,18 @@ export default function HomePage() {
   function onUpload(file: File | undefined) { if (!file) return; setUploadUrl((oldUrl) => { if (oldUrl) URL.revokeObjectURL(oldUrl); return URL.createObjectURL(file); }); setFrozenFrame(null); setCameraState("live"); setScan(null); setScanFeedback("idle"); }
   function closeSheet() { setIsSheetOpen(false); setSelectedId(null); }
   function clearScan() { setScan(null); setUploadUrl(null); setFrozenFrame(null); setScanFeedback("idle"); nextScanAllowedAt.current = Date.now() + 800; }
+  function retryFromCameraTap(event: PointerEvent<HTMLElement>) {
+    // Tapping the live view is an intuitive iPhone affordance after a failed
+    // detection. It starts a fresh preflight immediately, without pretending
+    // the browser can control the device lens focus point.
+    if (event.target instanceof Element && event.target.closest("button, label, input")) return;
+    if (frozenFrame || uploadUrl || requestInFlight.current || !["empty", "uncertain", "error"].includes(scanFeedback)) return;
+    const video = videoRef.current;
+    if (!video?.readyState) return;
+    nextScanAllowedAt.current = 0;
+    setScanFeedback("idle");
+    void preflightFrame(video);
+  }
   const cameraMessage = scanFeedback === "preflight"
     ? "Looking for packaged products…"
     : scanFeedback === "analyzing"
@@ -197,7 +209,7 @@ export default function HomePage() {
           : "Point at packaged products to scan";
 
   return <main className="scanner-shell">
-    <section className="camera-scene" aria-label="Sugar shelf scanner">
+    <section className="camera-scene" aria-label="Sugar shelf scanner" onPointerUp={retryFromCameraTap}>
       {uploadUrl ? <img className="camera-preview" src={uploadUrl} alt="Selected shelf" /> : <video ref={videoRef} className="camera-preview" muted playsInline />}
       {frozenFrame && <img className="camera-preview frozen-preview" src={frozenFrame} alt="Captured shelf frame" />}
       <div className="camera-vignette" />
