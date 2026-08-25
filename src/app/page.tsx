@@ -2,6 +2,7 @@
 
 import { type PointerEvent, useCallback, useEffect, useRef, useState } from "react";
 import type { AnalyzeScanResponse, Detection, PreflightScanResponse } from "@/lib/contracts/scan";
+import { groupRepeatedDetections, type DetectionGroup } from "@/lib/scan/deduplicate-detections";
 
 const FRAME_INTERVAL = 650;
 const EMPTY_RESULT_COOLDOWN_MS = 4_000;
@@ -28,7 +29,6 @@ export default function HomePage() {
   const frameIndex = useRef(0);
   const [cameraState, setCameraState] = useState<CameraState>("starting");
   const [scan, setScan] = useState<AnalyzeScanResponse | null>(null);
-  const [isScanning, setIsScanning] = useState(false);
   const [scanFeedback, setScanFeedback] = useState<ScanFeedback>("idle");
   const [isSheetOpen, setIsSheetOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -36,6 +36,7 @@ export default function HomePage() {
   const [frozenFrame, setFrozenFrame] = useState<string | null>(null);
   const detections = scan?.detections ?? [];
   const activeDetections = detections.filter(isEligibleDetection);
+  const detectionGroups = groupRepeatedDetections(activeDetections);
 
   const captureFrame = useCallback((source: HTMLVideoElement | HTMLImageElement, targetWidth: number, quality: number) => {
     const canvas = canvasRef.current;
@@ -116,7 +117,6 @@ export default function HomePage() {
     if (!imageDataUrl) return;
 
     requestInFlight.current = true;
-    setIsScanning(true);
     setScan(null);
     setScanFeedback("preflight");
     let retryCooldown = EMPTY_RESULT_COOLDOWN_MS;
@@ -145,7 +145,6 @@ export default function HomePage() {
     } finally {
       requestInFlight.current = false;
       nextScanAllowedAt.current = Date.now() + (isLiveCameraFrame ? retryCooldown : Number.MAX_SAFE_INTEGER);
-      setIsScanning(false);
     }
   }, [analyzeConfirmedCandidate, captureFrame, isSheetOpen]);
 
@@ -204,8 +203,8 @@ export default function HomePage() {
         ? "Couldn’t identify this product — tap × to scan again"
       : scanFeedback === "error"
         ? frozenFrame ? "Couldn’t analyze this capture — tap × to scan again" : "Couldn’t analyze this frame — trying again"
-        : activeDetections.length
-          ? `${activeDetections.length} products found`
+        : detectionGroups.length
+          ? `${detectionGroups.length} products found`
           : "Point at packaged products to scan";
 
   return <main className="scanner-shell">
@@ -214,34 +213,35 @@ export default function HomePage() {
       {frozenFrame && <img className="camera-preview frozen-preview" src={frozenFrame} alt="Captured shelf frame" />}
       <div className="camera-vignette" />
       <header className="camera-controls"><span className="round-control" aria-label="Shelf scanner"><ScanIcon /></span><span className="live-indicator"><i /> {frozenFrame || uploadUrl ? "CAPTURED" : "LIVE"}</span><button className="round-control" onClick={clearScan} aria-label="Clear scan"><CloseIcon /></button></header>
-      {activeDetections.map((detection) => <ProductOverlay key={detection.id} detection={detection} selected={selectedId === detection.id} onSelect={() => setSelectedId(detection.id)} />)}
-      {isScanning && !frozenFrame && <div className="processing-frame" aria-hidden="true"><span>{scanFeedback === "analyzing" ? "Product found" : "Looking"}</span></div>}
+      {detectionGroups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selectedId === group.detection.id} onSelect={() => setSelectedId(group.detection.id)} />)}
       <div className={`camera-copy ${scanFeedback}`} aria-live="polite">{cameraMessage}<span>Photos are sent for analysis and are not saved.</span></div>
       <label className="gallery-button" aria-label="Choose a shelf photo"><input type="file" accept="image/*" onChange={(event) => onUpload(event.target.files?.[0])} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label>
       {(cameraState === "error" || cameraState === "unsupported") && <div className="camera-notice">Camera unavailable. Choose a shelf photo instead.</div>}
     </section>
-    <button className="result-handle" onClick={() => setIsSheetOpen(true)} disabled={!activeDetections.length}><span className={`handle-dot ${scanFeedback}`} /><span>{activeDetections.length ? `${activeDetections.length} products found` : scanFeedback === "empty" ? "No products found" : scanFeedback === "unresolved" || scanFeedback === "error" ? "Scan again" : "Scanning shelf"}</span><span className="handle-detail">Details</span><Chevron /></button>
-    {isSheetOpen && <ResultsSheet detections={activeDetections} selectedId={selectedId} onSelect={setSelectedId} onClose={closeSheet} />}
+    <button className="result-handle" onClick={() => setIsSheetOpen(true)} disabled={!detectionGroups.length}><span className={`handle-dot ${scanFeedback}`} /><span>{detectionGroups.length ? `${detectionGroups.length} products found` : scanFeedback === "empty" ? "No products found" : scanFeedback === "unresolved" || scanFeedback === "error" ? "Scan again" : "Scanning shelf"}</span><span className="handle-detail">Details</span><Chevron /></button>
+    {isSheetOpen && <ResultsSheet groups={detectionGroups} selectedId={selectedId} onSelect={setSelectedId} onClose={closeSheet} />}
     <canvas ref={canvasRef} className="hidden-canvas" />
   </main>;
 }
 
-function ProductOverlay({ detection, selected, onSelect }: { detection: Detection; selected: boolean; onSelect: () => void }) {
-  const { box, score } = detection;
+function ProductOverlay({ group, selected, onSelect }: { group: DetectionGroup; selected: boolean; onSelect: () => void }) {
+  const { detection, box, count } = group;
+  const { score } = detection;
   const isConfirmed = detection.status === "confirmed";
   const visualBand = score.sugarPer100g === null ? "unknown" : score.band;
   const label = score.sugarPer100g === null
     ? "Needs confirmation"
     : isConfirmed ? `${bandCopy[score.band]} · ${score.sugarPer100g}g` : `AI estimate · ${score.sugarPer100g}g`;
-  return <button className={`product-overlay ${visualBand} ${selected ? "selected" : ""}`} onClick={onSelect} style={{ left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.width * 100}%`, height: `${box.height * 100}%` }} aria-label={`View ${detection.visualCandidate.name ?? "product"}`}><span className="overlay-label">{label}</span>{detection.status === "estimate" && <span className="estimate-chip">AI</span>}</button>;
+  return <button className={`product-overlay ${visualBand} ${selected ? "selected" : ""}`} onClick={onSelect} style={{ left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.width * 100}%`, height: `${box.height * 100}%` }} aria-label={`View ${detection.visualCandidate.name ?? "product"}${count > 1 ? `, ${count} on shelf` : ""}`}><span className="overlay-label">{label}</span>{count > 1 && <span className="repeat-chip">×{count}</span>}{detection.status === "estimate" && <span className="estimate-chip">AI</span>}</button>;
 }
 
-function ResultsSheet({ detections, selectedId, onSelect, onClose }: { detections: Detection[]; selectedId: string | null; onSelect: (id: string | null) => void; onClose: () => void }) {
-  return <section className="result-sheet" aria-label="Recognized products"><div className="sheet-header"><button className="sheet-grabber" onClick={onClose} aria-label="Close details" /><span>{detections.length} products found</span><button onClick={onClose} aria-label="Close product list"><CloseIcon /></button></div><p className="sheet-intro">Tap a product to see its sugar impact.</p><div className="product-list">{detections.map((detection) => {
+function ResultsSheet({ groups, selectedId, onSelect, onClose }: { groups: DetectionGroup[]; selectedId: string | null; onSelect: (id: string | null) => void; onClose: () => void }) {
+  return <section className="result-sheet" aria-label="Recognized products"><div className="sheet-header"><button className="sheet-grabber" onClick={onClose} aria-label="Close details" /><span>{groups.length} products found</span><button onClick={onClose} aria-label="Close product list"><CloseIcon /></button></div><p className="sheet-intro">Tap a product to see its sugar impact.</p><div className="product-list">{groups.map((group) => {
+    const { detection, count } = group;
     const open = selectedId === detection.id; const title = [detection.visualCandidate.brand, detection.visualCandidate.name].filter(Boolean).join(" · ");
     const isConfirmed = detection.status === "confirmed";
     const provenance = detection.product?.provenance;
     const hasSugarScore = detection.score.sugarPer100g !== null;
-    return <article key={detection.id} className={`product-row ${open ? "open" : ""}`}><button className="product-summary" onClick={() => onSelect(open ? null : detection.id)}><span className={`score-orb ${hasSugarScore ? detection.score.band : "unknown"}`} /><span className="product-name"><strong>{title || "Unidentified product"}</strong><small>{isConfirmed ? "Confirmed product" : detection.status === "estimate" ? "AI estimate — needs confirmation" : "Needs confirmation"}</small></span><span className="sugar-value">{detection.score.sugarPer100g === null ? "—" : `${detection.score.sugarPer100g}g`}<small>/100g</small></span><Chevron up={open} /></button>{open && <div className="product-details"><div><span>Sugar score</span><strong>{hasSugarScore ? bandCopy[detection.score.band] : "Not confirmed"}</strong></div><div><span>Protein</span><strong>{detection.product?.proteinPer100g ? `${detection.product.proteinPer100g}g / 100g` : "Not confirmed"}</strong></div><div><span>Source</span><strong>{provenance ? sourceCopy[provenance.source] : detection.status === "estimate" ? "AI estimate" : "Not confirmed"}</strong></div>{detection.status !== "confirmed" && <div className="confirmation-actions"><button>Scan barcode</button><button>Nutrition label</button></div>}{detection.estimateReason && <p>{detection.estimateReason}</p>}</div>}</article>;
+    return <article key={detection.id} className={`product-row ${open ? "open" : ""}`}><button className="product-summary" onClick={() => onSelect(open ? null : detection.id)}><span className={`score-orb ${hasSugarScore ? detection.score.band : "unknown"}`} /><span className="product-name"><strong>{title || "Unidentified product"}</strong><small>{isConfirmed ? "Confirmed product" : detection.status === "estimate" ? "AI estimate — needs confirmation" : "Needs confirmation"}</small></span>{count > 1 && <span className="repeat-count">×{count}</span>}<span className="sugar-value">{detection.score.sugarPer100g === null ? "—" : `${detection.score.sugarPer100g}g`}<small>/100g</small></span><Chevron up={open} /></button>{open && <div className="product-details"><div><span>Sugar score</span><strong>{hasSugarScore ? bandCopy[detection.score.band] : "Not confirmed"}</strong></div>{count > 1 && <div><span>On this shelf</span><strong>{count} matching products</strong></div>}<div><span>Protein</span><strong>{detection.product?.proteinPer100g ? `${detection.product.proteinPer100g}g / 100g` : "Not confirmed"}</strong></div><div><span>Source</span><strong>{provenance ? sourceCopy[provenance.source] : detection.status === "estimate" ? "AI estimate" : "Not confirmed"}</strong></div>{detection.status !== "confirmed" && <div className="confirmation-actions"><button>Scan barcode</button><button>Nutrition label</button></div>}{detection.estimateReason && <p>{detection.estimateReason}</p>}</div>}</article>;
   })}</div></section>;
 }

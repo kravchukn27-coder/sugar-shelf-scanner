@@ -25,15 +25,17 @@ type UsdaFood = {
 };
 
 const REMOTE_TIMEOUT_MS = 2_250;
+const OPEN_FOOD_FACTS_RETRY_BACKOFF_MS = 80;
 const POSITIVE_CACHE_TTL_MS = 12 * 60 * 60 * 1_000;
 const NEGATIVE_CACHE_TTL_MS = 5 * 60 * 1_000;
 const MAX_CACHE_ENTRIES = 250;
 
 type CacheEntry<T> = { value: T; expiresAt: number };
-type RemoteFetchResult =
+type TimedFetchResult =
   | { kind: "response"; response: Response }
   | { kind: "timeout" }
   | { kind: "http_error" };
+type RemoteFetchResult = TimedFetchResult | { kind: "budget_exhausted" };
 
 type SourceRequest = { source: CatalogSource; operation: CatalogSourceOperation };
 
@@ -104,6 +106,9 @@ function usdaFoodProduct(food: UsdaFood, observedAt: string): CatalogProduct | n
  */
 export class FreeProductCatalog implements ProductCatalogProvider {
   private remoteSearches = 0;
+  // This counts actual OFF HTTP attempts (including a retry), not logical
+  // catalog searches. It intentionally mirrors the existing per-scan ceiling.
+  private openFoodFactsAttempts = 0;
 
   public constructor(
     private readonly curated: ProductCatalogProvider,
@@ -157,10 +162,11 @@ export class FreeProductCatalog implements ProductCatalogProvider {
     if (!gtin) return null;
     const products = await this.cached(`off:barcode:${gtin}`, { source: "open_food_facts", operation: "barcode" }, async () => {
       const startedAt = Date.now();
-      const result = await this.fetchWithTimeout(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(gtin)}.json?fields=code,product_name,brands,quantity,nutriments`, {
+      const result = await this.fetchOpenFoodFacts(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(gtin)}.json?fields=code,product_name,brands,quantity,nutriments`, {
         headers: { "user-agent": this.userAgent },
       });
-      if (result.kind !== "response") return this.logSourceFailure({ source: "open_food_facts", operation: "barcode" }, result.kind, startedAt);
+      if (result.kind === "budget_exhausted") return this.logSourceBudgetExhausted({ source: "open_food_facts", operation: "barcode" }, startedAt);
+      if (result.kind === "timeout" || result.kind === "http_error") return this.logSourceFailure({ source: "open_food_facts", operation: "barcode" }, result.kind, startedAt);
       if (!result.response.ok) return this.logSourceFailure({ source: "open_food_facts", operation: "barcode" }, "http_error", startedAt);
       try {
         const payload = await result.response.json() as { product?: OpenFoodFactsProduct };
@@ -179,10 +185,11 @@ export class FreeProductCatalog implements ProductCatalogProvider {
     return this.cached(`off:search:${query.toLowerCase()}:${limit}`, { source: "open_food_facts", operation: "search" }, async () => {
       const startedAt = Date.now();
       const params = new URLSearchParams({ search_terms: query, search_simple: "1", action: "process", json: "1", page_size: String(Math.min(limit, 3)), fields: "code,product_name,brands,quantity,nutriments" });
-      const result = await this.fetchWithTimeout(`https://world.openfoodfacts.org/cgi/search.pl?${params}`, {
+      const result = await this.fetchOpenFoodFacts(`https://world.openfoodfacts.org/cgi/search.pl?${params}`, {
         headers: { "user-agent": this.userAgent },
       });
-      if (result.kind !== "response") return this.logSourceFailure({ source: "open_food_facts", operation: "search" }, result.kind, startedAt);
+      if (result.kind === "budget_exhausted") return this.logSourceBudgetExhausted({ source: "open_food_facts", operation: "search" }, startedAt);
+      if (result.kind === "timeout" || result.kind === "http_error") return this.logSourceFailure({ source: "open_food_facts", operation: "search" }, result.kind, startedAt);
       if (!result.response.ok) return this.logSourceFailure({ source: "open_food_facts", operation: "search" }, "http_error", startedAt);
       try {
         const payload = await result.response.json() as { products?: OpenFoodFactsProduct[] };
@@ -226,9 +233,51 @@ export class FreeProductCatalog implements ProductCatalogProvider {
     return this.options.openFoodFactsUserAgent ?? "SugarShelfScanner/0.1 (https://sugar.no)";
   }
 
-  private async fetchWithTimeout(input: string, init?: RequestInit): Promise<RemoteFetchResult> {
+  /**
+   * Public Open Food Facts has occasional transient gateway/rate-limit failures.
+   * Give it one quick second chance, but keep both attempts inside the same
+   * per-source deadline so a retry cannot make a shelf scan slower than budget.
+   */
+  private async fetchOpenFoodFacts(input: string, init?: RequestInit): Promise<RemoteFetchResult> {
+    const deadlineAt = Date.now() + REMOTE_TIMEOUT_MS;
+    if (!this.reserveOpenFoodFactsAttempt()) return { kind: "budget_exhausted" };
+    let result = await this.fetchWithTimeout(input, init, deadlineAt);
+
+    if (!this.shouldRetryOpenFoodFacts(result)) return result;
+
+    // Do not start a retry unless there is enough deadline left for a small
+    // backoff and a meaningful request. This preserves the original latency cap.
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= OPEN_FOOD_FACTS_RETRY_BACKOFF_MS + 100) return result;
+    if (!this.reserveOpenFoodFactsAttempt()) return result;
+
+    await this.sleep(Math.min(OPEN_FOOD_FACTS_RETRY_BACKOFF_MS, remainingMs - 100));
+    result = await this.fetchWithTimeout(input, init, deadlineAt);
+    return result;
+  }
+
+  private reserveOpenFoodFactsAttempt(): boolean {
+    // `remoteSearches` remains the logical per-scan guard. This stricter
+    // counter prevents a retry from silently increasing physical OFF traffic.
+    if (this.openFoodFactsAttempts >= 3) return false;
+    this.openFoodFactsAttempts += 1;
+    return true;
+  }
+
+  private shouldRetryOpenFoodFacts(result: RemoteFetchResult): boolean {
+    if (result.kind === "http_error") return true; // network failure; no response status is available
+    if (result.kind !== "response") return false;
+    return result.response.status === 429 || result.response.status >= 500;
+  }
+
+  private sleep(durationMs: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, durationMs));
+  }
+
+  private async fetchWithTimeout(input: string, init?: RequestInit, deadlineAt = Date.now() + REMOTE_TIMEOUT_MS): Promise<TimedFetchResult> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REMOTE_TIMEOUT_MS);
+    const remainingMs = Math.max(1, deadlineAt - Date.now());
+    const timer = setTimeout(() => controller.abort(), remainingMs);
     try {
       return { kind: "response", response: await this.fetch(input, { ...init, signal: controller.signal }) };
     } catch (error) {
@@ -244,6 +293,13 @@ export class FreeProductCatalog implements ProductCatalogProvider {
 
   private logSourceFailure(request: SourceRequest, outcome: "http_error" | "timeout" | "invalid_payload", startedAt: number): CatalogProduct[] {
     logCatalogSourceTelemetry({ ...request, outcome, durationMs: Date.now() - startedAt, candidateCount: 0, cacheHit: false });
+    return [];
+  }
+
+  private logSourceBudgetExhausted(request: SourceRequest, startedAt: number): CatalogProduct[] {
+    // This is a local circuit-breaker, not an upstream error. Reuse the
+    // existing safe `disabled` outcome rather than emitting product data.
+    logCatalogSourceTelemetry({ ...request, outcome: "disabled", durationMs: Date.now() - startedAt, candidateCount: 0, cacheHit: false });
     return [];
   }
 
