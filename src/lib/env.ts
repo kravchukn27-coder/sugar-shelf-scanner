@@ -4,7 +4,9 @@ const serverEnvSchema = z.object({
   VISION_PROVIDER: z.enum(["mock", "gemini"]).default("mock"),
   GEMINI_API_KEY: z.string().min(1).optional(),
   GEMINI_VISION_MODEL: z.string().min(1).default("gemini-2.5-flash"),
-  GEMINI_PREFLIGHT_MODEL: z.string().min(1).default("gemini-2.5-flash-lite"),
+  // Optional override. By default preflight uses the known-working full model
+  // configured for this Railway service.
+  GEMINI_PREFLIGHT_MODEL: z.string().min(1).optional(),
   DATABASE_URL: z.string().url().optional(),
   RATE_LIMIT_SECRET: z.string().min(16).optional(),
   // Optional: enables the free USDA Branded Foods fallback. Never expose it to iOS.
@@ -13,12 +15,14 @@ const serverEnvSchema = z.object({
   OPEN_FOOD_FACTS_USER_AGENT: z.string().min(1).optional(),
 });
 
-export type ServerEnv = z.infer<typeof serverEnvSchema>;
+export type ServerEnv = Omit<z.infer<typeof serverEnvSchema>, "GEMINI_PREFLIGHT_MODEL"> & {
+  GEMINI_PREFLIGHT_MODEL: string;
+};
 
 export function getServerEnv(): ServerEnv {
   const parsed = serverEnvSchema.parse(process.env);
   if (parsed.VISION_PROVIDER === "gemini" && !parsed.GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY is required when VISION_PROVIDER=gemini.");
   }
-  return parsed;
+  return { ...parsed, GEMINI_PREFLIGHT_MODEL: parsed.GEMINI_PREFLIGHT_MODEL ?? parsed.GEMINI_VISION_MODEL };
 }
