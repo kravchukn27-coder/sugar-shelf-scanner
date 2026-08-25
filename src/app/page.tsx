@@ -42,9 +42,26 @@ export default function HomePage() {
     if (!canvas || !hasSize) return null;
     const width = "videoWidth" in source ? source.videoWidth : source.naturalWidth;
     const height = "videoHeight" in source ? source.videoHeight : source.naturalHeight;
+    // Mirror the `object-fit: cover` crop used by the portrait viewfinder.
+    // Gemini then receives exactly the area the person sees, not the uncropped
+    // camera buffer around it.
+    const preview = source.getBoundingClientRect();
+    const previewAspect = preview.width / preview.height;
+    if (!Number.isFinite(previewAspect) || previewAspect <= 0) return null;
+    let sourceX = 0;
+    let sourceY = 0;
+    let sourceWidth = width;
+    let sourceHeight = height;
+    if (width / height > previewAspect) {
+      sourceWidth = height * previewAspect;
+      sourceX = (width - sourceWidth) / 2;
+    } else {
+      sourceHeight = width / previewAspect;
+      sourceY = (height - sourceHeight) / 2;
+    }
     canvas.width = targetWidth;
-    canvas.height = Math.max(1, Math.round((height / width) * targetWidth));
-    canvas.getContext("2d")?.drawImage(source, 0, 0, canvas.width, canvas.height);
+    canvas.height = Math.max(1, Math.round(targetWidth / previewAspect));
+    canvas.getContext("2d")?.drawImage(source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
     return canvas.toDataURL("image/jpeg", quality);
   }, []);
 
