@@ -3,7 +3,7 @@ import { z } from "zod";
 const serverEnvSchema = z.object({
   VISION_PROVIDER: z.enum(["mock", "gemini"]).default("mock"),
   GEMINI_API_KEY: z.string().min(1).optional(),
-  GEMINI_VISION_MODEL: z.string().min(1).default("gemini-2.5-flash"),
+  GEMINI_VISION_MODEL: z.string().min(1).default("gemini-3.6-flash"),
   // Optional override. By default preflight uses the known-working full model
   // configured for this Railway service.
   GEMINI_PREFLIGHT_MODEL: z.string().min(1).optional(),

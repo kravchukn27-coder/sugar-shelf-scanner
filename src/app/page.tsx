@@ -183,7 +183,7 @@ export default function HomePage() {
       {activeDetections.map((detection) => <ProductOverlay key={detection.id} detection={detection} selected={selectedId === detection.id} onSelect={() => setSelectedId(detection.id)} />)}
       {isScanning && !frozenFrame && <div className="processing-frame" aria-hidden="true"><span>{scanFeedback === "analyzing" ? "Product found" : "Looking"}</span></div>}
       <div className={`camera-copy ${scanFeedback}`} aria-live="polite">{cameraMessage}<span>Photos are sent for analysis and are not saved.</span></div>
-      <label className="gallery-button" aria-label="Choose a shelf photo"><input type="file" accept="image/*" capture="environment" onChange={(event) => onUpload(event.target.files?.[0])} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label>
+      <label className="gallery-button" aria-label="Choose a shelf photo"><input type="file" accept="image/*" onChange={(event) => onUpload(event.target.files?.[0])} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label>
       {(cameraState === "error" || cameraState === "unsupported") && <div className="camera-notice">Camera unavailable. Choose a shelf photo instead.</div>}
     </section>
     <button className="result-handle" onClick={() => setIsSheetOpen(true)} disabled={!activeDetections.length}><span className={`handle-dot ${scanFeedback}`} /><span>{activeDetections.length ? `${activeDetections.length} products found` : scanFeedback === "empty" ? "No products found" : scanFeedback === "error" ? "Try the next frame" : "Scanning shelf"}</span><span className="handle-detail">Details</span><Chevron /></button>
