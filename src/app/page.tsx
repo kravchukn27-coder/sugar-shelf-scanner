@@ -86,7 +86,8 @@ export default function HomePage() {
     {uploadUrl ? <img className="camera-preview" src={uploadUrl} alt="Selected shelf" /> : <video ref={videoRef} className="camera-preview" muted playsInline />}{frozen && <img className="camera-preview frozen-preview" src={frozen} alt="Captured shelf frame" />}<div className="camera-vignette" />
     <header className="camera-controls"><span className="round-control" aria-label="Shelf scanner"><ScanIcon /></span><span className="live-indicator"><i /> {captured || uploadUrl ? "CAPTURED" : state === "camera_off" ? "READY" : "LIVE"}</span><button className="round-control" onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
     {groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { setSelected(group.detection.id); setSheet(true); }} />)}
-    {state === "live_searching" && !uploadUrl && <span className="scan-spinner" aria-hidden="true" />}
+    {state === "live_searching" && !uploadUrl && <><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint">Point your camera at a shelf</p></>}
+    {state === "captured_analyzing" && <span className="scan-spinner" aria-label="Checking product details" />}
     {state === "camera_off" && <Prompt title="Scan a shelf for sugar" action="Start scanning" onAction={() => void start()} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action="Try again" onAction={retry} failure />}
     {state === "captured_analyzing" && <CameraCopy>Product found — checking details…</CameraCopy>}{state === "results" && <CameraCopy>{groups.length} products found</CameraCopy>}
     <label className="gallery-button" aria-label="Choose a shelf photo"><input type="file" accept="image/*" onChange={(e) => upload(e.target.files?.[0])} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label>
