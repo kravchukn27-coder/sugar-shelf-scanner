@@ -50,11 +50,18 @@ safe fallback.
 
 ## Usage metadata measurement
 
-The application does not currently log Gemini usage metadata. A future short
-measurement is feature-flagged by `VISION_USAGE_METRICS_ENABLED=true` for a
-fixed 14-day window. Log only operation, model, status, duration and token
-counters from Gemini `usageMetadata`; aggregate daily, then turn it off and
-remove the temporary per-request logging unless it receives an owner and
+Scanner-stage measurement is implemented but disabled. Enable it only for an
+approved 14-day window with both `SCANNER_METRICS_ENABLED=true` in Railway and
+`NEXT_PUBLIC_SCANNER_METRICS_ENABLED=true` in the deployed browser build. The
+browser still requires a server capability header, so either flag can stop
+intake. Before enabling, verify Railway log retention/access controls and run
+the iPhone disabled/enabled network checks in
+[gemini-usage-observability.md](gemini-usage-observability.md).
+
+Gemini usage metadata remains separately controlled by
+`VISION_USAGE_METRICS_ENABLED=true`. Log only operation, model, status,
+duration and provider token counters; aggregate daily, then turn all temporary
+flags off and remove per-request logging unless it receives an owner and
 retention policy.
 
 Full implementation and privacy boundary: [gemini-usage-observability.md](gemini-usage-observability.md).

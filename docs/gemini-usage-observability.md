@@ -49,9 +49,29 @@ GTINs, prompts, Gemini output, IP address, user ID, `deviceId`, camera label,
 or precise timestamps associated with a person. Existing operation/model/status
 telemetry may remain, but this event must not add a correlatable scan ID.
 
+## Scanner-stage measurement (A1/A2)
+
+The implementation is present but disabled by default. It requires **both**
+`NEXT_PUBLIC_SCANNER_METRICS_ENABLED=true` in the browser build and
+`SCANNER_METRICS_ENABLED=true` on the server. The server only advertises the
+capability on normal preflight/analyze responses; without that header the
+browser sends no `/api/scan/metrics` request.
+
+At most one no-store, terminal summary is sent for a non-aborted run. Its
+strict allowlist is a completion class, capped preflight-attempt count and
+25-ms-bucketed timing values for capture-ready, encode, preflight RTT, analyze
+RTT and render. It contains no IDs, timestamps, product/result data, image
+properties, error text, device/camera data, OCR, GTIN or IP, and the endpoint
+does not write PostgreSQL rows. Closed, recovered, stale and cancelled runs
+send nothing. Server `Server-Timing` additionally exposes independent
+`db_probe` and `catalog_resolution` durations; both may overlap Gemini vision
+and must not be summed as total request time.
+
 ## Operating procedure
 
-1. Enable the flag in Railway for a fixed 14-day observation window.
+1. Confirm Railway log retention/access controls, then enable the relevant
+   flags in Railway for a fixed 14-day observation window. Deploy the browser
+   flag only for that window.
 2. Review aggregate daily totals only: count of `preflight` and `analyze`,
    p50/p95 duration, average/p95 input tokens, output/thinking tokens, and
    full-analysis-to-preflight ratio.
@@ -60,9 +80,12 @@ telemetry may remain, but this event must not add a correlatable scan ID.
    Prices and token handling are model-dependent, so do not hard-code a dollar
    estimate in application code. Gemini documents image token allocation and
    media-resolution behaviour at <https://ai.google.dev/gemini-api/docs/media-resolution>.
-4. After 14 days, export only the aggregate table into a decision note, turn the
-   flag off, and remove the temporary per-request usage logging in a follow-up
-   change unless it has a clear operational owner and retention policy.
+4. Review scanner-stage aggregates separately by completion: count, p50/p95
+   of each timing stage, and p50/p95 preflight attempts. Browser summaries are
+   a lower bound because a backgrounded browser may drop a beacon.
+5. After 14 days, export only the aggregate table into a decision note, turn
+   both flag pairs off, and remove the temporary per-request logging in a
+   follow-up change unless it has a clear operational owner and retention policy.
 
 ## Decision thresholds
 
@@ -75,5 +98,5 @@ telemetry may remain, but this event must not add a correlatable scan ID.
 
 ## Current status
 
-Documented only. No usage metadata is logged to Railway yet, and no user image
-or scan content is retained by this proposal.
+Code is ready but all measurement flags are off by default. No user image or
+scan content is retained by this proposal.

@@ -10,12 +10,14 @@ export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   const startedAt = performance.now();
-  const respond = (body: unknown, status: number, visionMs?: number, catalogMs?: number) => scanJsonResponse(body, { status }, {
+  const respond = (body: unknown, status: number, visionMs?: number, catalogMs?: number, dbProbeMs?: number, catalogResolutionMs?: number) => scanJsonResponse(body, { status }, {
     route: "analyze",
     startedAt,
     status,
     visionMs,
     catalogMs,
+    dbProbeMs,
+    catalogResolutionMs,
   });
   const rateLimit = checkScanRateLimit(request, {
     scope: "analyze",
@@ -48,11 +50,22 @@ export async function POST(request: Request) {
     // rejection here must not become an unhandled rejection while the vision
     // call is still in flight; resolveScan is the one that awaits and
     // surfaces it for real.
+    const dbProbeStartedAt = performance.now();
+    let dbProbeMs: number | undefined;
     const catalogPromise = createRuntimeCatalog({
       databaseUrl: env.DATABASE_URL,
       usdaApiKey: env.USDA_FDC_API_KEY,
       openFoodFactsUserAgent: env.OPEN_FOOD_FACTS_USER_AGENT,
-    });
+    }).then(
+      (catalog) => {
+        dbProbeMs = performance.now() - dbProbeStartedAt;
+        return catalog;
+      },
+      (error: unknown) => {
+        dbProbeMs = performance.now() - dbProbeStartedAt;
+        throw error;
+      },
+    );
     catalogPromise.catch(() => {});
 
     const visionStartedAt = performance.now();
@@ -62,8 +75,10 @@ export async function POST(request: Request) {
     const visionMs = performance.now() - visionStartedAt;
     const catalogStartedAt = performance.now();
     const response = await resolveScan(visionResponse, env, catalogPromise);
-    const catalogMs = performance.now() - catalogStartedAt;
-    return respond(analyzeScanResponseSchema.parse(response), 200, visionMs, catalogMs);
+    const catalogResolutionMs = performance.now() - catalogStartedAt;
+    // Preserve the existing `catalog` Server-Timing metric for consumers that
+    // already read it, while exposing the explicit A1 stage alongside it.
+    return respond(analyzeScanResponseSchema.parse(response), 200, visionMs, catalogResolutionMs, dbProbeMs, catalogResolutionMs);
   } catch (error) {
     if (error instanceof VisionRequestError) {
       return respond({ error: error.message, code: error.code }, error.status);

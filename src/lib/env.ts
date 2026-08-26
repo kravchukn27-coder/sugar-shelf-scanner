@@ -26,3 +26,12 @@ export function getServerEnv(): ServerEnv {
   }
   return { ...parsed, GEMINI_PREFLIGHT_MODEL: parsed.GEMINI_PREFLIGHT_MODEL ?? parsed.GEMINI_VISION_MODEL };
 }
+
+/**
+ * This helper is safe to use before request validation/configuration (for
+ * example, on an early rate-limit response). Invalid or absent values fail
+ * closed, so an old browser never receives telemetry permission by accident.
+ */
+export function isScannerMetricsEnabled(environment: NodeJS.ProcessEnv = process.env) {
+  return environment.SCANNER_METRICS_ENABLED === "true";
+}

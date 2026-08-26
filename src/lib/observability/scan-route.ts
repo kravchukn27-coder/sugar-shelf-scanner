@@ -1,5 +1,6 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
+import { isScannerMetricsEnabled } from "@/lib/env";
 
 type ScanRoute = "preflight" | "analyze" | "recovery_label";
 
@@ -9,6 +10,8 @@ type ScanRouteTiming = {
   status: number;
   visionMs?: number;
   catalogMs?: number;
+  dbProbeMs?: number;
+  catalogResolutionMs?: number;
 };
 
 type RateLimitConfig = {
@@ -81,10 +84,18 @@ export function scanJsonResponse(body: unknown, init: ResponseInit, timing: Scan
     `scan;dur=${durationMs}`,
     timing.visionMs === undefined ? null : `vision;dur=${Math.round(timing.visionMs)}`,
     timing.catalogMs === undefined ? null : `catalog;dur=${Math.round(timing.catalogMs)}`,
+    timing.dbProbeMs === undefined ? null : `db_probe;dur=${Math.round(timing.dbProbeMs)}`,
+    timing.catalogResolutionMs === undefined ? null : `catalog_resolution;dur=${Math.round(timing.catalogResolutionMs)}`,
   ].filter((value): value is string => value !== null).join(", ");
   const response = NextResponse.json(body, init);
   response.headers.set("Server-Timing", serverTiming);
   response.headers.set("Cache-Control", "no-store");
+  // The client requires an explicit server-side opt-in even when a stale
+  // bundle has its own telemetry flag enabled. Recovery routes never issue
+  // scanner summaries, so do not advertise the measurement flag there.
+  if ((timing.route === "preflight" || timing.route === "analyze") && isScannerMetricsEnabled()) {
+    response.headers.set("X-Scanner-Metrics", "enabled");
+  }
   // Route metrics deliberately contain only duration/status/component names;
   // no client IDs, frame IDs, products, image data, or provider payloads.
   console.info(JSON.stringify({
@@ -94,6 +105,8 @@ export function scanJsonResponse(body: unknown, init: ResponseInit, timing: Scan
     status: timing.status,
     visionMs: timing.visionMs === undefined ? undefined : Math.round(timing.visionMs),
     catalogMs: timing.catalogMs === undefined ? undefined : Math.round(timing.catalogMs),
+    dbProbeMs: timing.dbProbeMs === undefined ? undefined : Math.round(timing.dbProbeMs),
+    catalogResolutionMs: timing.catalogResolutionMs === undefined ? undefined : Math.round(timing.catalogResolutionMs),
   }));
   return response;
 }
