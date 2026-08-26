@@ -14,6 +14,7 @@ import { getCameraDiagnosticSnapshot, type CameraDiagnosticSnapshot } from "@/li
 import { applyCameraView, getCameraControls, getCameraDeviceId, preferCameraCaptureQuality, rearCameraRequest, supportsTorch, type CameraControls } from "@/lib/scan/media-capabilities";
 import { shouldRunScannerScheduler, transitionScannerLifecycle, type ScannerLifecycleEvent, type ScannerLifecycleState } from "@/lib/scan/scanner-lifecycle";
 import { createScannerMetrics, type ScannerMetricsCompletion } from "@/lib/scan/scanner-metrics";
+import { isFrameMoving, sampleLuma } from "@/lib/scan/frame-stillness";
 import { decodeLocalBarcode, type RecoveryState } from "@/lib/recovery/local-recovery";
 import type { BarcodeRecoveryResponse, NutritionLabelDraft, NutritionLabelRecoveryResponse } from "@/lib/contracts/scan";
 import { shouldOfferBarcodeRecovery } from "@/lib/recovery/recovery-ui";
@@ -35,7 +36,7 @@ function BarcodeIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><pat
 type RecoveryInfo = { id: string; state: RecoveryState; labelSeen: boolean; barcode: string | null };
 
 export default function HomePage() {
-  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false);
+  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null);
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
   const [failure, setFailure] = useState<string | null>(null);
   const [scan, setScan] = useState<AnalyzeScanResponse | null>(null);
@@ -165,7 +166,7 @@ export default function HomePage() {
   }, [analyze, capture, completeScanMetrics, dispatch, noteMetricsCapability, sheet, state]);
 
   const start = useCallback(async () => {
-    const id = ++session.current; stopStream(); clearResult(); resetScanMetrics(); setUploadUrl(null); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
+    const id = ++session.current; stillnessFingerprint.current = null; stopStream(); clearResult(); resetScanMetrics(); setUploadUrl(null); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
     try {
       // A device ID is a best-effort way to keep the same browser-selected rear
       // source across retry. If iOS no longer exposes it, fall back to rear.
@@ -188,12 +189,13 @@ export default function HomePage() {
     }
     catch { if (id === session.current) { setFailure("Camera unavailable. Check permission and try again."); setState((current) => transitionScannerLifecycle(current, "ANALYZE_FAILURE")); } }
   }, [clearResult, resetScanMetrics, stopStream]);
-  const close = useCallback(() => { session.current += 1; scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
+  const close = useCallback(() => { session.current += 1; stillnessFingerprint.current = null; scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
   const toggleTorch = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !torchOn; if (!track || !supportsTorch(track)) return setTorchAvailable(false); try { await track.applyConstraints({ advanced: [{ torch: next } as unknown as MediaTrackConstraintSet] }); setTorchOn(next); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
   const toggleCloserView = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !closerViewOn; try { const applied = await applyCameraView(track, cameraControls, next ? "closer" : "standard"); if (!applied) { setCameraControls((current) => ({ ...current, closerZoom: null })); setCloserViewOn(false); return; } setCloserViewOn(next); setCameraDiagnostics(getCameraDiagnosticSnapshot(track)); } catch { setCameraControls((current) => ({ ...current, closerZoom: null })); setCloserViewOn(false); } }, [cameraControls, closerViewOn]);
-  const retry = useCallback(() => { if (!uploadUrl) void start(); else { session.current += 1; clearResult(); resetScanMetrics(); setUploadBusy(true); dispatch("RETRY"); } }, [clearResult, dispatch, resetScanMetrics, start, uploadUrl]);
+  const retry = useCallback(() => { if (!uploadUrl) void start(); else { session.current += 1; stillnessFingerprint.current = null; clearResult(); resetScanMetrics(); setUploadBusy(true); dispatch("RETRY"); } }, [clearResult, dispatch, resetScanMetrics, start, uploadUrl]);
   const startRecovery = useCallback((id: string, mode: "package" | "label" = "package") => {
     session.current += 1;
+    stillnessFingerprint.current = null;
     const recoverySession = session.current;
     const recoveryToken = ++recoveryAttempt.current;
     scannerMetricsEnabled.current = false; scannerMetrics.current.discard();
@@ -257,6 +259,7 @@ export default function HomePage() {
   function upload(file: File | undefined) {
     if (!file || uploadBusy) return;
     session.current += 1;
+    stillnessFingerprint.current = null;
     stopStream();
     clearResult();
     resetScanMetrics();
@@ -264,10 +267,25 @@ export default function HomePage() {
     setUploadUrl((old) => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(file); });
     setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
   }
-  useEffect(() => () => { session.current += 1; recoveryAttempt.current += 1; scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); }, [stopStream]);
+  useEffect(() => () => { session.current += 1; stillnessFingerprint.current = null; recoveryAttempt.current += 1; scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); }, [stopStream]);
   useEffect(() => setShowCameraDiagnostics(new URLSearchParams(window.location.search).has("cameraDebug")), []);
   useEffect(() => { if (state !== "captured_analyzing") { setAnalysisPhase("identifying"); return; } setAnalysisPhase("identifying"); const toCatalog = window.setTimeout(() => setAnalysisPhase("catalog"), 1500); const toSlow = window.setTimeout(() => setAnalysisPhase("slow"), 7000); return () => { window.clearTimeout(toCatalog); window.clearTimeout(toSlow); }; }, [state]);
-  useEffect(() => { if (!shouldRunScannerScheduler(state) || sheet || uploadUrl || recoveryCamera) return; const timer = window.setInterval(() => { if (videoRef.current?.readyState && !inFlight.current) void preflight(videoRef.current); }, FRAME_INTERVAL); return () => window.clearInterval(timer); }, [preflight, recoveryCamera, sheet, state, uploadUrl]);
+  useEffect(() => { if (!shouldRunScannerScheduler(state) || sheet || uploadUrl || recoveryCamera) return; const timer = window.setInterval(() => {
+    const video = videoRef.current;
+    if (!video?.readyState || inFlight.current) return;
+    const canvas = stillnessCanvas.current ?? (stillnessCanvas.current = document.createElement("canvas"));
+    canvas.width = 16; canvas.height = 12;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) { void preflight(video); return; }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const sample = sampleLuma(ctx, canvas.width, canvas.height);
+    const previous = stillnessFingerprint.current;
+    // Always advance the baseline to this tick's sample, even when the frame is
+    // moving or preflight is skipped, so the next comparison is tick-vs-tick.
+    stillnessFingerprint.current = sample;
+    if (previous && isFrameMoving(previous, sample)) return;
+    void preflight(video);
+  }, FRAME_INTERVAL); return () => window.clearInterval(timer); }, [preflight, recoveryCamera, sheet, state, uploadUrl]);
   useEffect(() => {
     if (!uploadUrl || !shouldRunScannerScheduler(state) || sheet) return;
     const image = new Image();
