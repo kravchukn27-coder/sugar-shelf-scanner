@@ -76,6 +76,7 @@ function telemetryStatus(error: unknown): number {
 function logAttempt(
   operation: VisionOperation,
   model: string,
+  receivedAt: number,
   startedAt: number,
   timeoutMs: number,
   error?: unknown,
@@ -83,6 +84,7 @@ function logAttempt(
   logVisionTelemetry({
     operation,
     model,
+    queueMs: Math.round(startedAt - receivedAt),
     durationMs: Math.round(performance.now() - startedAt),
     timeoutMs,
     outcome: error ? telemetryOutcome(error) : "success",
@@ -260,7 +262,7 @@ function isRetryableAnalyzeFailure(error: unknown): boolean {
     && (error.code === "provider_timeout" || (error.code === "provider_error" && error.status >= 500));
 }
 
-export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEnv): Promise<AnalyzeScanResponse> {
+export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEnv, receivedAt: number): Promise<AnalyzeScanResponse> {
   const startedAt = performance.now();
   try {
     if (!env.GEMINI_API_KEY) throw new VisionRequestError("Gemini is not configured.", 503, "provider_error");
@@ -271,16 +273,16 @@ export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEn
 
     try {
       const result = await attemptAnalyze(input, env, GEMINI_TIMEOUT_MS);
-      logAttempt("analyze", env.GEMINI_VISION_MODEL, startedAt, GEMINI_TIMEOUT_MS);
+      logAttempt("analyze", env.GEMINI_VISION_MODEL, receivedAt, startedAt, GEMINI_TIMEOUT_MS);
       return result;
     } catch (firstError) {
       if (!isRetryableAnalyzeFailure(firstError)) throw firstError;
       const result = await attemptAnalyze(input, env, GEMINI_ANALYZE_RETRY_TIMEOUT_MS);
-      logAttempt("analyze", env.GEMINI_VISION_MODEL, startedAt, GEMINI_TIMEOUT_MS + GEMINI_ANALYZE_RETRY_TIMEOUT_MS);
+      logAttempt("analyze", env.GEMINI_VISION_MODEL, receivedAt, startedAt, GEMINI_TIMEOUT_MS + GEMINI_ANALYZE_RETRY_TIMEOUT_MS);
       return result;
     }
   } catch (error) {
-    logAttempt("analyze", env.GEMINI_VISION_MODEL, startedAt, GEMINI_TIMEOUT_MS, error);
+    logAttempt("analyze", env.GEMINI_VISION_MODEL, receivedAt, startedAt, GEMINI_TIMEOUT_MS, error);
     throw error;
   }
 }
@@ -290,7 +292,7 @@ export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEn
  * this runs; a caller must only freeze and invoke full analysis after a
  * `candidate` result. No image is persisted here.
  */
-export async function preflightWithGemini(input: PreflightScanRequest, env: ServerEnv): Promise<PreflightScanResponse> {
+export async function preflightWithGemini(input: PreflightScanRequest, env: ServerEnv, receivedAt: number): Promise<PreflightScanResponse> {
   const startedAt = performance.now();
   try {
     if (!env.GEMINI_API_KEY) throw new VisionRequestError("Gemini is not configured.", 503, "provider_error");
@@ -335,7 +337,7 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
     // Keep the invariant meaningful even if a model returns internally
     // inconsistent fields despite the schema instructions.
     const isCandidate = parsed.decision === "candidate" && parsed.packagedProductCount > 0;
-    logAttempt("preflight", env.GEMINI_PREFLIGHT_MODEL, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS);
+    logAttempt("preflight", env.GEMINI_PREFLIGHT_MODEL, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS);
     return {
       clientFrameId: input.clientFrameId,
       provider: "gemini",
@@ -350,16 +352,16 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
     }
   } catch (error) {
     if (error instanceof VisionRequestError) {
-      logAttempt("preflight", env.GEMINI_PREFLIGHT_MODEL, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, error);
+      logAttempt("preflight", env.GEMINI_PREFLIGHT_MODEL, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, error);
       throw error;
     }
     if (error instanceof Error && error.name === "AbortError") {
       const timeoutError = new VisionRequestError("Vision provider took too long to respond. Try again.", 504, "provider_timeout");
-      logAttempt("preflight", env.GEMINI_PREFLIGHT_MODEL, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, timeoutError);
+      logAttempt("preflight", env.GEMINI_PREFLIGHT_MODEL, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, timeoutError);
       throw timeoutError;
     }
     const providerError = new VisionRequestError("Unable to reach the vision provider.", 502, "provider_error");
-    logAttempt("preflight", env.GEMINI_PREFLIGHT_MODEL, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, providerError);
+    logAttempt("preflight", env.GEMINI_PREFLIGHT_MODEL, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, providerError);
     throw providerError;
   }
 }

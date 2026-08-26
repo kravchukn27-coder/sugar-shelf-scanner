@@ -36,7 +36,7 @@ test("nutrition-label recovery makes one provider request and returns only the d
     });
   };
   try {
-    const result = await extractNutritionLabelWithGemini(request, env);
+    const result = await extractNutritionLabelWithGemini(request, env, performance.now());
     assert.equal(calls, 1);
     assert.deepEqual(result, {
       outcome: "nutrition_label",
@@ -51,7 +51,7 @@ test("unreadable is a valid terminal response and malformed provider output stay
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => providerJson({ outcome: "unreadable" });
   try {
-    assert.deepEqual(await extractNutritionLabelWithGemini(request, env), { outcome: "unreadable" });
+    assert.deepEqual(await extractNutritionLabelWithGemini(request, env, performance.now()), { outcome: "unreadable" });
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -59,7 +59,7 @@ test("unreadable is a valid terminal response and malformed provider output stay
   globalThis.fetch = async () => providerJson({ outcome: "nutrition_label", draft: { name: "Leaked text" } });
   try {
     await assert.rejects(
-      extractNutritionLabelWithGemini(request, env),
+      extractNutritionLabelWithGemini(request, env, performance.now()),
       (error: unknown) => error instanceof NutritionLabelRequestError && error.code === "invalid_provider_response" && !error.message.includes("Leaked text"),
     );
   } finally {

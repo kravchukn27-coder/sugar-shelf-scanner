@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     // A deterministic mock response keeps local UI work possible without a
     // Gemini key. It has no product identity or nutrition meaning.
     const response = env.VISION_PROVIDER === "gemini"
-      ? await preflightWithGemini(parsed.data, env)
+      ? await preflightWithGemini(parsed.data, env, startedAt)
       : {
           clientFrameId: parsed.data.clientFrameId,
           provider: "mock" as const,

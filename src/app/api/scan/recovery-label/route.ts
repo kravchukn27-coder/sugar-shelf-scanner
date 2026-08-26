@@ -42,7 +42,7 @@ export async function POST(request: Request) {
   if (env.VISION_PROVIDER !== "gemini") return respond({ error: "Nutrition label reading is not available in this environment.", code: "not_configured" }, 503);
 
   try {
-    return respond(nutritionLabelRecoveryResponseSchema.parse(await extractNutritionLabelWithGemini(parsed.data, env)), 200);
+    return respond(nutritionLabelRecoveryResponseSchema.parse(await extractNutritionLabelWithGemini(parsed.data, env, startedAt)), 200);
   } catch (error) {
     if (error instanceof NutritionLabelRequestError) return respond({ error: error.message, code: error.code }, error.status);
     return respond({ error: "Nutrition label reading is temporarily unavailable. Take another photo and try again.", code: "internal_error" }, 500);

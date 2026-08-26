@@ -11,6 +11,11 @@ export type VisionOutcome = "success" | "bad_image" | "provider_timeout" | "prov
 type VisionTelemetry = {
   operation: VisionOperation;
   model: string;
+  // Time from route entry (request received, before body parsing/rate
+  // limiting) to the moment this vision call started. A value that grows
+  // during traffic bursts points at queueing/event-loop contention ahead of
+  // the Gemini call, not at Gemini itself.
+  queueMs: number;
   durationMs: number;
   timeoutMs: number;
   outcome: VisionOutcome;

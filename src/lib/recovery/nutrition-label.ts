@@ -97,10 +97,11 @@ function outcomeFor(error: unknown): VisionOutcome {
   return error instanceof NutritionLabelRequestError ? error.code : "unexpected_error";
 }
 
-function logAttempt(env: ServerEnv, startedAt: number, error?: unknown) {
+function logAttempt(env: ServerEnv, receivedAt: number, startedAt: number, error?: unknown) {
   logVisionTelemetry({
     operation: "nutrition_label",
     model: env.GEMINI_VISION_MODEL,
+    queueMs: Math.round(startedAt - receivedAt),
     durationMs: Math.round(performance.now() - startedAt),
     timeoutMs: LABEL_TIMEOUT_MS,
     outcome: error ? outcomeFor(error) : "success",
@@ -109,7 +110,7 @@ function logAttempt(env: ServerEnv, startedAt: number, error?: unknown) {
 }
 
 /** Exactly one provider call for one explicitly consented still image. */
-export async function extractNutritionLabelWithGemini(input: NutritionLabelRecoveryRequest, env: ServerEnv): Promise<NutritionLabelRecoveryResponse> {
+export async function extractNutritionLabelWithGemini(input: NutritionLabelRecoveryRequest, env: ServerEnv, receivedAt: number): Promise<NutritionLabelRecoveryResponse> {
   const startedAt = performance.now();
   try {
     if (!env.GEMINI_API_KEY) throw new NutritionLabelRequestError("Nutrition label reading is not configured.", 503, "provider_error");
@@ -132,23 +133,23 @@ export async function extractNutritionLabelWithGemini(input: NutritionLabelRecov
       });
       if (!response.ok) throw new NutritionLabelRequestError("Nutrition label reading is temporarily unavailable. Take another photo and try again.", response.status >= 400 && response.status < 500 ? 422 : 502, "provider_error");
       const parsed = parseProviderResponse(await response.json());
-      logAttempt(env, startedAt);
+      logAttempt(env, receivedAt, startedAt);
       return parsed;
     } finally {
       clearTimeout(timeout);
     }
   } catch (error) {
     if (error instanceof NutritionLabelRequestError) {
-      logAttempt(env, startedAt, error);
+      logAttempt(env, receivedAt, startedAt, error);
       throw error;
     }
     if (error instanceof Error && error.name === "AbortError") {
       const timeoutError = new NutritionLabelRequestError("Nutrition label reading took too long. Take another photo and try again.", 504, "provider_timeout");
-      logAttempt(env, startedAt, timeoutError);
+      logAttempt(env, receivedAt, startedAt, timeoutError);
       throw timeoutError;
     }
     const providerError = new NutritionLabelRequestError("Nutrition label reading is temporarily unavailable. Take another photo and try again.", 502, "provider_error");
-    logAttempt(env, startedAt, providerError);
+    logAttempt(env, receivedAt, startedAt, providerError);
     throw providerError;
   }
 }
