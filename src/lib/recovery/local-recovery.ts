@@ -84,29 +84,62 @@ export async function getLocalWasmBarcodeReader(): Promise<LocalWasmBarcodeReade
   };
 }
 
+/**
+ * "reader_unavailable" means no decode attempt could actually run (WASM
+ * failed to load/initialise and there was no usable native detector).
+ * "not_recognised" means a decode attempt ran but found no valid barcode.
+ * "decoded" means a valid barcode was found. This aggregate outcome carries
+ * no barcode value, image, or per-request identifier.
+ */
+export type LocalBarcodeDecodeOutcome = "decoded" | "not_recognised" | "reader_unavailable";
+
 export async function decodeLocalBarcode(
   source: ImageBitmapSource | Blob,
   nativeDetector: LocalBarcodeDetector | null = getLocalBarcodeDetector(),
   wasmReader: LocalWasmBarcodeReader | null = null,
+  onOutcome?: (outcome: LocalBarcodeDecodeOutcome) => void,
 ): Promise<string | null> {
+  // A decode attempt only "ran" if the reader/detector call itself completed
+  // without throwing/rejecting; a caught failure means it could not be used.
+  let wasmAttempted = false;
+  let nativeAttempted = false;
+
   // WASM is always attempted before BarcodeDetector so Safari has the same
   // capability as Chromium, rather than a native-API-dependent recovery path.
   const reader = wasmReader ?? await getLocalWasmBarcodeReader().catch(() => null);
   const decoded = reader
     ? await (async () => {
       const wasmSource = isBlob(source) ? source : barcodeSourceToImageData(source);
-      return reader.read(wasmSource);
+      const results = await reader.read(wasmSource);
+      wasmAttempted = true;
+      return results;
     })().catch(() => [])
     : [];
   const validWasmCode = decoded
     .filter((result) => result.isValid !== false)
     .map((result) => parseRecoveryBarcode(result.text))
     .find((value): value is string => value !== null);
-  if (validWasmCode) return validWasmCode;
+  if (validWasmCode) {
+    onOutcome?.("decoded");
+    return validWasmCode;
+  }
 
-  if (!nativeDetector || isBlob(source)) return null;
-  const nativeDetections = await nativeDetector.detect(source).catch(() => []);
-  return nativeDetections.map((item) => parseRecoveryBarcode(item.rawValue)).find((value): value is string => value !== null) ?? null;
+  if (!nativeDetector || isBlob(source)) {
+    onOutcome?.(wasmAttempted ? "not_recognised" : "reader_unavailable");
+    return null;
+  }
+  const nativeDetections = await (async () => {
+    const results = await nativeDetector.detect(source);
+    nativeAttempted = true;
+    return results;
+  })().catch(() => []);
+  const validNativeCode = nativeDetections.map((item) => parseRecoveryBarcode(item.rawValue)).find((value): value is string => value !== null) ?? null;
+  if (validNativeCode) {
+    onOutcome?.("decoded");
+    return validNativeCode;
+  }
+  onOutcome?.(wasmAttempted || nativeAttempted ? "not_recognised" : "reader_unavailable");
+  return null;
 }
 
 /** Runs browser-native OCR only. Do not return, log, or persist its text. */

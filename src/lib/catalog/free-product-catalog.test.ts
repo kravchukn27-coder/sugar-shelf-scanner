@@ -44,6 +44,18 @@ test("Open Food Facts network and payload failures stay unknown without a vision
   assert.equal(payloadResult.product, null);
 });
 
+test("persists a valid exact Open Food Facts barcode hit for the durable catalog", async () => {
+  const persisted: string[] = [];
+  const catalog = new FreeProductCatalog(new CuratedProductCatalog(CURATED_PRODUCTS), {
+    fetchImpl: async () => Response.json({ product: { code: "5901234123457", product_name: "Durable demo drink", brands: "Demo", quantity: "330 ml", nutriments: { sugars_100g: 4.2, proteins_100g: 0.1 } } }),
+    persistOpenFoodFactsBarcode: async (product) => { persisted.push(product.gtin ?? ""); },
+  });
+
+  const product = await catalog.lookupBarcode("5901234123457");
+  assert.equal(product?.name, "Durable demo drink");
+  assert.deepEqual(persisted, ["5901234123457"]);
+});
+
 test("the public-source search budget is an availability limit, not a confirmed absence", async () => {
   let calls = 0;
   const resolver = unavailableCatalog(async () => {

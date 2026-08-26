@@ -54,15 +54,19 @@ export function createFallbackCatalog(options: RuntimeCatalogOptions): ProductCa
  * setting DATABASE_URL changes nothing until that DB contains reviewed rows.
  */
 export async function createRuntimeCatalog(options: RuntimeCatalogOptions): Promise<ProductCatalogProvider> {
-  const fallback = createFallbackCatalog(options);
-  if (!options.executor && !options.databaseUrl) return fallback;
+  if (!options.executor && !options.databaseUrl) return createFallbackCatalog(options);
 
   const repository = new PostgresCatalogRepository(options.executor ?? getPool(options.databaseUrl!));
   try {
-    return await repository.hasReviewedProducts()
-      ? new ReviewedDatabaseFirstCatalog(repository, fallback)
-      : fallback;
+    if (!await repository.hasReviewedProducts()) return createFallbackCatalog(options);
+    const fallback = new FreeProductCatalog(new CuratedProductCatalog(CURATED_PRODUCTS), {
+      usdaApiKey: options.usdaApiKey,
+      openFoodFactsUserAgent: options.openFoodFactsUserAgent,
+      fetchImpl: options.fetchImpl,
+      persistOpenFoodFactsBarcode: (product) => repository.upsertOpenFoodFactsBarcode(product),
+    });
+    return new ReviewedDatabaseFirstCatalog(repository, fallback);
   } catch {
-    return fallback;
+    return createFallbackCatalog(options);
   }
 }

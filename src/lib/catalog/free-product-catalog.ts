@@ -121,7 +121,7 @@ export class FreeProductCatalog implements ProductCatalogProvider {
 
   public constructor(
     private readonly curated: ProductCatalogProvider,
-    private readonly options: { usdaApiKey?: string; openFoodFactsUserAgent?: string; fetchImpl?: FetchLike } = {},
+    private readonly options: { usdaApiKey?: string; openFoodFactsUserAgent?: string; fetchImpl?: FetchLike; persistOpenFoodFactsBarcode?: (product: CatalogProduct) => Promise<void> } = {},
   ) {}
 
   private get fetch(): FetchLike { return this.options.fetchImpl ?? fetch; }
@@ -136,7 +136,11 @@ export class FreeProductCatalog implements ProductCatalogProvider {
       this.fetchOpenFoodFactsByBarcode(normalized),
       this.fetchUsdaByQuery(normalized),
     ]);
-    return fromOff ?? fromUsda[0] ?? null;
+    if (fromOff) {
+      await this.options.persistOpenFoodFactsBarcode?.(fromOff).catch(() => undefined);
+      return fromOff;
+    }
+    return fromUsda[0] ?? null;
   }
 
   public async searchCandidates(candidate: VisualCandidate, limit = 3): Promise<CatalogMatch[]> {
