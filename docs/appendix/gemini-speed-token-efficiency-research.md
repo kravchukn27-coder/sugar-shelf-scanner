@@ -15,8 +15,9 @@ The artifact is the primary version; update it first, then re-sync this file.
 | Item | Status | Notes |
 | --- | --- | --- |
 | B1, B2, B3 | **Done** — commit `39ac549`, pushed to `main` | Staged `captured_analyzing` copy + soft "uncertain" hint instead of hard-failing the live search loop. `src/app/page.tsx` only. |
-| C1, D2 | **Done** — pending commit | `mediaResolution: "MEDIA_RESOLUTION_LOW"` added to preflight's `generationConfig` (confirmed against the live Generative Language API discovery document — the field is real and exactly named this, not a guess); catalog DB probe (`createRuntimeCatalog`) now starts alongside the Gemini analyze call instead of after it, via a `catalog` promise param on `resolveScan`. `npx tsc --noEmit` clean, all 79 existing tests pass unchanged. |
-| A1, A2, B (verified on-device), C2–C5, D1, D3, D4 | Not started | See rollout order below. |
+| C1, D2 | **Done** — commit `0be75b3` | `mediaResolution: "MEDIA_RESOLUTION_LOW"` added to preflight's `generationConfig` (confirmed against the live Generative Language API discovery document — the field is real and exactly named this, not a guess); catalog DB probe (`createRuntimeCatalog`) now starts alongside the Gemini analyze call instead of after it, via a `catalog` promise param on `resolveScan`. |
+| C5 (revised) | **Done** — pending commit | Original scope (retry with the same 30s timeout) was rejected: worst case would have gone from 30s to 60s of silent wait, against the spirit of section B. Shipped instead: one bounded retry on `analyze`, only for `provider_timeout` or a `provider_error` with a 5xx status — never for a parsed-but-invalid response or a client-side config error — using a separate, shorter 8s timeout for the retry attempt (worst case now ~38s, not 60s). `src/lib/vision/gemini.ts` only. `npx tsc --noEmit` clean, all 79 existing tests pass. No automated test covers the retry path itself — `gemini.ts` has no test file at all, and standing one up (mocking `fetch`/`AbortController` timing) was judged out of scope for a "cheap" task; flagging this as a real coverage gap rather than a solved item. |
+| A1, A2, B (verified on-device), C2–C4, D1, D3, D4 | Not started | See rollout order below. |
 
 ## Method
 
@@ -101,9 +102,14 @@ git history of `src/lib/env.ts`.
   history). Sweep 0.65/0.70/0.75/0.80 against true-candidate/true-none frames.
   Expected a modest, single-digit-percent net effect — a tuning pass, not a
   big lever.
-- **C5. One bounded retry on analyze transport failures** (timeout/5xx only,
-  never on a negative/low-confidence result). Today zero retries exist; any
-  hiccup forces a full manual re-tap.
+- **C5. One bounded retry on analyze transport failures — shipped, revised
+  scope.** Original idea (retry with the same 30s timeout) was rejected
+  before implementation: worst case would go from 30s to 60s of silent
+  wait, undermining section B. Shipped instead: retry only on
+  `provider_timeout` or a 5xx `provider_error` — never on a parsed-but-invalid
+  response or a client config error — with its own shorter 8s timeout, so
+  worst case is ~38s, not 60s. `gemini.ts` has no test file; the retry path
+  itself is unverified by automated tests.
   *Verify:* `ANALYZE_FAILURE` cause breakdown before/after via existing
   `vision_request` telemetry.
 
