@@ -14,11 +14,13 @@ The artifact is the primary version; update it first, then re-sync this file.
 
 | Item | Status | Notes |
 | --- | --- | --- |
+| A1, A2 | **Done** — commits `6bc3353`, `85cf1b7`, extended `a19ec12` | Opt-in scanner stage metrics (`SCANNER_METRICS_ENABLED`) plus preflight-attempt counting; `a19ec12` added `queueMs` to `vision_request` to separate route-entry queueing from the Gemini call itself. |
 | B1, B2, B3 | **Done** — commit `39ac549`, pushed to `main` | Staged `captured_analyzing` copy + soft "uncertain" hint instead of hard-failing the live search loop. `src/app/page.tsx` only. |
-| C1, D2 | **Partially reverted** | The catalog DB probe still starts alongside Gemini analysis. `mediaResolution: "MEDIA_RESOLUTION_LOW"` was removed from preflight after it regressed recognition of small packaged products; preflight now uses Gemini's default media resolution again. |
+| C1 | **Reverted** — commit `875aa66` | `mediaResolution: "MEDIA_RESOLUTION_LOW"` (shipped in `0be75b3`) was removed from preflight after it regressed recognition of small packaged products; preflight now uses Gemini's default media resolution again. Closed — do not retry without a fixture-set regression test. |
+| D2 | **Done** — commit `0be75b3` | The catalog DB probe starts alongside Gemini analysis instead of after it (`analyze/route.ts`). Shipped together with C1 in the same commit; unaffected by C1's revert. |
 | C5 (revised) | **Done** — commit `e4274bd`, pushed to `main` | Original scope (retry with the same 30s timeout) was rejected: worst case would have gone from 30s to 60s of silent wait, against the spirit of section B. Shipped instead: one bounded retry on `analyze`, only for `provider_timeout` or a `provider_error` with a 5xx status — never for a parsed-but-invalid response or a client-side config error — using a separate, shorter 8s timeout for the retry attempt (worst case now ~38s, not 60s). `src/lib/vision/gemini.ts` only. `npx tsc --noEmit` clean, all 79 existing tests pass. No automated test covers the retry path itself — `gemini.ts` has no test file at all, and standing one up (mocking `fetch`/`AbortController` timing) was judged out of scope for a "cheap" task; flagging this as a real coverage gap rather than a solved item. |
-| A1, A2, B (verified on-device), C2–C4, D1, D3 | Not started | See rollout order below. |
 | D4 | **Done** — commit `4e4720e`, pushed to `main` | The former unreachable recovery path was replaced by the one-shot Details-only recovery camera. It has no live Gemini scheduler and no default scanner barcode control. |
+| C2, C3, C4, D1, D3 | Not started | See rollout order below. C2/C3 explicitly deferred pending a larger fixture set / confirmed model access; C4, D1, D3 have no blocker, next in rollout order. |
 
 ## Method
 
@@ -212,18 +214,20 @@ correlate a person or device across scans.
 - **Model name** — resolved. `gemini-3.6-flash` / `gemini-3.7-flash` are real,
   actively billed Tier 1 models (confirmed via Gemini usage dashboard), not a
   typo.
-- **Code vs. Railway model config mismatch** — still open. The repo only
-  defines one model default (`GEMINI_VISION_MODEL`, with `GEMINI_PREFLIGHT_MODEL`
-  falling back to it since 25 Aug); the dashboard shows real split traffic
-  across two models. Someone has set an override directly in Railway that
-  isn't reflected in `.env.example` or code comments. Needs a direct check of
-  the production environment variables — not resolvable from the repo alone.
-- **`media_resolution`** — resolved. Confirmed via code read: not set
-  anywhere. C1/C2 are actionable as described.
-- **Stale code comment** — found in passing: `gemini.ts:288` still says
-  `// Flash-Lite is used as a classifier...`, left over from the reverted
-  25 Aug split. Misleading today; worth a one-line fix alongside any of the
-  above.
+- **Code vs. Railway model config mismatch** — resolved. Checked the
+  production service directly via `railway variables`: only
+  `GEMINI_VISION_MODEL=gemini-3.6-flash` is set, `GEMINI_PREFLIGHT_MODEL` is
+  absent, matching the code's fallback. No split-model traffic today; the
+  original dashboard observation was from the 25 Aug `flash-lite` window
+  (see C3), not a standing mismatch.
+- **`media_resolution`** — superseded by C1. It was set to
+  `MEDIA_RESOLUTION_LOW` for preflight in `0be75b3`, then reverted in
+  `875aa66` after it regressed recognition of small packaged products.
+  Preflight is back on Gemini's unspecified default.
+- **Stale code comment** — resolved. The `gemini.ts:288`
+  `// Flash-Lite is used as a classifier...` comment no longer exists; the
+  code at that location now reads `// Cheap semantic gate for live camera
+  previews...`, which is accurate.
 - **Fixture-set size for vision-accuracy testing** — explicitly **deferred**.
   Not a priority for the current demo; only relevant once C2/C3 move past
   discussion.
