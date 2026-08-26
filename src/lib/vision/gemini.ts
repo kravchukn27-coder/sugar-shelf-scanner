@@ -309,12 +309,10 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
       body: JSON.stringify({
         contents: [{ parts: [{ text: preflightPrompt() }, { inline_data: { mime_type: input.mimeType, data: input.imageBase64.replace(/^data:[^;]+;base64,/, "") } }] }],
         generationConfig: {
-          // Preflight is a coarse candidate/none/uncertain classifier, not a
-          // reasoning step or a box/identity read — the low resolution tier
-          // is Google's own recommendation for this kind of task and is a
-          // fraction of the token cost of the unspecified default.
+          // Keep Gemini's default media resolution here. The lower preflight
+          // tier was rolled back because it regressed recognition of small
+          // packaged products before they could reach full analysis.
           thinkingConfig: thinkingConfigFor(env.GEMINI_PREFLIGHT_MODEL),
-          mediaResolution: "MEDIA_RESOLUTION_LOW",
           responseMimeType: "application/json",
           responseSchema: {
             type: "OBJECT",

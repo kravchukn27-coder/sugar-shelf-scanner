@@ -15,7 +15,7 @@ The artifact is the primary version; update it first, then re-sync this file.
 | Item | Status | Notes |
 | --- | --- | --- |
 | B1, B2, B3 | **Done** — commit `39ac549`, pushed to `main` | Staged `captured_analyzing` copy + soft "uncertain" hint instead of hard-failing the live search loop. `src/app/page.tsx` only. |
-| C1, D2 | **Done** — commit `0be75b3` | `mediaResolution: "MEDIA_RESOLUTION_LOW"` added to preflight's `generationConfig` (confirmed against the live Generative Language API discovery document — the field is real and exactly named this, not a guess); catalog DB probe (`createRuntimeCatalog`) now starts alongside the Gemini analyze call instead of after it, via a `catalog` promise param on `resolveScan`. |
+| C1, D2 | **Partially reverted** | The catalog DB probe still starts alongside Gemini analysis. `mediaResolution: "MEDIA_RESOLUTION_LOW"` was removed from preflight after it regressed recognition of small packaged products; preflight now uses Gemini's default media resolution again. |
 | C5 (revised) | **Done** — commit `e4274bd`, pushed to `main` | Original scope (retry with the same 30s timeout) was rejected: worst case would have gone from 30s to 60s of silent wait, against the spirit of section B. Shipped instead: one bounded retry on `analyze`, only for `provider_timeout` or a `provider_error` with a 5xx status — never for a parsed-but-invalid response or a client-side config error — using a separate, shorter 8s timeout for the retry attempt (worst case now ~38s, not 60s). `src/lib/vision/gemini.ts` only. `npx tsc --noEmit` clean, all 79 existing tests pass. No automated test covers the retry path itself — `gemini.ts` has no test file at all, and standing one up (mocking `fetch`/`AbortController` timing) was judged out of scope for a "cheap" task; flagging this as a real coverage gap rather than a solved item. |
 | A1, A2, B (verified on-device), C2–C4, D1, D3 | Not started | See rollout order below. |
 | D4 | **Done** — commit `4e4720e`, pushed to `main` | The former unreachable recovery path was replaced by the one-shot Details-only recovery camera. It has no live Gemini scheduler and no default scanner barcode control. |
@@ -37,8 +37,8 @@ git history of `src/lib/env.ts`.
 | Analyze frame | 960px · JPEG q0.7 · 1.12× centred crop | `page.tsx:73`, `frame-crop.ts:89-121` |
 | Preflight timeout | 8 s | `gemini.ts:11` |
 | Analyze timeout | 30 s | `gemini.ts:10` |
-| Candidate-gate threshold | 0.75 (hardcoded) | `page.tsx:108` |
-| Catalog confirm threshold | 0.88 | `product-resolver.ts:7` |
+| Candidate-gate threshold | 0.65 | `page.tsx` |
+| Catalog confirm threshold | 0.85 | `product-resolver.ts:7` |
 | Retry policy | none, either stage | `gemini.ts:248-261,325-338` |
 | Analyze model default | `gemini-3.6-flash` — confirmed real via usage dashboard | `env.ts:6` |
 | Preflight model default | falls back to analyze model since 25 Aug 15:30 | `env.ts:9,27` |
@@ -99,7 +99,7 @@ git history of `src/lib/env.ts`.
   inaccessible for the project/key, not a code bug.
   *Verify:* confirm model access in the Gemini console/API key before retrying
   the env split; then the same fixture-set accuracy check as C2.
-- **C4. Re-tune the 0.75 candidate-gate threshold** (hardcoded, no tuning
+- **C4. Re-tune the 0.65 candidate-gate threshold** (hardcoded, no tuning
   history). Sweep 0.65/0.70/0.75/0.80 against true-candidate/true-none frames.
   Expected a modest, single-digit-percent net effect — a tuning pass, not a
   big lever.

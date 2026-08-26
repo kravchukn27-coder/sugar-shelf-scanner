@@ -164,7 +164,7 @@ export class ReviewedDatabaseFirstCatalog implements ProductCatalogProvider {
       const matches = await this.database.searchCandidates(candidate, limit);
       // Do not let an uncertain database text hit suppress an exact curated
       // hit or the established OFF/USDA availability fallback.
-      if (matches[0]?.confidence >= 0.88) return matches;
+      if (matches[0]?.confidence >= 0.85) return matches;
     } catch {
       // Intentionally fall through. Scan handling must not expose DB outages.
     }

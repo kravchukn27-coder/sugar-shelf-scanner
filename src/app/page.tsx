@@ -18,6 +18,7 @@ import type { BarcodeRecoveryResponse, NutritionLabelDraft, NutritionLabelRecove
 import { shouldOfferBarcodeRecovery } from "@/lib/recovery/recovery-ui";
 import { catalogProposalSubmissionOutcome } from "@/lib/recovery/catalog-proposal-ui";
 
+const PREFLIGHT_CANDIDATE_CONFIDENCE_THRESHOLD = 0.65;
 const FRAME_INTERVAL = 650;
 const clientScannerMetricsEnabled = process.env.NEXT_PUBLIC_SCANNER_METRICS_ENABLED === "true";
 const bandCopy = { green: "Low sugar", yellow: "Moderate sugar", orange: "High sugar", red: "Very high sugar", unknown: "Needs a check" } as const;
@@ -139,7 +140,7 @@ export default function HomePage() {
       if (!response.ok) { if (source instanceof HTMLImageElement) setUploadBusy(false); setFailure("Couldn’t check this scene"); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); return; }
       const result = await response.json() as PreflightScanResponse;
       if (id !== session.current) return;
-      if (result.decision !== "candidate" || result.packagedProductCount < 1 || result.confidence < .75) {
+      if (result.decision !== "candidate" || result.packagedProductCount < 1 || result.confidence < PREFLIGHT_CANDIDATE_CONFIDENCE_THRESHOLD) {
         const isUpload = source instanceof HTMLImageElement;
         if (isUpload) setUploadBusy(false);
         if (!isUpload && result.decision === "uncertain") { setLiveHint("Move a little closer, or hold steady for a moment…"); return; }

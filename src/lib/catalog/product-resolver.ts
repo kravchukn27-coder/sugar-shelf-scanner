@@ -4,7 +4,7 @@ import type { CatalogProduct, ProductCatalogProvider, ResolvedProduct, VisualCan
 // This is intentionally aligned with scoreCatalogMatch's "confirmed" band.
 // A plausible textual result may still be useful as a future UI suggestion,
 // but must not turn an AI nutrition estimate into a confirmed catalog fact.
-export const CONFIRMED_MATCH_THRESHOLD = 0.88;
+export const CONFIRMED_MATCH_THRESHOLD = 0.85;
 export const MIN_VISION_CONFIDENCE_FOR_CONFIRMATION = 0.65;
 
 function hasConfirmedCatalogNutrition(product: CatalogProduct): boolean {

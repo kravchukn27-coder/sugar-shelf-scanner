@@ -61,6 +61,18 @@ test("confirms approved Spanish Schweppes and La Lechera records from catalog nu
   }
 });
 
+test("confirms La Lechera when vision returns the common Nestlé La Lechera brand form", async () => {
+  const result = await resolver.resolve({
+    brand: "Nestlé La Lechera",
+    name: "Leche condensada",
+    packSize: "370 g",
+    confidence: 0.96,
+  });
+  assert.equal(result.status, "confirmed");
+  assert.equal(result.product?.id, "la-lechera-leche-condensada-370g-es");
+  assert.equal(result.score.source, "catalog");
+});
+
 test("selects Schweppes Tónica Limón instead of the same-brand Original variant", async () => {
   const result = await resolver.resolve(schweppesLimonCandidate);
   assert.equal(result.status, "confirmed");
@@ -86,7 +98,7 @@ test("does not confirm a merely plausible catalog candidate", async () => {
   const product = CURATED_PRODUCTS[0] as CatalogProduct;
   const looseCatalog: ProductCatalogProvider = {
     lookupBarcode: async () => null,
-    searchCandidates: async () => [{ product, confidence: 0.87 }],
+    searchCandidates: async () => [{ product, confidence: 0.84 }],
     getProduct: async () => null,
     recordFeedback: async () => undefined,
   };

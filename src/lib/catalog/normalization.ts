@@ -1,4 +1,4 @@
-export const CATALOG_CONFIRM_THRESHOLD = 0.88;
+export const CATALOG_CONFIRM_THRESHOLD = 0.85;
 export const CATALOG_REVIEW_THRESHOLD = 0.64;
 
 export interface MatchFields {

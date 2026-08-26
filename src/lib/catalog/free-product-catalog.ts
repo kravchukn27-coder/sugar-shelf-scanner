@@ -135,7 +135,7 @@ export class FreeProductCatalog implements ProductCatalogProvider {
     // Only skip public sources when local text evidence is already strong
     // enough to confirm. A merely plausible curated match must not mask a
     // potentially exact match from a source record.
-    if (local[0]?.confidence >= 0.88) return local;
+    if (local[0]?.confidence >= 0.85) return local;
 
     const query = [candidate.brand, candidate.name].filter(Boolean).join(" ").trim();
     if (!query || !this.reserveRemoteSearch()) return local;
