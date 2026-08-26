@@ -1,22 +1,14 @@
 "use client";
 
-import { useState } from "react";
 import type { Detection } from "@/lib/contracts/scan";
 import type { DetectionGroup } from "@/lib/scan/deduplicate-detections";
-import { shouldOfferBarcodeRecovery } from "@/lib/recovery/recovery-ui";
-import type { RecoveryState } from "@/lib/recovery/local-recovery";
-import { catalogProposalSubmissionOutcome } from "@/lib/recovery/catalog-proposal-ui";
 import { calculateSugarFit, inferProductCategory, type SugarFitResult } from "@/lib/scoring/sugar-fit";
-
-export type RecoveryInfo = { id: string; state: RecoveryState; labelSeen: boolean; barcode: string | null };
 
 type SheetProps = {
   groups: DetectionGroup[];
   frozenImage: string | null;
   selectedId: string | null;
-  recovery: RecoveryInfo | null;
   recoveryBanner: string | null;
-  onRecover: (id: string, mode?: "package" | "label") => void;
   onSelect: (id: string | null) => void;
   onClose: () => void;
   onScanAgain: () => void;
@@ -78,13 +70,11 @@ function ScoreRing({ fit }: { fit: SugarFitResult }) {
   return <div className={`sugar-fit-ring ${fit.tone}`} style={style} role="img" aria-label={`Sugar Fit ${fit.score} out of 100`}><span><strong>{fit.score}</strong><small>SUGAR FIT</small></span></div>;
 }
 
-function ProductDetail({ detection, count, frozenImage, recovery, recoveryBanner, onRecover, onBack, onClose, onScanAgain }: {
+function ProductDetail({ detection, count, frozenImage, recoveryBanner, onBack, onClose, onScanAgain }: {
   detection: Detection;
   count: number;
   frozenImage: string | null;
-  recovery: RecoveryInfo | null;
   recoveryBanner: string | null;
-  onRecover: (id: string, mode?: "package" | "label") => void;
   onBack: (() => void) | null;
   onClose: () => void;
   onScanAgain: () => void;
@@ -95,7 +85,6 @@ function ProductDetail({ detection, count, frozenImage, recovery, recoveryBanner
     brand: detection.product?.brand ?? detection.visualCandidate.brand,
     name: detection.visualCandidate.name ?? detection.product?.name,
   });
-  const recoveryForProduct = recovery?.id === detection.id ? recovery : null;
   const dataLabel = detection.status === "confirmed" ? "Verified" : detection.status === "estimate" ? "Estimated" : "Needs verification";
 
   return <>
@@ -118,7 +107,6 @@ function ProductDetail({ detection, count, frozenImage, recovery, recoveryBanner
       <div className="sugar-fit-why"><strong>Why this Sugar Fit</strong>{fit.reasons.map((reason) => <span className={fit.tone} key={reason}><i aria-hidden="true">{fit.tone === "green" ? "✓" : "!"}</i>{reason}</span>)}</div>
     </> : <div className="sugar-fit-empty"><strong>No score yet</strong><span>We need verified sugar data to calculate your Sugar Fit.</span></div>}
     {count > 1 && <p className="sugar-fit-repeat">{count} matching products in this scan</p>}
-    {shouldOfferBarcodeRecovery(detection.status, true) && <RecoveryCard recovery={recoveryForProduct} candidate={detection.visualCandidate} onStart={() => onRecover(detection.id)} onLabel={() => onRecover(detection.id, "label")} />}
     <button className="sugar-fit-scan-again" onClick={onScanAgain}>Scan another product</button>
     <a className="sugar-fit-amazon" href={amazonUrl(detection)} target="_blank" rel="noreferrer">Find on Amazon ↗</a>
   </>;
@@ -144,7 +132,7 @@ function ProductComparison({ groups, frozenImage, onSelect, onClose, onScanAgain
 export function SugarFitResultsSheet(props: SheetProps) {
   const selected = props.groups.find(({ detection }) => detection.id === props.selectedId) ?? (props.groups.length === 1 ? props.groups[0] : null);
   return <section className="result-sheet sugar-fit-sheet" aria-label="Sugar Fit results">
-    {selected ? <ProductDetail detection={selected.detection} count={selected.count} frozenImage={props.frozenImage} recovery={props.recovery} recoveryBanner={props.recoveryBanner} onRecover={props.onRecover} onBack={props.groups.length > 1 ? () => props.onSelect(null) : null} onClose={props.onClose} onScanAgain={props.onScanAgain} /> : <ProductComparison groups={props.groups} frozenImage={props.frozenImage} onSelect={props.onSelect} onClose={props.onClose} onScanAgain={props.onScanAgain} />}
+    {selected ? <ProductDetail detection={selected.detection} count={selected.count} frozenImage={props.frozenImage} recoveryBanner={props.recoveryBanner} onBack={props.groups.length > 1 ? () => props.onSelect(null) : null} onClose={props.onClose} onScanAgain={props.onScanAgain} /> : <ProductComparison groups={props.groups} frozenImage={props.frozenImage} onSelect={props.onSelect} onClose={props.onClose} onScanAgain={props.onScanAgain} />}
   </section>;
 }
 
@@ -154,17 +142,4 @@ export function SugarFitResultHandle({ groups, frozenImage, onOpen }: { groups: 
   if (groups.length > 1) return <button className="result-handle sugar-fit-result-handle multi" onClick={onOpen}><span><strong>{groups.length} products</strong><small>Compare your Sugar Fits</small></span><RightIcon /></button>;
   const fit = calculateSugarFit({ sugarPer100g: first.score.sugarPer100g, packSize: first.product?.packSize ?? first.visualCandidate.packSize, brand: first.product?.brand ?? first.visualCandidate.brand, name: first.visualCandidate.name ?? first.product?.name });
   return <button className="result-handle sugar-fit-result-handle" onClick={onOpen}><ProductPhoto detection={first} frozenImage={frozenImage} compact /><span><strong>{displayIdentity(first)}</strong><small>{fit?.label ?? "No score yet"}</small></span><b className={fit?.tone ?? "unknown"}>{fit?.score ?? "—"}<small>Sugar Fit</small></b><RightIcon /></button>;
-}
-
-function RecoveryCard({ recovery, candidate, onStart, onLabel }: { recovery: RecoveryInfo | null; candidate: Detection["visualCandidate"]; onStart: () => void; onLabel: () => void }) {
-  const message = recovery?.state === "searching" ? "Take one package photo; the barcode is checked on this device." : recovery?.state === "barcode_found" ? "Barcode found — checking the catalog…" : recovery?.state === "barcode_not_found" ? "We couldn’t match this barcode to verified nutrition data." : "Scan the barcode or nutrition label to verify this product.";
-  return <div className="barcode-recovery-card"><strong>Want a verified score?</strong><p>{message}</p>{recovery?.state === "barcode_not_found" && <button onClick={onLabel}>Scan nutrition label</button>}{recovery?.state === "barcode_not_found" && recovery.barcode ? <CatalogProposalForm barcode={recovery.barcode} candidate={candidate} labelSeenLocally={false} /> : null}{!recovery && <button onClick={onStart}>Scan barcode</button>}</div>;
-}
-
-function CatalogProposalForm({ barcode, candidate, labelSeenLocally }: { barcode: string; candidate: Detection["visualCandidate"]; labelSeenLocally: boolean }) {
-  const [brand, setBrand] = useState(candidate.brand ?? ""), [name, setName] = useState(candidate.name ?? ""), [packSize, setPackSize] = useState(candidate.packSize ?? ""), [sugar, setSugar] = useState(""), [protein, setProtein] = useState(""), [status, setStatus] = useState<"idle" | "saving" | "saved" | "duplicate" | "error">("idle");
-  const submit = async (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); setStatus("saving"); const numberOrNull = (value: string) => value.trim() === "" ? null : Number(value); try { const response = await fetch("/api/catalog/proposals", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ gtin: barcode, brand, name, packSize: packSize.trim() || null, sugarPer100g: numberOrNull(sugar), proteinPer100g: numberOrNull(protein), labelSeenLocally }) }); setStatus(catalogProposalSubmissionOutcome(response.status)); } catch { setStatus("error"); } };
-  if (status === "saved") return <p className="barcode-recovery-note">Suggestion sent for review. It won’t change results until a curator verifies it.</p>;
-  if (status === "duplicate") return <p className="barcode-recovery-note">This barcode is already waiting for review.</p>;
-  return <form className="catalog-proposal-form" onSubmit={submit}><strong>Suggest this product</strong><p>Enter only what’s printed on the package. Your photo and label text stay on this device.</p><label>Brand<input required maxLength={120} value={brand} onChange={(event) => setBrand(event.target.value)} /></label><label>Product name<input required maxLength={160} value={name} onChange={(event) => setName(event.target.value)} /></label><label>Pack size<input maxLength={40} placeholder="e.g. 330 ml" value={packSize} onChange={(event) => setPackSize(event.target.value)} /></label><div className="catalog-proposal-nutrition"><label>Sugar / 100g<input inputMode="decimal" min="0" max="100" type="number" step="0.1" value={sugar} onChange={(event) => setSugar(event.target.value)} /></label><label>Protein / 100g<input inputMode="decimal" min="0" max="100" type="number" step="0.1" value={protein} onChange={(event) => setProtein(event.target.value)} /></label></div>{status === "error" && <p className="catalog-proposal-error">Couldn’t send this suggestion. Check the fields and try again.</p>}<button disabled={status === "saving"}>{status === "saving" ? "Sending…" : "Send for review"}</button></form>;
 }
