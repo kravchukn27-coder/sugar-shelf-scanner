@@ -1,3 +1,5 @@
+import type { NormalizedBox } from "@/lib/contracts/product";
+
 export type SourceFrameCrop = {
   aspect: number;
   sx: number;
@@ -5,6 +7,79 @@ export type SourceFrameCrop = {
   sw: number;
   sh: number;
 };
+
+export type ObjectFitCoverTransform = {
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+  renderedWidth: number;
+  renderedHeight: number;
+};
+
+type FrameSize = {
+  width: number;
+  height: number;
+};
+
+const isUsableSize = ({ width, height }: FrameSize) =>
+  Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0;
+
+/**
+ * Describes the same centred `object-fit: cover` transform browsers use for a
+ * source image inside a preview. Keeping it explicit lets an analysis crop and
+ * the rendered upload share one coordinate system without reading DOM state.
+ */
+export function getObjectFitCoverTransform(source: FrameSize, preview: FrameSize): ObjectFitCoverTransform | null {
+  if (!isUsableSize(source) || !isUsableSize(preview)) return null;
+
+  const scale = Math.max(preview.width / source.width, preview.height / source.height);
+  const renderedWidth = source.width * scale;
+  const renderedHeight = source.height * scale;
+  return {
+    scale,
+    renderedWidth,
+    renderedHeight,
+    offsetX: (preview.width - renderedWidth) / 2,
+    offsetY: (preview.height - renderedHeight) / 2,
+  };
+}
+
+/**
+ * Gemini boxes are normalized to the exact image crop sent for analysis, while
+ * overlays are drawn over the original upload with `object-fit: cover`. This
+ * maps a Gemini box through that crop and into normalized preview coordinates.
+ * A box clipped fully outside the visible preview returns null; partial boxes
+ * are clipped so the result remains valid for `normalizedBoxSchema`.
+ */
+export function mapAnalyzedBoxToPreview(
+  box: NormalizedBox,
+  analyzedCrop: SourceFrameCrop,
+  source: FrameSize,
+  preview: FrameSize,
+): NormalizedBox | null {
+  const transform = getObjectFitCoverTransform(source, preview);
+  if (!transform || !Number.isFinite(analyzedCrop.sx) || !Number.isFinite(analyzedCrop.sy)
+    || !Number.isFinite(analyzedCrop.sw) || !Number.isFinite(analyzedCrop.sh)
+    || analyzedCrop.sw <= 0 || analyzedCrop.sh <= 0) return null;
+
+  const left = (analyzedCrop.sx + box.x * analyzedCrop.sw) * transform.scale + transform.offsetX;
+  const top = (analyzedCrop.sy + box.y * analyzedCrop.sh) * transform.scale + transform.offsetY;
+  const right = (analyzedCrop.sx + (box.x + box.width) * analyzedCrop.sw) * transform.scale + transform.offsetX;
+  const bottom = (analyzedCrop.sy + (box.y + box.height) * analyzedCrop.sh) * transform.scale + transform.offsetY;
+
+  const clippedLeft = Math.max(0, Math.min(preview.width, left));
+  const clippedTop = Math.max(0, Math.min(preview.height, top));
+  const clippedRight = Math.max(0, Math.min(preview.width, right));
+  const clippedBottom = Math.max(0, Math.min(preview.height, bottom));
+  if (clippedRight <= clippedLeft || clippedBottom <= clippedTop) return null;
+
+  return {
+    x: clippedLeft / preview.width,
+    y: clippedTop / preview.height,
+    width: (clippedRight - clippedLeft) / preview.width,
+    height: (clippedBottom - clippedTop) / preview.height,
+  };
+}
 
 /**
  * Produces a centred crop matching the visible preview. A detached uploaded

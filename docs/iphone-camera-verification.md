@@ -12,3 +12,11 @@ Run this on a physical iPhone in Safari after deployment; simulator and desktop 
 ## Implementation boundary
 
 The web API can request an `environment`-facing source and can reuse the `deviceId` reported by an existing track. It cannot request Apple’s physical “1× lens”: `facingMode` is a direction and `zoom` is a field-of-view capability, not a lens selector. The scanner therefore keeps the first request lens-neutral, applies 1× only when the selected track advertises it, and reuses an exposed source ID on retries. This follows the [Media Capture and Streams specification](https://www.w3.org/TR/mediacapture-streams/) and its documented `deviceId` source-selection behavior.
+
+# Local camera diagnostics
+
+For the camera-selection investigation, the client can display the current
+track's safe local metadata using `getCameraDiagnosticSnapshot()` from
+`src/lib/scan/camera-diagnostics.ts`. It intentionally excludes camera labels,
+raw `deviceId` values, frames, images and OCR. Do not log it or send it to an
+API; record only the visible values during the manual iPhone protocol.

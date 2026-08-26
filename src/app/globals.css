@@ -3,6 +3,9 @@
 .camera-copy.empty{color:#f8e7ad}.camera-copy.error{color:#ffced1}.handle-dot.empty{background:#f2c968;box-shadow:0 0 0 4px #fbf2d6}.handle-dot.error{background:#f07b83;box-shadow:0 0 0 4px #fde6e8}.handle-dot.found{background:#4fce78;box-shadow:0 0 0 4px rgba(79,206,120,.25)}
 .frozen-preview{opacity:1}.camera-copy.unresolved{color:#f8e7ad}.handle-dot.unresolved{background:#f2c968;box-shadow:0 0 0 4px #fbf2d6}
 
+.gallery-button.busy{cursor:wait;opacity:.48;pointer-events:none}
+.camera-diagnostics{position:absolute;z-index:7;right:18px;bottom:max(18px,env(safe-area-inset-bottom));display:grid;gap:2px;max-width:calc(100% - 36px);padding:9px 11px;border-radius:12px;color:#fff;background:rgba(16,14,18,.82);backdrop-filter:blur(8px);font-size:10px;line-height:1.25;font-variant-numeric:tabular-nums}.camera-diagnostics strong{font-size:11px}.camera-diagnostics span{color:rgba(255,255,255,.76)}
+
 /* Keep the result summary centered over the active scanner viewport. */
 .result-handle{left:50%!important;right:auto!important;transform:translateX(-50%)!important;width:min(calc(100% - 102px),360px)!important;max-width:none!important}
 @media (min-width:541px){.result-handle{left:50%!important;right:auto!important;transform:translateX(-50%)!important;width:min(calc(100% - 102px),360px)!important}}
