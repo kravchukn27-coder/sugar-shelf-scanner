@@ -17,6 +17,7 @@ import { createScannerMetrics, type ScannerMetricsCompletion } from "@/lib/scan/
 import { isFrameMoving, sampleLuma } from "@/lib/scan/frame-stillness";
 import { sampleFrameQuality, shouldBypassQualityAfterSkips, shouldSkipPreflight } from "@/lib/scan/frame-quality";
 import { decodeLocalBarcode, type RecoveryState } from "@/lib/recovery/local-recovery";
+import { reportLocalBarcodeDecode } from "@/lib/recovery/recovery-decode-metrics";
 import type { BarcodeRecoveryResponse, NutritionLabelDraft, NutritionLabelRecoveryResponse } from "@/lib/contracts/scan";
 import { shouldOfferBarcodeRecovery } from "@/lib/recovery/recovery-ui";
 import { catalogProposalErrorMessage, catalogProposalSubmissionOutcome, GENERIC_PROPOSAL_ERROR_MESSAGE } from "@/lib/recovery/catalog-proposal-ui";
@@ -232,11 +233,32 @@ export default function HomePage() {
     try {
       const image = capture(video, 1280, .82);
       if (!image) throw new Error("capture");
+      // Both a direct label capture and the barcode fallback use the exact
+      // same still. Consent is requested only after the local barcode reader
+      // has failed, so the package image never leaves the device otherwise.
+      const requestNutritionLabel = async (consentMessage: string, declinedMessage: string) => {
+        const consented = window.confirm(consentMessage);
+        if (!consented) { setRecoveryMessage(declinedMessage); return; }
+        if (recoveryToken !== recoveryAttempt.current) return;
+        const response = await fetch("/api/scan/recovery-label", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ imageBase64: image.split(",")[1], mimeType: "image/jpeg", labelCaptureConsented: true }) });
+        if (recoveryToken !== recoveryAttempt.current) return;
+        const result = await response.json() as NutritionLabelRecoveryResponse;
+        if (recoveryToken !== recoveryAttempt.current) return;
+        if (!response.ok || result.outcome === "unreadable") { setRecoveryMessage("Nutrition label was not readable. Retake for one new request."); return; }
+        setLabelDraft(result.draft); setRecoveryMessage("Review the draft, edit any fields, then submit for curator review.");
+      };
       if (camera.mode === "package") {
         const response = await fetch(image); const blob = await response.blob();
-        const barcode = await decodeLocalBarcode(blob);
+        const barcode = await decodeLocalBarcode(blob, undefined, undefined, (outcome) => reportLocalBarcodeDecode(clientScannerMetricsEnabled, outcome));
         if (recoveryToken !== recoveryAttempt.current) return;
-        if (!barcode) { setRecoveryMessage("Barcode not recognised. Retake or photograph the nutrition label."); setRecovery((current) => current?.id === camera.id ? { ...current, state: "barcode_not_found" } : current); return; }
+        if (!barcode) {
+          // Preserve the manual recovery state even if consent is declined or
+          // extraction fails, while offering the captured still as a one-tap
+          // consented fallback instead of requiring a second photo.
+          setRecovery((current) => current?.id === camera.id ? { ...current, state: "barcode_not_found" } : current);
+          await requestNutritionLabel("Barcode wasn’t recognised. Send this same photo to Gemini to extract nutrition details? It is not stored by this app.", "Barcode not recognised. Nothing was sent. Retake or take a nutrition-label photo.");
+          return;
+        }
         setRecovery((current) => current?.id === camera.id ? { ...current, state: "barcode_found", barcode } : current);
         const lookup = await fetch("/api/scan/recover", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ gtin: barcode }) });
         if (recoveryToken !== recoveryAttempt.current) return;
@@ -247,16 +269,7 @@ export default function HomePage() {
           setScan((current) => current ? { ...current, detections: current.detections.map((detection) => detection.id === camera.id ? { ...detection, status: "confirmed", product: result.product, score: result.score, estimateReason: result.estimateReason, visualCandidate: { ...detection.visualCandidate, gtin: barcode } } : detection) } : current);
           setRecoveryCamera(null); stopStream(); setSheet(true); setSelected(camera.id);
         } else { setRecoveryMessage("Barcode is not in the confirmed catalog. Photograph the nutrition label to continue."); setRecovery((current) => current?.id === camera.id ? { ...current, state: "barcode_not_found", barcode } : current); }
-      } else {
-        const consented = window.confirm("Send this single nutrition-label photo to Gemini for extraction? It is not stored by this app.");
-        if (!consented) { setRecoveryMessage("Capture cancelled. Nothing was sent."); return; }
-        const response = await fetch("/api/scan/recovery-label", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ imageBase64: image.split(",")[1], mimeType: "image/jpeg", labelCaptureConsented: true }) });
-        if (recoveryToken !== recoveryAttempt.current) return;
-        const result = await response.json() as NutritionLabelRecoveryResponse;
-        if (recoveryToken !== recoveryAttempt.current) return;
-        if (!response.ok || result.outcome === "unreadable") { setRecoveryMessage("Nutrition label was not readable. Retake for one new request."); return; }
-        setLabelDraft(result.draft); setRecoveryMessage("Review the draft, edit any fields, then submit for curator review.");
-      }
+      } else await requestNutritionLabel("Send this single nutrition-label photo to Gemini for extraction? It is not stored by this app.", "Capture cancelled. Nothing was sent.");
     } catch { if (recoveryToken === recoveryAttempt.current) setRecoveryMessage("Couldn’t process this photo. Retake and try again."); }
     finally { if (recoveryToken === recoveryAttempt.current) setRecoveryBusy(false); }
   }, [capture, recoveryBusy, recoveryCamera, recoveryCameraReady, stopStream]);
