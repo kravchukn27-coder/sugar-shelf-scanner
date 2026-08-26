@@ -4,6 +4,7 @@ import { getMockShelfScan } from "@/lib/mock/scan-fixtures";
 import { checkScanRateLimit, scanJsonResponse } from "@/lib/observability/scan-route";
 import { analyzeWithGemini, VisionRequestError } from "@/lib/vision/gemini";
 import { resolveScan } from "@/lib/catalog/resolve-scan";
+import { createRuntimeCatalog } from "@/lib/catalog/runtime-catalog";
 
 export const runtime = "nodejs";
 
@@ -42,13 +43,25 @@ export async function POST(request: Request) {
   }
 
   try {
+    // The catalog DB probe (existence check) does not depend on the vision
+    // result, so start it alongside the Gemini call instead of after it. A
+    // rejection here must not become an unhandled rejection while the vision
+    // call is still in flight; resolveScan is the one that awaits and
+    // surfaces it for real.
+    const catalogPromise = createRuntimeCatalog({
+      databaseUrl: env.DATABASE_URL,
+      usdaApiKey: env.USDA_FDC_API_KEY,
+      openFoodFactsUserAgent: env.OPEN_FOOD_FACTS_USER_AGENT,
+    });
+    catalogPromise.catch(() => {});
+
     const visionStartedAt = performance.now();
     const visionResponse = env.VISION_PROVIDER === "gemini"
       ? await analyzeWithGemini(parsed.data, env)
       : getMockShelfScan(parsed.data.clientFrameId);
     const visionMs = performance.now() - visionStartedAt;
     const catalogStartedAt = performance.now();
-    const response = await resolveScan(visionResponse, env);
+    const response = await resolveScan(visionResponse, env, catalogPromise);
     const catalogMs = performance.now() - catalogStartedAt;
     return respond(analyzeScanResponseSchema.parse(response), 200, visionMs, catalogMs);
   } catch (error) {

@@ -3,7 +3,7 @@ import { ProductResolver } from "./product-resolver";
 import { createRuntimeCatalog } from "./runtime-catalog";
 import { logCatalogResolutionTelemetry } from "./telemetry";
 import type { ServerEnv } from "@/lib/env";
-import type { ResolvedProduct } from "./types";
+import type { ResolvedProduct, ProductCatalogProvider } from "./types";
 
 async function resolveDetection(detection: Detection, resolver: ProductResolver): Promise<Detection> {
   const resolved = await resolver.resolve({
@@ -28,13 +28,20 @@ async function resolveDetection(detection: Detection, resolver: ProductResolver)
  * Applies the active product catalog consistently to mock and Gemini vision
  * outputs. A future provider replaces the catalog instance, not camera or UI.
  */
-export async function resolveScan(response: AnalyzeScanResponse, env: ServerEnv): Promise<AnalyzeScanResponse> {
+export async function resolveScan(
+  response: AnalyzeScanResponse,
+  env: ServerEnv,
+  // Callers that already started the catalog DB probe alongside the vision
+  // call (see the analyze route) pass its promise here so this function does
+  // not re-issue it and does not wait on it after the fact.
+  catalog?: Promise<ProductCatalogProvider>,
+): Promise<AnalyzeScanResponse> {
   const startedAt = performance.now();
-  const resolver = new ProductResolver(await createRuntimeCatalog({
+  const resolver = new ProductResolver(await (catalog ?? createRuntimeCatalog({
     databaseUrl: env.DATABASE_URL,
     usdaApiKey: env.USDA_FDC_API_KEY,
     openFoodFactsUserAgent: env.OPEN_FOOD_FACTS_USER_AGENT,
-  }));
+  })));
   const resolvedResponse = {
     ...response,
     detections: await Promise.all(response.detections.map((detection) => resolveDetection(detection, resolver))),

@@ -285,8 +285,12 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
       body: JSON.stringify({
         contents: [{ parts: [{ text: preflightPrompt() }, { inline_data: { mime_type: input.mimeType, data: input.imageBase64.replace(/^data:[^;]+;base64,/, "") } }] }],
         generationConfig: {
-          // Flash-Lite is used as a classifier, not a reasoning step.
+          // Preflight is a coarse candidate/none/uncertain classifier, not a
+          // reasoning step or a box/identity read — the low resolution tier
+          // is Google's own recommendation for this kind of task and is a
+          // fraction of the token cost of the unspecified default.
           thinkingConfig: thinkingConfigFor(env.GEMINI_PREFLIGHT_MODEL),
+          mediaResolution: "MEDIA_RESOLUTION_LOW",
           responseMimeType: "application/json",
           responseSchema: {
             type: "OBJECT",

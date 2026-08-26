@@ -10,6 +10,14 @@ outside this document.
 This file is a plain-text mirror of that report for git history and search.
 The artifact is the primary version; update it first, then re-sync this file.
 
+## Implementation status
+
+| Item | Status | Notes |
+| --- | --- | --- |
+| B1, B2, B3 | **Done** — commit `39ac549`, pushed to `main` | Staged `captured_analyzing` copy + soft "uncertain" hint instead of hard-failing the live search loop. `src/app/page.tsx` only. |
+| C1, D2 | **Done** — pending commit | `mediaResolution: "MEDIA_RESOLUTION_LOW"` added to preflight's `generationConfig` (confirmed against the live Generative Language API discovery document — the field is real and exactly named this, not a guess); catalog DB probe (`createRuntimeCatalog`) now starts alongside the Gemini analyze call instead of after it, via a `catalog` promise param on `resolveScan`. `npx tsc --noEmit` clean, all 79 existing tests pass unchanged. |
+| A1, A2, B (verified on-device), C2–C5, D1, D3, D4 | Not started | See rollout order below. |
+
 ## Method
 
 Four parallel code audits (pipeline latency, perceived-speed UX, recognition
