@@ -399,7 +399,6 @@ export default function OnboardingStory({ onFinish }: { onFinish: () => void }) 
                 </div>
                 <div className={styles["prompt"]}>
                   <strong className={styles["dark"]}>Scan products for sugar</strong>
-                  <p className={styles["sub"]}>Point your camera at a shelf to check what&apos;s inside</p>
                   <button className={styles["on-light"]}>Start scanning</button>
                 </div>
               </div>
