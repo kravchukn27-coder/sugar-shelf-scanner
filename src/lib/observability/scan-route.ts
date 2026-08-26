@@ -1,7 +1,7 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 
-type ScanRoute = "preflight" | "analyze";
+type ScanRoute = "preflight" | "analyze" | "recovery_label";
 
 type ScanRouteTiming = {
   route: ScanRoute;

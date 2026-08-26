@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
+import { normalizeText } from "./normalization";
 
 /**
  * A user contribution is evidence for a curator, never a catalog record.
@@ -12,16 +14,47 @@ function validGtin(value: string): boolean {
   return (10 - (sum % 10)) % 10 === Number(value.at(-1));
 }
 
+const nutritionValueSchema = z.number().finite().min(0).max(100).nullable().default(null);
+const nutritionFieldConfidenceSchema = z.object({
+  energyKcal: z.number().finite().min(0).max(1).nullable(),
+  proteinPer100g: z.number().finite().min(0).max(1).nullable(),
+  fatPer100g: z.number().finite().min(0).max(1).nullable(),
+  carbohydratesPer100g: z.number().finite().min(0).max(1).nullable(),
+  sugarPer100g: z.number().finite().min(0).max(1).nullable(),
+}).strict().nullable().default(null);
+
 export const catalogProposalRequestSchema = z.object({
-  gtin: z.string().refine(validGtin, "Expected a valid EAN, UPC, or GTIN"),
+  gtin: z.string().refine(validGtin, "Expected a valid EAN, UPC, or GTIN").nullable().default(null),
   brand: z.string().trim().min(1).max(120),
   name: z.string().trim().min(1).max(160),
   packSize: z.string().trim().min(1).max(40).nullable(),
-  sugarPer100g: z.number().min(0).max(100).nullable(),
-  proteinPer100g: z.number().min(0).max(100).nullable(),
-  labelSeenLocally: z.boolean(),
+  energyKcal: z.number().finite().min(0).max(2000).nullable().default(null),
+  proteinPer100g: nutritionValueSchema,
+  fatPer100g: nutritionValueSchema,
+  carbohydratesPer100g: nutritionValueSchema,
+  sugarPer100g: nutritionValueSchema,
+  // Retained for the pre-recovery form. It is only a boolean observation and
+  // never represents OCR text or image retention.
+  labelSeenLocally: z.boolean().default(false),
+  intakeProvenance: z.enum(["user_entered", "gemini_label"]).default("user_entered"),
+  labelCaptureConsented: z.boolean().default(false),
+  nutritionFieldConfidence: nutritionFieldConfidenceSchema,
+}).strict().superRefine((proposal, context) => {
+  if (proposal.intakeProvenance === "gemini_label" && !proposal.labelCaptureConsented) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["labelCaptureConsented"], message: "Label extraction requires explicit capture consent" });
+  }
 });
 export type CatalogProposalRequest = z.infer<typeof catalogProposalRequestSchema>;
+
+/**
+ * A label-first proposal has no global identifier. Hashing the consistently
+ * normalised user-confirmed identity gives the review queue a bounded duplicate
+ * key without storing additional raw capture material.
+ */
+export function proposalIdentityDedupeKey(proposal: Pick<CatalogProposalRequest, "brand" | "name" | "packSize">): string {
+  const identity = [proposal.brand, proposal.name, proposal.packSize ?? ""].map(normalizeText).join("|");
+  return createHash("sha256").update(`sugar-shelf-scanner:proposal:${identity}`).digest("hex");
+}
 
 export const catalogProposalResponseSchema = z.object({
   proposalId: z.string().uuid(),
@@ -33,12 +66,12 @@ export interface ProposalQueryExecutor {
 }
 
 export class PendingCatalogProposalExistsError extends Error {
-  public constructor() { super("A pending proposal already exists for this GTIN"); }
+  public constructor() { super("A pending proposal already exists for this identity"); }
 }
 
 export function proposalSaveFailure(error: unknown): { status: 409 | 503; message: string } {
   return error instanceof PendingCatalogProposalExistsError
-    ? { status: 409, message: "This barcode is already waiting for curator review." }
+    ? { status: 409, message: "This product is already waiting for curator review." }
     : { status: 503, message: "Couldn’t save your suggestion. Please try again later." };
 }
 
@@ -47,19 +80,29 @@ export async function storePendingCatalogProposal(db: ProposalQueryExecutor, pro
     const result = await db.query<{ id: string }>(`
     INSERT INTO catalog_proposals (
       id, status, barcode_gtin, proposed_brand, proposed_name, proposed_pack_size,
-      sugar_per_100g, protein_per_100g, label_seen_locally
+      identity_dedupe_key, energy_kcal_per_100g, protein_per_100g, fat_per_100g,
+      carbohydrates_per_100g, sugar_per_100g, label_seen_locally,
+      intake_provenance, label_capture_consented, nutrition_field_confidence
     ) VALUES (
-      gen_random_uuid(), 'pending_review', $1, $2, $3, $4, $5, $6, $7
+      gen_random_uuid(), 'pending_review', $1, $2, $3, $4, $5, $6, $7, $8,
+      $9, $10, $11, $12, $13, $14
     )
     RETURNING id
     `, [
-    proposal.gtin,
-    proposal.brand,
-    proposal.name,
-    proposal.packSize,
-    proposal.sugarPer100g,
-    proposal.proteinPer100g,
-    proposal.labelSeenLocally,
+      proposal.gtin,
+      proposal.brand,
+      proposal.name,
+      proposal.packSize,
+      proposalIdentityDedupeKey(proposal),
+      proposal.energyKcal,
+      proposal.proteinPer100g,
+      proposal.fatPer100g,
+      proposal.carbohydratesPer100g,
+      proposal.sugarPer100g,
+      proposal.labelSeenLocally,
+      proposal.intakeProvenance,
+      proposal.labelCaptureConsented,
+      proposal.nutritionFieldConfidence,
     ]);
     const id = result.rows[0]?.id;
     if (!id) throw new Error("Proposal insert returned no id");

@@ -5,7 +5,7 @@
  * OCR text, product candidates, provider bodies, or credentials here. Railway
  * collects stdout, so every field must be safe to retain outside the request.
  */
-export type VisionOperation = "preflight" | "analyze";
+export type VisionOperation = "preflight" | "analyze" | "nutrition_label";
 export type VisionOutcome = "success" | "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response" | "not_configured" | "unexpected_error";
 
 type VisionTelemetry = {

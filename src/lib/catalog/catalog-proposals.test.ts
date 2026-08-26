@@ -1,15 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { catalogProposalRequestSchema, createProposalRateLimiter, PendingCatalogProposalExistsError, proposalSaveFailure, storePendingCatalogProposal } from "./catalog-proposals";
+import { catalogProposalRequestSchema, createProposalRateLimiter, PendingCatalogProposalExistsError, proposalIdentityDedupeKey, proposalSaveFailure, storePendingCatalogProposal } from "./catalog-proposals";
 
-const valid = { gtin: "8411327013376", brand: "Example", name: "Example drink", packSize: "330 ml", sugarPer100g: 4.2, proteinPer100g: null, labelSeenLocally: true };
+const valid = { gtin: "8411327013376", brand: "Example", name: "Example drink", packSize: "330 ml", energyKcal: 30, sugarPer100g: 4.2, proteinPer100g: null, fatPer100g: 0, carbohydratesPer100g: 7, labelSeenLocally: true, intakeProvenance: "user_entered" as const, labelCaptureConsented: false, nutritionFieldConfidence: null };
 
-test("catalog proposals require a valid barcode, user-entered identity, and bounded nutrition", () => {
+test("catalog proposals accept GTIN or label-first identity, with all five bounded nutrition fields", () => {
   assert.deepEqual(catalogProposalRequestSchema.parse(valid), valid);
   assert.equal(catalogProposalRequestSchema.safeParse({ ...valid, gtin: "not-a-code" }).success, false);
   assert.equal(catalogProposalRequestSchema.safeParse({ ...valid, gtin: "8411327013377" }).success, false);
   assert.equal(catalogProposalRequestSchema.safeParse({ ...valid, brand: "" }).success, false);
   assert.equal(catalogProposalRequestSchema.safeParse({ ...valid, sugarPer100g: 101 }).success, false);
+  assert.equal(catalogProposalRequestSchema.safeParse({ ...valid, energyKcal: 2001 }).success, false);
+  assert.deepEqual(catalogProposalRequestSchema.parse({ ...valid, gtin: null }).gtin, null);
+  assert.equal(catalogProposalRequestSchema.safeParse({ ...valid, intakeProvenance: "gemini_label", labelCaptureConsented: false }).success, false);
+  assert.equal(catalogProposalRequestSchema.safeParse({ ...valid, rawOcr: "do not accept this" }).success, false);
+});
+
+test("label-first dedupe key is stable across harmless identity formatting", () => {
+  assert.equal(
+    proposalIdentityDedupeKey({ brand: "  Café Brand ", name: "Milk  Drink", packSize: "330 ML" }),
+    proposalIdentityDedupeKey({ brand: "cafe brand", name: "milk drink", packSize: "330 ml" }),
+  );
 });
 
 test("proposal rate limiter is bounded per requester and window", () => {
@@ -27,7 +38,7 @@ test("proposal storage only inserts a pending review record", async () => {
   assert.equal(id, "e25bd8fc-bb0d-4c4d-a35a-fb7c4404e336");
   assert.match(sql, /'pending_review'/);
   assert.equal(sql.includes("products"), false);
-  assert.deepEqual(parameters, ["8411327013376", "Example", "Example drink", "330 ml", 4.2, null, true]);
+  assert.deepEqual(parameters, ["8411327013376", "Example", "Example drink", "330 ml", proposalIdentityDedupeKey(valid), 30, null, 0, 7, 4.2, true, "user_entered", false, null]);
 });
 
 test("a duplicate pending GTIN becomes a safe idempotency outcome", async () => {
@@ -35,6 +46,6 @@ test("a duplicate pending GTIN becomes a safe idempotency outcome", async () => 
     storePendingCatalogProposal({ query: async () => { const error = Object.assign(new Error("duplicate"), { code: "23505" }); throw error; } }, valid),
     PendingCatalogProposalExistsError,
   );
-  assert.deepEqual(proposalSaveFailure(new PendingCatalogProposalExistsError()), { status: 409, message: "This barcode is already waiting for curator review." });
+  assert.deepEqual(proposalSaveFailure(new PendingCatalogProposalExistsError()), { status: 409, message: "This product is already waiting for curator review." });
   assert.equal(proposalSaveFailure(new Error("database unavailable")).status, 503);
 });
