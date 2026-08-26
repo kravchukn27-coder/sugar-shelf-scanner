@@ -25,7 +25,10 @@ test("groups confirmed repeats by stable catalog product id and unions their box
     name: "Extra",
     packSize: "355 ml",
     imageUrl: null,
+    energyKcalPer100g: null,
     proteinPer100g: null,
+    fatPer100g: null,
+    carbohydratesPer100g: null,
     score: { band: "green" as const, sugarPer100g: 1.2, source: "catalog" as const },
   };
   const first = detection({ id: "a", status: "confirmed", product, score: product.score, box: { x: 0.1, y: 0.2, width: 0.2, height: 0.3 } });
@@ -42,7 +45,7 @@ test("groups confirmed repeats by stable catalog product id and unions their box
 
 test("does not group distinct confirmed products even when their visible names match", () => {
   const baseProduct = {
-    gtin: null, brand: "Brand", name: "Original", packSize: null, imageUrl: null, proteinPer100g: null,
+    gtin: null, brand: "Brand", name: "Original", packSize: null, imageUrl: null, energyKcalPer100g: null, proteinPer100g: null, fatPer100g: null, carbohydratesPer100g: null,
     score: { band: "yellow" as const, sugarPer100g: 4, source: "catalog" as const },
   };
   const groups = groupRepeatedDetections([

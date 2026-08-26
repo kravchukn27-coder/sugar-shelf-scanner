@@ -10,7 +10,10 @@ test("serializes catalog provenance without inventing a remote verification date
     name: "Example drink",
     packSize: "330 ml",
     imageUrl: null,
+    energyKcalPer100g: null,
     proteinPer100g: 0,
+    fatPer100g: null,
+    carbohydratesPer100g: null,
     score: { band: "yellow", sugarPer100g: 6, source: "catalog" },
     provenance: {
       source: "open_food_facts",

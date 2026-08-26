@@ -46,11 +46,13 @@ async function upsertApprovedProduct(db: SqlQueryExecutor, entry: ApprovedCatalo
     ON CONFLICT (product_id, source, source_record_id) DO UPDATE SET source_url = EXCLUDED.source_url,
       observed_at = EXCLUDED.observed_at, verified_at = EXCLUDED.verified_at`,
   [provenanceId, productId, product.id, sourceUrl, importedAt]);
-  await db.query(`INSERT INTO nutrition_facts (product_id, sugar_per_100g, protein_per_100g, provenance_id)
-    VALUES ($1, $2, $3, $4)
+  await db.query(`INSERT INTO nutrition_facts (product_id, sugar_per_100g, protein_per_100g, energy_kcal_per_100g, fat_per_100g, carbohydrates_per_100g, provenance_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     ON CONFLICT (product_id) DO UPDATE SET sugar_per_100g = EXCLUDED.sugar_per_100g,
-      protein_per_100g = EXCLUDED.protein_per_100g, provenance_id = EXCLUDED.provenance_id`,
-  [productId, product.score.sugarPer100g, product.proteinPer100g, provenanceId]);
+      protein_per_100g = EXCLUDED.protein_per_100g, energy_kcal_per_100g = EXCLUDED.energy_kcal_per_100g,
+      fat_per_100g = EXCLUDED.fat_per_100g, carbohydrates_per_100g = EXCLUDED.carbohydrates_per_100g,
+      provenance_id = EXCLUDED.provenance_id`,
+  [productId, product.score.sugarPer100g, product.proteinPer100g, product.energyKcalPer100g, product.fatPer100g, product.carbohydratesPer100g, provenanceId]);
   const allAliases = new Set([product.brand, product.name, `${product.brand ?? ""} ${product.name}`, ...aliases].filter((alias): alias is string => Boolean(alias?.trim())));
   for (const alias of allAliases) {
     await db.query(`INSERT INTO product_aliases (id, product_id, alias_type, alias, normalized_alias)

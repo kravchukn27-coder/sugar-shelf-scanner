@@ -33,6 +33,16 @@ identifiers, nutrition and feedback tables. Migration
 `provenance`, and `nutrition_facts`. The importer is idempotent and uses stable
 UUIDs: `npm run catalog:import` imports only `approved-spain.ts`, not Markdown.
 
+Migration `005_reviewed_nutrition_profile.sql` extends `nutrition_facts` with
+nullable `energy_kcal_per_100g`, `fat_per_100g` and `carbohydrates_per_100g`,
+alongside the existing sugar and protein columns. Sugar remains the only value
+that has always been mandatory for a `confirmed` result; the three added
+fields are optional supporting facts, and a `null` renders as “Not confirmed”
+in product Details rather than as zero. As of this migration, all 19 currently
+approved Spain SKUs have these three fields as `null` — they have not yet been
+curator-verified against the package or an authoritative source. Populating
+them is a separate curator task, not something Gemini/AI may infer.
+
 ## Production activation checklist
 
 **Status: completed on 26 August 2026.** Production health reports `ready`

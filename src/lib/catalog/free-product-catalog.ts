@@ -10,7 +10,7 @@ type OpenFoodFactsProduct = {
   product_name?: string;
   brands?: string;
   quantity?: string;
-  nutriments?: { sugars_100g?: number; proteins_100g?: number };
+  nutriments?: { sugars_100g?: number; proteins_100g?: number; "energy-kcal_100g"?: number; fat_100g?: number; carbohydrates_100g?: number };
 };
 
 type UsdaFood = {
@@ -21,7 +21,7 @@ type UsdaFood = {
   gtinUpc?: string;
   servingSize?: number;
   servingSizeUnit?: string;
-  labelNutrients?: { sugars?: { value?: number }; protein?: { value?: number } };
+  labelNutrients?: { sugars?: { value?: number }; protein?: { value?: number }; calories?: { value?: number }; fat?: { value?: number }; carbohydrates?: { value?: number } };
 };
 
 const REMOTE_TIMEOUT_MS = 2_250;
@@ -65,7 +65,10 @@ function openFoodFactsProduct(product: OpenFoodFactsProduct, observedAt: string)
     // We identify from text and UPC first. Do not ingest or persist source photos.
     imageUrl: null,
     referenceImages: [],
+    energyKcalPer100g: product.nutriments?.["energy-kcal_100g"] ?? null,
     proteinPer100g: product.nutriments?.proteins_100g ?? null,
+    fatPer100g: product.nutriments?.fat_100g ?? null,
+    carbohydratesPer100g: product.nutriments?.carbohydrates_100g ?? null,
     score: createSugarScore(typeof sugars === "number" ? sugars : null, "catalog"),
     provenance: {
       source: "open_food_facts",
@@ -89,7 +92,10 @@ function usdaFoodProduct(food: UsdaFood, observedAt: string): CatalogProduct | n
     packSize: food.servingSize && food.servingSizeUnit ? `${food.servingSize} ${food.servingSizeUnit}` : null,
     imageUrl: null,
     referenceImages: [],
+    energyKcalPer100g: per100g(food.labelNutrients?.calories?.value, food.servingSize, food.servingSizeUnit),
     proteinPer100g: per100g(food.labelNutrients?.protein?.value, food.servingSize, food.servingSizeUnit),
+    fatPer100g: per100g(food.labelNutrients?.fat?.value, food.servingSize, food.servingSizeUnit),
+    carbohydratesPer100g: per100g(food.labelNutrients?.carbohydrates?.value, food.servingSize, food.servingSizeUnit),
     score: createSugarScore(per100g(food.labelNutrients?.sugars?.value, food.servingSize, food.servingSizeUnit), "catalog"),
     provenance: {
       source: "usda_food_data_central",

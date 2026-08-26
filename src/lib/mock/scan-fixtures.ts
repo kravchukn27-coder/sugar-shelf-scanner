@@ -16,7 +16,7 @@ export function getMockShelfScan(clientFrameId: string): AnalyzeScanResponse {
         status: "confirmed",
         visualCandidate: { brand: "Chobani", name: "Zero Sugar Greek Yogurt", packSize: "5.3 oz" },
         score: { band: "green", sugarPer100g: 2.7, source: "catalog" },
-        product: { id: "demo-chobani-zero-sugar", gtin: "818290019065", brand: "Chobani", name: "Zero Sugar Greek Yogurt", packSize: "5.3 oz", imageUrl: null, proteinPer100g: 10.6, score: { band: "green", sugarPer100g: 2.7, source: "catalog" } },
+        product: { id: "demo-chobani-zero-sugar", gtin: "818290019065", brand: "Chobani", name: "Zero Sugar Greek Yogurt", packSize: "5.3 oz", imageUrl: null, energyKcalPer100g: 59, proteinPer100g: 10.6, fatPer100g: 0, carbohydratesPer100g: 4, score: { band: "green", sugarPer100g: 2.7, source: "catalog" } },
         estimateReason: null,
       },
       {

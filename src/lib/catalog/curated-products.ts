@@ -11,6 +11,11 @@ function product(
   packSize: string,
   sugarPer100g: number,
   proteinPer100g: number,
+  // Not yet curator-verified against the package for these entries; kept
+  // null rather than guessed. See docs/catalog-data.md contribution policy.
+  energyKcalPer100g: number | null = null,
+  fatPer100g: number | null = null,
+  carbohydratesPer100g: number | null = null,
 ): CatalogProduct {
   return {
     id,
@@ -20,7 +25,10 @@ function product(
     packSize,
     imageUrl: null,
     referenceImages: [],
+    energyKcalPer100g,
     proteinPer100g,
+    fatPer100g,
+    carbohydratesPer100g,
     score: createSugarScore(sugarPer100g, "catalog"),
     provenance: { source: "curated", sourceRecordId: id, observedAt: VERIFIED_AT, lastVerifiedAt: VERIFIED_AT },
   };

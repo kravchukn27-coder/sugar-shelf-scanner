@@ -40,7 +40,10 @@ export const productSummarySchema = z.object({
   name: z.string().min(1),
   packSize: z.string().nullable(),
   imageUrl: z.string().url().nullable(),
+  energyKcalPer100g: z.number().nonnegative().nullable(),
   proteinPer100g: z.number().nonnegative().nullable(),
+  fatPer100g: z.number().nonnegative().nullable(),
+  carbohydratesPer100g: z.number().nonnegative().nullable(),
   score: scoreSchema,
   // Estimates and unresolved visual detections have no catalog provenance.
   provenance: productProvenanceSchema.optional(),

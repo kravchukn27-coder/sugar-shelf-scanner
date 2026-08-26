@@ -18,6 +18,9 @@ type ProductRow = {
   image_url: string | null;
   sugar_per_100g: number | string | null;
   protein_per_100g: number | string | null;
+  energy_kcal_per_100g: number | string | null;
+  fat_per_100g: number | string | null;
+  carbohydrates_per_100g: number | string | null;
   nutrition_source: "curated" | "open_food_facts" | "usda_food_data_central" | "commercial" | null;
   source_record_id: string | null;
   observed_at: string | null;
@@ -40,7 +43,10 @@ function fromRow(row: ProductRow): CatalogProduct {
     packSize: row.canonical_pack_size,
     imageUrl: row.image_url,
     referenceImages: [],
+    energyKcalPer100g: numberOrNull(row.energy_kcal_per_100g),
     proteinPer100g: numberOrNull(row.protein_per_100g),
+    fatPer100g: numberOrNull(row.fat_per_100g),
+    carbohydratesPer100g: numberOrNull(row.carbohydrates_per_100g),
     score: createSugarScore(sugar, sugar === null ? "unavailable" : "catalog"),
     provenance: {
       source: row.nutrition_source ?? "curated",
@@ -57,7 +63,8 @@ const PRODUCT_SELECT = `
   SELECT p.id, p.canonical_brand, p.canonical_name, p.canonical_flavour,
          p.canonical_pack_size, p.image_url,
          identifier.value AS gtin,
-         n.sugar_per_100g, n.protein_per_100g, provenance.source AS nutrition_source,
+         n.sugar_per_100g, n.protein_per_100g, n.energy_kcal_per_100g, n.fat_per_100g,
+         n.carbohydrates_per_100g, provenance.source AS nutrition_source,
          provenance.source_record_id, provenance.observed_at, provenance.verified_at
   FROM products p
   LEFT JOIN LATERAL (
