@@ -11,6 +11,7 @@ small and prevents historical notes from being treated as requirements.
 | Reviewed SKU data, matching, PostgreSQL and contribution policy | [catalog-data.md](catalog-data.md) |
 | Railway activation, deploy and observability operations | [operations.md](operations.md) |
 | Temporary Gemini token measurement | [gemini-usage-observability.md](gemini-usage-observability.md) |
+| Gemini speed/quality/token-efficiency research (closed) | [appendix/gemini-speed-token-efficiency-research.md](appendix/gemini-speed-token-efficiency-research.md) |
 | Superseded working-plan context | [archive/2026-08-26-plan-history.md](archive/2026-08-26-plan-history.md) |
 
 `CATALOG_REVIEW_SPAIN.md` is the human review table. The executable reviewed
