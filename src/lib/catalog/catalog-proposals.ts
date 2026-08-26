@@ -56,14 +56,27 @@ export function proposalIdentityDedupeKey(proposal: Pick<CatalogProposalRequest,
   return createHash("sha256").update(`sugar-shelf-scanner:proposal:${identity}`).digest("hex");
 }
 
+/**
+ * `outcome` is intentionally explicit: a client may acknowledge only a row
+ * that PostgreSQL has returned as pending review. It must never infer durable
+ * acceptance from a locally assembled request.
+ */
 export const catalogProposalResponseSchema = z.object({
+  outcome: z.literal("created"),
   proposalId: z.string().uuid(),
   status: z.literal("pending_review"),
-});
+}).strict();
+
+export const catalogProposalDuplicateResponseSchema = z.object({
+  outcome: z.literal("already_pending_review"),
+  status: z.literal("pending_review"),
+}).strict();
 
 export interface ProposalQueryExecutor {
   query<Row extends Record<string, unknown>>(sql: string, parameters?: readonly unknown[]): Promise<{ rows: Row[] }>;
 }
+
+export type PendingCatalogProposal = z.infer<typeof catalogProposalResponseSchema>;
 
 export class PendingCatalogProposalExistsError extends Error {
   public constructor() { super("A pending proposal already exists for this identity"); }
@@ -75,9 +88,9 @@ export function proposalSaveFailure(error: unknown): { status: 409 | 503; messag
     : { status: 503, message: "Couldn’t save your suggestion. Please try again later." };
 }
 
-export async function storePendingCatalogProposal(db: ProposalQueryExecutor, proposal: CatalogProposalRequest): Promise<string> {
+export async function storePendingCatalogProposal(db: ProposalQueryExecutor, proposal: CatalogProposalRequest): Promise<PendingCatalogProposal> {
   try {
-    const result = await db.query<{ id: string }>(`
+    const result = await db.query<{ id: string; status: string }>(`
     INSERT INTO catalog_proposals (
       id, status, barcode_gtin, proposed_brand, proposed_name, proposed_pack_size,
       identity_dedupe_key, energy_kcal_per_100g, protein_per_100g, fat_per_100g,
@@ -87,7 +100,7 @@ export async function storePendingCatalogProposal(db: ProposalQueryExecutor, pro
       gen_random_uuid(), 'pending_review', $1, $2, $3, $4, $5, $6, $7, $8,
       $9, $10, $11, $12, $13, $14
     )
-    RETURNING id
+    RETURNING id, status
     `, [
       proposal.gtin,
       proposal.brand,
@@ -104,9 +117,15 @@ export async function storePendingCatalogProposal(db: ProposalQueryExecutor, pro
       proposal.labelCaptureConsented,
       proposal.nutritionFieldConfidence,
     ]);
-    const id = result.rows[0]?.id;
-    if (!id) throw new Error("Proposal insert returned no id");
-    return id;
+    const row = result.rows[0];
+    // This parses the row returned by PostgreSQL, rather than trusting the
+    // SQL literal alone. If a migration or trigger changes the status, the
+    // request fails closed and the UI cannot claim it entered review.
+    return catalogProposalResponseSchema.parse({
+      outcome: "created",
+      proposalId: row?.id,
+      status: row?.status,
+    });
   } catch (error) {
     // PostgreSQL unique_violation. Keep the database-specific shape local so
     // the API can provide an idempotent response without exposing SQL errors.

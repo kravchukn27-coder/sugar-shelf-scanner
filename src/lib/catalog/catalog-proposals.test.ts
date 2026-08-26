@@ -34,11 +34,18 @@ test("proposal rate limiter is bounded per requester and window", () => {
 test("proposal storage only inserts a pending review record", async () => {
   let sql = "";
   let parameters: readonly unknown[] = [];
-  const id = await storePendingCatalogProposal({ query: async <Row extends Record<string, unknown>>(query: string, values?: readonly unknown[]) => { sql = query; parameters = values ?? []; return { rows: [{ id: "e25bd8fc-bb0d-4c4d-a35a-fb7c4404e336" }] as unknown as Row[] }; } }, valid);
-  assert.equal(id, "e25bd8fc-bb0d-4c4d-a35a-fb7c4404e336");
+  const persisted = await storePendingCatalogProposal({ query: async <Row extends Record<string, unknown>>(query: string, values?: readonly unknown[]) => { sql = query; parameters = values ?? []; return { rows: [{ id: "e25bd8fc-bb0d-4c4d-a35a-fb7c4404e336", status: "pending_review" }] as unknown as Row[] }; } }, valid);
+  assert.deepEqual(persisted, { outcome: "created", proposalId: "e25bd8fc-bb0d-4c4d-a35a-fb7c4404e336", status: "pending_review" });
   assert.match(sql, /'pending_review'/);
+  assert.match(sql, /RETURNING id, status/);
   assert.equal(sql.includes("products"), false);
   assert.deepEqual(parameters, ["8411327013376", "Example", "Example drink", "330 ml", proposalIdentityDedupeKey(valid), 30, null, 0, 7, 4.2, true, "user_entered", false, null]);
+});
+
+test("proposal storage fails closed when PostgreSQL does not return pending_review", async () => {
+  await assert.rejects(
+    storePendingCatalogProposal({ query: async <Row extends Record<string, unknown>>() => ({ rows: [{ id: "e25bd8fc-bb0d-4c4d-a35a-fb7c4404e336", status: "approved" }] as unknown as Row[] }) }, valid),
+  );
 });
 
 test("a duplicate pending GTIN becomes a safe idempotency outcome", async () => {
