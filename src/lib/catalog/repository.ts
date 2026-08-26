@@ -92,6 +92,43 @@ export class PostgresCatalogRepository implements CatalogRepository {
     return result.rows[0] ? fromRow(result.rows[0]) : null;
   }
 
+  /** Demo-only durable ingest for an exact, validated Open Food Facts barcode hit. */
+  public async upsertOpenFoodFactsBarcode(product: CatalogProduct): Promise<void> {
+    const gtin = product.gtin?.replace(/\D/g, "") ?? "";
+    const sugar = product.score.sugarPer100g;
+    if (!gtin || !product.name.trim() || typeof sugar !== "number" || !Number.isFinite(sugar) || sugar < 0 || sugar > 100) return;
+    const observedAt = product.provenance.observedAt;
+    await this.db.query(`WITH existing AS (
+      SELECT i.product_id, EXISTS (SELECT 1 FROM provenance p WHERE p.product_id = i.product_id AND p.source = 'curated') AS curated
+      FROM identifiers i WHERE i.type IN ('gtin', 'upc', 'ean') AND i.value = $1 LIMIT 1
+    ), target AS (
+      SELECT COALESCE((SELECT product_id FROM existing), gen_random_uuid()) AS product_id,
+             COALESCE((SELECT curated FROM existing), false) AS curated
+    ), product_write AS (
+      INSERT INTO products (id, canonical_brand, canonical_name, canonical_flavour, canonical_pack_size, normalized_search_text, image_url)
+      SELECT product_id, $2, $3, NULL, $4, $5, NULL FROM target WHERE NOT curated
+      ON CONFLICT (id) DO UPDATE SET canonical_brand = EXCLUDED.canonical_brand, canonical_name = EXCLUDED.canonical_name,
+        canonical_pack_size = EXCLUDED.canonical_pack_size, normalized_search_text = EXCLUDED.normalized_search_text, updated_at = now()
+      RETURNING id
+    ), identifier_write AS (
+      INSERT INTO identifiers (id, product_id, type, value)
+      SELECT gen_random_uuid(), product_id, 'gtin', $1 FROM target WHERE NOT curated
+      ON CONFLICT (type, value) DO NOTHING
+    ), provenance_write AS (
+      INSERT INTO provenance (id, product_id, source, source_record_id, source_url, observed_at, verified_at)
+      SELECT gen_random_uuid(), product_id, 'open_food_facts', $1, $6, $7::timestamptz, NULL FROM target WHERE NOT curated
+      ON CONFLICT (product_id, source, source_record_id) DO UPDATE SET source_url = EXCLUDED.source_url, observed_at = EXCLUDED.observed_at
+      RETURNING id, product_id
+    ) INSERT INTO nutrition_facts (product_id, sugar_per_100g, protein_per_100g, energy_kcal_per_100g, fat_per_100g, carbohydrates_per_100g, provenance_id)
+      SELECT p.product_id, $8, $9, $10, $11, $12, p.id FROM provenance_write p
+      ON CONFLICT (product_id) DO UPDATE SET sugar_per_100g = EXCLUDED.sugar_per_100g, protein_per_100g = EXCLUDED.protein_per_100g,
+        energy_kcal_per_100g = EXCLUDED.energy_kcal_per_100g, fat_per_100g = EXCLUDED.fat_per_100g,
+        carbohydrates_per_100g = EXCLUDED.carbohydrates_per_100g, provenance_id = EXCLUDED.provenance_id`, [
+      gtin, product.brand, product.name, product.packSize, normalizeSearchText({ brand: product.brand, name: product.name, packSize: product.packSize }),
+      `https://world.openfoodfacts.org/product/${gtin}`, observedAt, sugar, product.proteinPer100g, product.energyKcalPer100g, product.fatPer100g, product.carbohydratesPer100g,
+    ]);
+  }
+
   public async searchCandidates(candidate: VisualCandidate, limit = 3): Promise<CatalogMatch[]> {
     const searchText = normalizeSearchText(candidate);
     if (!searchText) return [];

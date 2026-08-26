@@ -4,7 +4,7 @@ import "./barcode-recovery.css";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import OnboardingStory from "./onboarding-story";
-import lensStyles from "./camera-lens.module.css";
+import cameraControlsStyles from "./camera-lens.module.css";
 import type { AnalyzeScanResponse, Detection, PreflightScanResponse } from "@/lib/contracts/scan";
 import { formatSugarPer100g } from "@/lib/scoring/format-sugar";
 import { createSugarScore } from "@/lib/scoring/sugar-score";
@@ -35,7 +35,6 @@ const displaySugar = (value: number | null | undefined) => formatSugarPer100g(va
 function Chevron({ up = false }: { up?: boolean }) { return <svg aria-hidden="true" className={up ? "chevron up" : "chevron"} viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>; }
 function CloseIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17" /></svg>; }
 function TorchIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 3h6l-1 6h3l-7 12 1-8H8z" /></svg>; }
-function ZoomInIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="5.5" /><path d="M10.5 7.5v6M7.5 10.5h6M15 15l4 4" /></svg>; }
 function BarcodeIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5v14M7 5v14M10 5v14M14 5v14M17 5v14M20 5v14M12 5v14" /></svg>; }
 type RecoveryInfo = { id: string; state: RecoveryState; labelSeen: boolean; barcode: string | null };
 
@@ -55,7 +54,7 @@ export default function HomePage() {
   const [sheet, setSheet] = useState(false), [selected, setSelected] = useState<string | null>(null);
   const [torchAvailable, setTorchAvailable] = useState(false), [torchOn, setTorchOn] = useState(false);
   const [cameraControls, setCameraControls] = useState<CameraControls>({ torchAvailable: false, standardZoom: null, closerZoom: null });
-  const [closerViewOn, setCloserViewOn] = useState(false);
+  const [trueOneXCapture, setTrueOneXCapture] = useState(false);
   const [recovery, setRecovery] = useState<RecoveryInfo | null>(null);
   const [recoveryCamera, setRecoveryCamera] = useState<{ id: string; mode: "package" | "label" } | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
@@ -83,8 +82,9 @@ export default function HomePage() {
       if (!beaconSent) void fetch("/api/scan/metrics", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => undefined);
     });
   }, []);
-  const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); setCameraDiagnostics(null); setCameraControls({ torchAvailable: false, standardZoom: null, closerZoom: null }); setCloserViewOn(false); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
+  const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); setCameraDiagnostics(null); setCameraControls({ torchAvailable: false, standardZoom: null, closerZoom: null }); setTrueOneXCapture(false); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
   const clearResult = useCallback(() => { setRecovery(null); setRecoveryCamera(null); setRecoveryBusy(false); setRecoveryMessage(null); setRecoverySubmissionBanner(null); setLabelDraft(null); setScan(null); setFrozen(null); setFailure(null); setSheet(false); setSelected(null); setUploadBusy(false); setLiveHint(null); }, []);
+  const turnTorchOffAfterCapture = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; if (!torchOn || !track) return; try { await track.applyConstraints({ advanced: [{ torch: false } as unknown as MediaTrackConstraintSet] }); setTorchOn(false); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
 
   const capture = useCallback((source: HTMLVideoElement | HTMLImageElement, width: number, quality: number, zoom = 1) => {
     const canvas = canvasRef.current; const w = "videoWidth" in source ? source.videoWidth : source.naturalWidth; const h = "videoHeight" in source ? source.videoHeight : source.naturalHeight;
@@ -99,12 +99,11 @@ export default function HomePage() {
   }, []);
 
   const analyze = useCallback(async (source: HTMLVideoElement | HTMLImageElement, id: number) => {
-    // Keep the live camera at its standard field of view. Once preflight has
-    // positively identified a product, this modest centred crop gives Gemini
-    // a closer frozen frame without selecting a different physical lens.
+    // The default final frame uses a modest centred crop after preflight. The
+    // optional 1× control keeps it un-cropped for a direct framing comparison.
     const encodeStartedAt = performance.now();
-    const image = capture(source, 960, .7, 1.12); scannerMetrics.current.recordCaptureEncode(encodeStartedAt); if (!image || id !== session.current) return;
-    if (source instanceof HTMLVideoElement) setFrozen(image);
+    const image = capture(source, 960, .7, trueOneXCapture ? 1 : 1.12); scannerMetrics.current.recordCaptureEncode(encodeStartedAt); if (!image || id !== session.current) return;
+    if (source instanceof HTMLVideoElement) { setFrozen(image); void turnTorchOffAfterCapture(); }
     dispatch("CAPTURED");
     const controller = new AbortController(); abortRef.current = controller;
     const requestStartedAt = scannerMetrics.current.startRequest("analyze");
@@ -131,7 +130,7 @@ export default function HomePage() {
       if (id === session.current && source instanceof HTMLImageElement) setUploadBusy(false);
       if (id === session.current && abortRef.current === controller) { inFlight.current = false; abortRef.current = null; }
     }
-  }, [capture, completeScanMetrics, dispatch, noteMetricsCapability]);
+  }, [capture, completeScanMetrics, dispatch, noteMetricsCapability, trueOneXCapture, turnTorchOffAfterCapture]);
 
   const preflight = useCallback(async (source: HTMLVideoElement | HTMLImageElement) => {
     if (inFlight.current || sheet || !shouldRunScannerScheduler(state)) return;
@@ -195,7 +194,18 @@ export default function HomePage() {
   }, [clearResult, resetScanMetrics, stopStream]);
   const close = useCallback(() => { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
   const toggleTorch = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !torchOn; if (!track || !supportsTorch(track)) return setTorchAvailable(false); try { await track.applyConstraints({ advanced: [{ torch: next } as unknown as MediaTrackConstraintSet] }); setTorchOn(next); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
-  const toggleCloserView = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !closerViewOn; try { const applied = await applyCameraView(track, cameraControls, next ? "closer" : "standard"); if (!applied) { setCameraControls((current) => ({ ...current, closerZoom: null })); setCloserViewOn(false); return; } setCloserViewOn(next); setCameraDiagnostics(getCameraDiagnosticSnapshot(track)); } catch { setCameraControls((current) => ({ ...current, closerZoom: null })); setCloserViewOn(false); } }, [cameraControls, closerViewOn]);
+  const toggleTrueOneXCapture = useCallback(async () => {
+    const next = !trueOneXCapture;
+    if (next) {
+      const track = streamRef.current?.getVideoTracks()[0];
+      try {
+        const applied = await applyCameraView(track, cameraControls, "standard");
+        if (!applied) { setCameraControls((current) => ({ ...current, standardZoom: null })); return; }
+        setCameraDiagnostics(getCameraDiagnosticSnapshot(track));
+      } catch { setCameraControls((current) => ({ ...current, standardZoom: null })); return; }
+    }
+    setTrueOneXCapture(next);
+  }, [cameraControls, trueOneXCapture]);
   const retry = useCallback(() => { if (!uploadUrl) void start(); else { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; clearResult(); resetScanMetrics(); setUploadBusy(true); dispatch("RETRY"); } }, [clearResult, dispatch, resetScanMetrics, start, uploadUrl]);
   const startRecovery = useCallback((id: string, mode: "package" | "label" = "package") => {
     session.current += 1;
@@ -339,7 +349,7 @@ export default function HomePage() {
 
   return <>{showIntro && !recoveryActive && <OnboardingStory onFinish={() => setShowIntro(false)} />}<main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""} ${recoveryActive ? "recovery-active" : ""}`} aria-label={recoveryActive ? "Recovery camera" : "Sugar product scanner"}>
     {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video ref={videoRef} className="camera-preview" muted playsInline />}{frozen && !recoveryActive && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}{state !== "camera_off" && <div className="camera-vignette" />}
-    {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && (torchAvailable || cameraControls.closerZoom !== null) ? "" : "end"}`}><div className={lensStyles.controls}>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}{state === "live_searching" && cameraControls.closerZoom !== null ? <button className={`round-control ${closerViewOn ? lensStyles.active : ""}`} onClick={() => void toggleCloserView()} aria-label={closerViewOn ? "Use standard 1× view" : "Zoom in to 2×"} aria-pressed={closerViewOn}><ZoomInIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
+    {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && (torchAvailable || cameraControls.standardZoom !== null) ? "" : "end"}`}><div className={cameraControlsStyles.controls}>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}{state === "live_searching" && cameraControls.standardZoom !== null ? <button className={`round-control ${trueOneXCapture ? cameraControlsStyles.active : ""}`} onClick={() => void toggleTrueOneXCapture()} aria-label={trueOneXCapture ? "Use default cropped capture" : "Use true 1× capture"} aria-pressed={trueOneXCapture}>1×</button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
     {groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { setSelected(group.detection.id); setSheet(true); }} />)}
     {state === "live_searching" && !uploadUrl && <><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint">{liveHint ?? "Scan a product to see how much sugar it contains"}</p></>}
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}

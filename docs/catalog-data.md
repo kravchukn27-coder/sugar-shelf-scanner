@@ -110,3 +110,17 @@ demo result. That temporary experience is not the production confirmation
 rule. A real `confirmed` catalog row requires manual curator review of the
 package/source and a provenance-backed import. The application must preserve
 that distinction in the data model and UI before public release.
+
+### Demo exception: durable exact Open Food Facts barcode records
+
+For the current demo only, a successful exact-GTIN Open Food Facts barcode
+lookup is persisted into the runtime PostgreSQL catalog with
+`open_food_facts` provenance. This makes the same barcode resolve after a
+process restart without another provider call. The ingest accepts only a valid
+GTIN, non-empty product name and bounded per-100g sugar value; it never stores
+source images or raw provider payloads and never overwrites a curated row.
+
+This is a deliberate temporary exception to the reviewed-only policy above.
+Before public launch, move external provider records behind a separate cache
+and manual-review workflow so only curator-approved records are represented as
+reviewed catalog facts.
