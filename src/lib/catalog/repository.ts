@@ -112,11 +112,11 @@ export class PostgresCatalogRepository implements CatalogRepository {
       RETURNING id
     ), identifier_write AS (
       INSERT INTO identifiers (id, product_id, type, value)
-      SELECT gen_random_uuid(), product_id, 'gtin', $1 FROM target WHERE NOT curated
+      SELECT gen_random_uuid(), id, 'gtin', $1 FROM product_write
       ON CONFLICT (type, value) DO NOTHING
     ), provenance_write AS (
       INSERT INTO provenance (id, product_id, source, source_record_id, source_url, observed_at, verified_at)
-      SELECT gen_random_uuid(), product_id, 'open_food_facts', $1, $6, $7::timestamptz, NULL FROM target WHERE NOT curated
+      SELECT gen_random_uuid(), id, 'open_food_facts', $1, $6, $7::timestamptz, NULL FROM product_write
       ON CONFLICT (product_id, source, source_record_id) DO UPDATE SET source_url = EXCLUDED.source_url, observed_at = EXCLUDED.observed_at
       RETURNING id, product_id
     ) INSERT INTO nutrition_facts (product_id, sugar_per_100g, protein_per_100g, energy_kcal_per_100g, fat_per_100g, carbohydrates_per_100g, provenance_id)
