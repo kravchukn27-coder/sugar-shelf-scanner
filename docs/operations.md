@@ -32,6 +32,22 @@ After import, smoke test confirmed results, an incorrect pack/variant, DB
 fallback behaviour and recovery. Keep the reviewed curated seed enabled as the
 safe fallback.
 
+### Production activation record — 26 August 2026
+
+- Migrations `001_catalog_foundation.sql`, `002_reviewed_catalog.sql`, and
+  `003_catalog_proposals.sql` were applied to the Railway PostgreSQL service.
+- The approved Spain import completed with 19 reviewed products.
+- Production health confirmed the active database catalog:
+
+  ```json
+  { "catalog": { "state": "ready", "reviewedProductCount": 19, "importComplete": true } }
+  ```
+
+- Database credentials were rotated after the operational setup. App services
+  must continue to use a Railway reference variable for `DATABASE_URL` and be
+  redeployed after a future credential rotation; never paste a connection URL
+  into the app's Variables.
+
 ## Usage metadata measurement
 
 The application does not currently log Gemini usage metadata. A future short

@@ -35,6 +35,10 @@ UUIDs: `npm run catalog:import` imports only `approved-spain.ts`, not Markdown.
 
 ## Production activation checklist
 
+**Status: completed on 26 August 2026.** Production health reports `ready`
+with 19 imported reviewed products. Keep the steps below as the recovery/runbook
+for a new environment or a restored database.
+
 1. Confirm the exact production PostgreSQL target and backup policy.
 2. Apply `001` (if absent), then `002_reviewed_catalog.sql`.
 3. Run `DATABASE_URL=<production URL> npm run catalog:import` from an approved
