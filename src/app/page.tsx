@@ -18,8 +18,8 @@ import type { BarcodeRecoveryResponse, NutritionLabelDraft, NutritionLabelRecove
 import { shouldOfferBarcodeRecovery } from "@/lib/recovery/recovery-ui";
 import { catalogProposalSubmissionOutcome } from "@/lib/recovery/catalog-proposal-ui";
 
-const PREFLIGHT_CANDIDATE_CONFIDENCE_THRESHOLD = 0.65;
 const FRAME_INTERVAL = 650;
+const PREFLIGHT_CANDIDATE_CONFIDENCE_THRESHOLD = 0.65;
 const clientScannerMetricsEnabled = process.env.NEXT_PUBLIC_SCANNER_METRICS_ENABLED === "true";
 const bandCopy = { green: "Low sugar", yellow: "Moderate sugar", orange: "High sugar", red: "Very high sugar", unknown: "Needs a check" } as const;
 const sourceCopy = { curated: "Sugar catalog", open_food_facts: "Open Food Facts", usda_food_data_central: "USDA FoodData Central", commercial: "Verified provider" } as const;
@@ -34,7 +34,7 @@ function BarcodeIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><pat
 type RecoveryInfo = { id: string; state: RecoveryState; labelSeen: boolean; barcode: string | null };
 
 export default function HomePage() {
-  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false);
+  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false);
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
   const [failure, setFailure] = useState<string | null>(null);
   const [scan, setScan] = useState<AnalyzeScanResponse | null>(null);
@@ -53,6 +53,7 @@ export default function HomePage() {
   const [recovery, setRecovery] = useState<RecoveryInfo | null>(null);
   const [recoveryCamera, setRecoveryCamera] = useState<{ id: string; mode: "package" | "label" } | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryCameraReady, setRecoveryCameraReady] = useState(false);
   const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
   const [labelDraft, setLabelDraft] = useState<NutritionLabelDraft | null>(null);
   const [showIntro, setShowIntro] = useState(true);
@@ -191,21 +192,34 @@ export default function HomePage() {
   const retry = useCallback(() => { if (!uploadUrl) void start(); else { session.current += 1; clearResult(); resetScanMetrics(); setUploadBusy(true); dispatch("RETRY"); } }, [clearResult, dispatch, resetScanMetrics, start, uploadUrl]);
   const startRecovery = useCallback((id: string, mode: "package" | "label" = "package") => {
     session.current += 1;
+    const recoverySession = session.current;
+    const recoveryToken = ++recoveryAttempt.current;
     scannerMetricsEnabled.current = false; scannerMetrics.current.discard();
     stopStream();
     setSheet(false); setFrozen(null); setRecovery({ id, state: "searching", labelSeen: false, barcode: null });
-    setRecoveryMessage(null); setLabelDraft(null); setRecoveryCamera({ id, mode });
+    setRecoveryMessage(null); setLabelDraft(null); setRecoveryCameraReady(false); setRecoveryCamera({ id, mode });
     void (async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia(rearCameraRequest());
-        if (!videoRef.current) return stream.getTracks().forEach((track) => track.stop());
+        if (recoverySession !== session.current || recoveryToken !== recoveryAttempt.current || !videoRef.current) return stream.getTracks().forEach((track) => track.stop());
+        const track = stream.getVideoTracks()[0];
+        try { await preferCameraCaptureQuality(track); } catch { /* Use the device-selected recovery capture quality. */ }
         streamRef.current = stream; videoRef.current.srcObject = stream; await videoRef.current.play();
-      } catch { setRecoveryMessage("Camera unavailable. Check permission and try again."); }
+        if (recoverySession !== session.current || recoveryToken !== recoveryAttempt.current) return stream.getTracks().forEach((cameraTrack) => cameraTrack.stop());
+        setRecoveryCameraReady(videoRef.current.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && videoRef.current.videoWidth > 0 && videoRef.current.videoHeight > 0);
+        if (videoRef.current.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) {
+          setRecoveryMessage("Camera is still starting…");
+          videoRef.current.addEventListener("loadeddata", () => {
+            if (recoverySession === session.current && recoveryToken === recoveryAttempt.current && videoRef.current?.videoWidth && videoRef.current.videoHeight) { setRecoveryCameraReady(true); setRecoveryMessage(null); }
+          }, { once: true });
+        }
+      } catch { if (recoverySession === session.current && recoveryToken === recoveryAttempt.current) { setRecoveryCameraReady(false); setRecoveryMessage("Camera unavailable. Check permission and try again."); } }
     })();
   }, [stopStream]);
   const captureRecovery = useCallback(async () => {
     const camera = recoveryCamera; const video = videoRef.current; const canvas = canvasRef.current;
-    if (!camera || !video || !canvas || recoveryBusy) return;
+    if (!camera || !video || !canvas || recoveryBusy || !recoveryCameraReady) return;
+    const recoveryToken = recoveryAttempt.current;
     setRecoveryBusy(true); setRecoveryMessage(camera.mode === "package" ? "Reading barcode on this device…" : "Reading the nutrition label…");
     try {
       const image = capture(video, 1280, .82);
@@ -213,11 +227,14 @@ export default function HomePage() {
       if (camera.mode === "package") {
         const response = await fetch(image); const blob = await response.blob();
         const barcode = await decodeLocalBarcode(blob);
+        if (recoveryToken !== recoveryAttempt.current) return;
         if (!barcode) { setRecoveryMessage("Barcode not recognised. Retake or photograph the nutrition label."); setRecovery((current) => current?.id === camera.id ? { ...current, state: "barcode_not_found" } : current); return; }
         setRecovery((current) => current?.id === camera.id ? { ...current, state: "barcode_found", barcode } : current);
         const lookup = await fetch("/api/scan/recover", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ gtin: barcode }) });
+        if (recoveryToken !== recoveryAttempt.current) return;
         if (!lookup.ok) throw new Error("lookup");
         const result = await lookup.json() as BarcodeRecoveryResponse;
+        if (recoveryToken !== recoveryAttempt.current) return;
         if (result.status === "confirmed" && result.product) {
           setScan((current) => current ? { ...current, detections: current.detections.map((detection) => detection.id === camera.id ? { ...detection, status: "confirmed", product: result.product, score: result.score, estimateReason: result.estimateReason, visualCandidate: { ...detection.visualCandidate, gtin: barcode } } : detection) } : current);
           setRecoveryCamera(null); stopStream(); setSheet(true); setSelected(camera.id);
@@ -226,13 +243,15 @@ export default function HomePage() {
         const consented = window.confirm("Send this single nutrition-label photo to Gemini for extraction? It is not stored by this app.");
         if (!consented) { setRecoveryMessage("Capture cancelled. Nothing was sent."); return; }
         const response = await fetch("/api/scan/recovery-label", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ imageBase64: image.split(",")[1], mimeType: "image/jpeg", labelCaptureConsented: true }) });
+        if (recoveryToken !== recoveryAttempt.current) return;
         const result = await response.json() as NutritionLabelRecoveryResponse;
+        if (recoveryToken !== recoveryAttempt.current) return;
         if (!response.ok || result.outcome === "unreadable") { setRecoveryMessage("Nutrition label was not readable. Retake for one new request."); return; }
         setLabelDraft(result.draft); setRecoveryMessage("Review the draft, edit any fields, then submit for curator review.");
       }
-    } catch { setRecoveryMessage("Couldn’t process this photo. Retake and try again."); }
-    finally { setRecoveryBusy(false); }
-  }, [capture, recoveryBusy, recoveryCamera, stopStream]);
+    } catch { if (recoveryToken === recoveryAttempt.current) setRecoveryMessage("Couldn’t process this photo. Retake and try again."); }
+    finally { if (recoveryToken === recoveryAttempt.current) setRecoveryBusy(false); }
+  }, [capture, recoveryBusy, recoveryCamera, recoveryCameraReady, stopStream]);
   function upload(file: File | undefined) {
     if (!file || uploadBusy) return;
     session.current += 1;
@@ -243,7 +262,7 @@ export default function HomePage() {
     setUploadUrl((old) => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(file); });
     setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
   }
-  useEffect(() => () => { session.current += 1; scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); }, [stopStream]);
+  useEffect(() => () => { session.current += 1; recoveryAttempt.current += 1; scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); }, [stopStream]);
   useEffect(() => setShowCameraDiagnostics(new URLSearchParams(window.location.search).has("cameraDebug")), []);
   useEffect(() => { if (state !== "captured_analyzing") { setAnalysisPhase("identifying"); return; } setAnalysisPhase("identifying"); const toCatalog = window.setTimeout(() => setAnalysisPhase("catalog"), 1500); const toSlow = window.setTimeout(() => setAnalysisPhase("slow"), 7000); return () => { window.clearTimeout(toCatalog); window.clearTimeout(toSlow); }; }, [state]);
   useEffect(() => { if (!shouldRunScannerScheduler(state) || sheet || uploadUrl || recoveryCamera) return; const timer = window.setInterval(() => { if (videoRef.current?.readyState && !inFlight.current) void preflight(videoRef.current); }, FRAME_INTERVAL); return () => window.clearInterval(timer); }, [preflight, recoveryCamera, sheet, state, uploadUrl]);
@@ -263,26 +282,28 @@ export default function HomePage() {
   }, [dispatch, preflight, sheet, state, uploadUrl]);
   const failed = state === "no_scene" || state === "error";
   const showAnalysisSpinner = state === "captured_analyzing" || (uploadUrl !== null && uploadBusy && state === "live_searching");
+  const recoveryActive = recoveryCamera !== null;
 
-  return <>{showIntro && <OnboardingStory onFinish={() => setShowIntro(false)} />}<main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""}`} aria-label="Sugar product scanner">
+  return <>{showIntro && !recoveryActive && <OnboardingStory onFinish={() => setShowIntro(false)} />}<main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""} ${recoveryActive ? "recovery-active" : ""}`} aria-label={recoveryActive ? "Recovery camera" : "Sugar product scanner"}>
     {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video ref={videoRef} className="camera-preview" muted playsInline />}{frozen && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}{state !== "camera_off" && <div className="camera-vignette" />}
-    <header className={`camera-controls ${state === "live_searching" && (torchAvailable || cameraControls.closerZoom !== null) ? "" : "end"}`}><div className={lensStyles.controls}>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}{state === "live_searching" && cameraControls.closerZoom !== null ? <button className={`round-control ${closerViewOn ? lensStyles.active : ""}`} onClick={() => void toggleCloserView()} aria-label={closerViewOn ? "Use standard 1× view" : "Zoom in to 2×"} aria-pressed={closerViewOn}><ZoomInIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
+    {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && (torchAvailable || cameraControls.closerZoom !== null) ? "" : "end"}`}><div className={lensStyles.controls}>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}{state === "live_searching" && cameraControls.closerZoom !== null ? <button className={`round-control ${closerViewOn ? lensStyles.active : ""}`} onClick={() => void toggleCloserView()} aria-label={closerViewOn ? "Use standard 1× view" : "Zoom in to 2×"} aria-pressed={closerViewOn}><ZoomInIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
     {groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { setSelected(group.detection.id); setSheet(true); }} />)}
     {state === "live_searching" && !uploadUrl && <><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint">{liveHint ?? "Point your camera at products"}</p></>}
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}
     {state === "camera_off" && <Prompt title="Scan products for sugar" action="Start scanning" onAction={() => void start()} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action="Try again" onAction={retry} failure />}
     {state === "captured_analyzing" && <CameraCopy>{analysisPhase === "identifying" ? "Product found — checking details…" : analysisPhase === "catalog" ? "Checking the catalog…" : "Taking a little longer than usual…"}</CameraCopy>}
     {state !== "camera_off" && state !== "captured_analyzing" && state !== "results" ? <label className={`gallery-button ${uploadBusy ? "busy" : ""}`} aria-label="Choose a product photo" aria-disabled={uploadBusy}><input type="file" accept="image/*" disabled={uploadBusy} onChange={(e) => { upload(e.target.files?.[0]); e.currentTarget.value = ""; }} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label> : null}
-    {showCameraDiagnostics && cameraDiagnostics ? <CameraDiagnostics snapshot={cameraDiagnostics} /> : null}
-    {recoveryCamera && <RecoveryCamera mode={recoveryCamera.mode} gtin={recovery?.barcode ?? null} busy={recoveryBusy} message={recoveryMessage} draft={labelDraft} onCapture={() => void captureRecovery()} onModeChange={(mode) => { setRecoveryCamera((current) => current ? { ...current, mode } : current); setLabelDraft(null); setRecoveryMessage(null); }} onRetake={() => { setLabelDraft(null); setRecoveryMessage(null); }} onClose={() => { setRecoveryCamera(null); stopStream(); setRecoveryMessage(null); }} onDraftChange={setLabelDraft} />}
-  </section>{state === "results" && <button className="result-handle" onClick={() => setSheet(true)}><span className="handle-dot found" /><span>{groups.length} products found</span><span className="handle-detail">Details</span><Chevron /></button>}{sheet && <ResultsSheet groups={groups} selectedId={selected} recovery={recovery} onRecover={startRecovery} onSelect={setSelected} onClose={() => { setSheet(false); setSelected(null); }} />}<canvas ref={canvasRef} className="hidden-canvas" /></main></>;
+    {showCameraDiagnostics && cameraDiagnostics ? <CameraDiagnostics snapshot={cameraDiagnostics} /> : null}</>}
+    {recoveryCamera && <RecoveryCamera key={`${recoveryCamera.id}-${recoveryCamera.mode}`} mode={recoveryCamera.mode} gtin={recovery?.barcode ?? null} allowLabel={recovery?.id === recoveryCamera.id && recovery.state === "barcode_not_found"} busy={recoveryBusy} cameraReady={recoveryCameraReady} message={recoveryMessage} draft={labelDraft} onCapture={() => void captureRecovery()} onModeChange={(mode) => { recoveryAttempt.current += 1; setRecoveryBusy(false); setRecoveryCamera((current) => current ? { ...current, mode } : current); setLabelDraft(null); setRecoveryMessage(null); }} onRetake={() => { recoveryAttempt.current += 1; setRecoveryBusy(false); setLabelDraft(null); setRecoveryMessage(null); }} onRestartCamera={() => startRecovery(recoveryCamera.id, recoveryCamera.mode)} onClose={() => { recoveryAttempt.current += 1; setRecoveryBusy(false); setRecoveryCameraReady(false); setRecoveryCamera(null); stopStream(); setRecoveryMessage(null); }} onDraftChange={setLabelDraft} />}
+  </section>{state === "results" && !recoveryActive && <button className="result-handle" onClick={() => setSheet(true)}><span className="handle-dot found" /><span>{groups.length} products found</span><span className="handle-detail">Details</span><Chevron /></button>}{sheet && !recoveryActive && <ResultsSheet groups={groups} selectedId={selected} recovery={recovery} onRecover={startRecovery} onSelect={setSelected} onClose={() => { setSheet(false); setSelected(null); }} />}<canvas ref={canvasRef} className="hidden-canvas" /></main></>;
 }
 
-function RecoveryCamera({ mode, gtin, busy, message, draft, onCapture, onModeChange, onRetake, onClose, onDraftChange }: { mode: "package" | "label"; gtin: string | null; busy: boolean; message: string | null; draft: NutritionLabelDraft | null; onCapture: () => void; onModeChange: (mode: "package" | "label") => void; onRetake: () => void; onClose: () => void; onDraftChange: (draft: NutritionLabelDraft | null) => void }) {
+function RecoveryCamera({ mode, gtin, allowLabel, busy, cameraReady, message, draft, onCapture, onModeChange, onRetake, onRestartCamera, onClose, onDraftChange }: { mode: "package" | "label"; gtin: string | null; allowLabel: boolean; busy: boolean; cameraReady: boolean; message: string | null; draft: NutritionLabelDraft | null; onCapture: () => void; onModeChange: (mode: "package" | "label") => void; onRetake: () => void; onRestartCamera: () => void; onClose: () => void; onDraftChange: (draft: NutritionLabelDraft | null) => void }) {
   const [submitted, setSubmitted] = useState(false), [hasAttempt, setHasAttempt] = useState(false);
   const update = (key: keyof NutritionLabelDraft, value: string) => { if (!draft) return; const numeric = ["energyKcal", "proteinPer100g", "fatPer100g", "carbohydratesPer100g", "sugarPer100g"].includes(key); onDraftChange({ ...draft, [key]: numeric ? (value === "" ? null : Number(value)) : value }); };
   const submit = async () => { if (!draft) return; const response = await fetch("/api/catalog/proposals", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ gtin, brand: draft.brand ?? "Unknown", name: draft.name ?? "Unidentified product", packSize: draft.packSize, energyKcal: draft.energyKcal, proteinPer100g: draft.proteinPer100g, fatPer100g: draft.fatPer100g, carbohydratesPer100g: draft.carbohydratesPer100g, sugarPer100g: draft.sugarPer100g, labelSeenLocally: true, intakeProvenance: "gemini_label", labelCaptureConsented: true, nutritionFieldConfidence: { energyKcal: draft.fieldConfidence.energyKcal, proteinPer100g: draft.fieldConfidence.proteinPer100g, fatPer100g: draft.fieldConfidence.fatPer100g, carbohydratesPer100g: draft.fieldConfidence.carbohydratesPer100g, sugarPer100g: draft.fieldConfidence.sugarPer100g } }) }); if (response.ok) setSubmitted(true); };
-  return <div className="recovery-camera" role="dialog" aria-label="Recovery camera"><div className="recovery-camera-shade"><button className="round-control" onClick={onClose} aria-label="Close recovery"><CloseIcon /></button><div className="recovery-camera-copy"><strong>{mode === "package" ? "Photograph the package barcode" : "Photograph Nutrition Facts"}</strong><span>{mode === "package" ? "One still photo. Nothing is analysed continuously." : "One consented Gemini request after you tap Take photo."}</span></div>{!draft && <button className="recovery-take" disabled={busy} onClick={() => { setHasAttempt(true); onCapture(); }}>{busy ? "Reading…" : hasAttempt ? "Retake" : "Take photo"}</button>}{mode === "package" && !draft && <button className="recovery-secondary" onClick={() => onModeChange("label")}>Take nutrition-label photo</button>}{message && <p className="recovery-status" aria-live="polite">{message}</p>}{draft && !submitted && <div className="recovery-draft"><strong>Review draft — provisional, pending curator review</strong>{(["brand", "name", "packSize", "energyKcal", "proteinPer100g", "fatPer100g", "carbohydratesPer100g", "sugarPer100g"] as (keyof NutritionLabelDraft)[]).map((key) => <label key={key}>{key}<input value={typeof draft[key] === "object" ? "" : String(draft[key] ?? "")} onChange={(event) => update(key, event.target.value)} /></label>)}<div className="recovery-draft-actions"><button onClick={onRetake}>Retake</button><button onClick={() => void submit()}>OK — submit for review</button></div></div>}{submitted && <div className="recovery-draft"><strong>Accepted in this demo result</strong><p>This is provisional user/Gemini data and is not a confirmed catalog record.</p><button onClick={onClose}>Done</button></div>}</div></div>;
+  const cameraProblem = !cameraReady && message?.startsWith("Camera unavailable");
+  return <div className="recovery-camera" role="dialog" aria-modal="true" aria-label="Recovery camera"><div className="recovery-camera-shade"><button className="round-control" onClick={onClose} aria-label="Close recovery"><CloseIcon /></button><div className="recovery-camera-copy"><strong>{mode === "package" ? "Photograph the package barcode" : "Photograph Nutrition Facts"}</strong><span>{mode === "package" ? "One still photo. Nothing is analysed continuously." : "One consented Gemini request after you tap Take photo."}</span></div>{!draft && <button className="recovery-take" disabled={busy || !cameraReady} onClick={() => { setHasAttempt(true); onCapture(); }}>{busy ? "Reading…" : !cameraReady ? "Starting camera…" : hasAttempt ? "Retake" : "Take photo"}</button>}{cameraProblem && <button className="recovery-secondary" onClick={onRestartCamera}>Try camera again</button>}{mode === "package" && allowLabel && !draft && !cameraProblem && <button className="recovery-secondary" disabled={busy || !cameraReady} onClick={() => onModeChange("label")}>Take nutrition-label photo</button>}{message && <p className="recovery-status" aria-live="polite">{message}</p>}{draft && !submitted && <div className="recovery-draft"><strong>Review draft — provisional, pending curator review</strong>{(["brand", "name", "packSize", "energyKcal", "proteinPer100g", "fatPer100g", "carbohydratesPer100g", "sugarPer100g"] as (keyof NutritionLabelDraft)[]).map((key) => <label key={key}>{key}<input value={typeof draft[key] === "object" ? "" : String(draft[key] ?? "")} onChange={(event) => update(key, event.target.value)} /></label>)}<div className="recovery-draft-actions"><button onClick={onRetake}>Retake</button><button onClick={() => void submit()}>OK — submit for review</button></div></div>}{submitted && <div className="recovery-draft"><strong>Accepted in this demo result</strong><p>This is provisional user/Gemini data and is not a confirmed catalog record.</p><button onClick={onClose}>Done</button></div>}</div></div>;
 }
 
 function Prompt({ title, action, onAction, failure = false }: { title: string; action: string; onAction: () => void; failure?: boolean }) { return <div className={`scanner-prompt ${failure ? "failure" : ""}`} role={failure ? "status" : undefined}><strong>{title}</strong><button onClick={onAction}>{action}</button></div>; }
