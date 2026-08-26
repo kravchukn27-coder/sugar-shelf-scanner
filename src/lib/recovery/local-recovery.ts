@@ -7,7 +7,7 @@
  * optional experimental browser API; most browsers do not expose it yet, so
  * callers must treat nutrition OCR as best-effort.
  */
-export type RecoveryState = "idle" | "searching" | "barcode_found" | "unavailable";
+export type RecoveryState = "idle" | "searching" | "barcode_found" | "barcode_not_found" | "unavailable";
 
 export interface BarcodeDetection { rawValue?: string; }
 export interface LocalBarcodeDetector { detect(source: ImageBitmapSource): Promise<BarcodeDetection[]>; }

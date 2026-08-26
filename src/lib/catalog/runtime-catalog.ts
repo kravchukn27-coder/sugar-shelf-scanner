@@ -3,6 +3,7 @@ import { CuratedProductCatalog } from "./curated-product-catalog";
 import { CURATED_PRODUCTS } from "./curated-products";
 import { FreeProductCatalog } from "./free-product-catalog";
 import { PostgresCatalogRepository, ReviewedDatabaseFirstCatalog, type SqlQueryExecutor } from "./repository";
+import { getDatabaseCatalogStatus, type DatabaseCatalogStatus } from "./catalog-status";
 import type { ProductCatalogProvider } from "./types";
 
 type PoolHolder = { pool?: Pool };
@@ -11,9 +12,24 @@ const globalPool = globalThis as typeof globalThis & { __sugarCatalogPool?: Pool
 function getPool(databaseUrl: string): Pool {
   const holder = globalPool.__sugarCatalogPool ??= {};
   if (!holder.pool) {
-    holder.pool = new Pool({ connectionString: databaseUrl, max: 3, idleTimeoutMillis: 10_000 });
+    // Catalog outages are availability failures, not scanner outages. Bound
+    // connection and query waits so both the runtime fallback and health route
+    // remain responsive when Railway has a stale or unreachable DATABASE_URL.
+    holder.pool = new Pool({
+      connectionString: databaseUrl,
+      max: 3,
+      idleTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 1_500,
+      query_timeout: 1_500,
+    });
   }
   return holder.pool;
+}
+
+/** Safe operational check used by /api/health; it never exposes DATABASE_URL. */
+export async function getRuntimeCatalogStatus(options: Pick<RuntimeCatalogOptions, "databaseUrl" | "executor">): Promise<DatabaseCatalogStatus> {
+  if (!options.executor && !options.databaseUrl) return getDatabaseCatalogStatus(undefined, undefined);
+  return getDatabaseCatalogStatus(options.databaseUrl, options.executor ?? getPool(options.databaseUrl!));
 }
 
 export interface RuntimeCatalogOptions {

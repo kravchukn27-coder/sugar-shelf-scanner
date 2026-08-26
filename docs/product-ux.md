@@ -1,0 +1,61 @@
+# Scanner product and UX contract
+
+## Main flow
+
+1. **Start** opens the live rear-camera scanner.
+2. A small preflight decides whether a packaged food/drink is a candidate.
+   `none` and `uncertain` remain live; only a candidate can trigger capture.
+3. One full-analysis frame freezes while Gemini identifies visible packaging.
+   Results show product outlines and a centred bottom handle.
+4. **Details** exposes source, sugar/protein and the clear distinction between
+   `Confirmed`, `AI estimate` and unknown.
+5. Retry or close returns to a stable live scanner.
+
+The frozen image is the full-analysis capture, not a second camera view. Raw
+frames are not retained by the application.
+
+## State-specific controls
+
+| State | Gallery | Barcode action | Notes |
+| --- | --- | --- | --- |
+| `camera_off` | hidden | hidden | Start is the entry point. |
+| `live_searching` | available | hidden | Torch/optional 2× only if feature-detected. |
+| `captured_analyzing` | hidden | hidden | Spinner is visible only during full Gemini analysis. |
+| `results` | hidden | hidden | Details opens from the centred result handle. |
+| `no_scene` / error | as applicable | top-bar recovery only | Barcode is not a camera-switch control. |
+
+The default scanner never presents a separate barcode mode. The no-scene/error
+button starts a recovery path only, using a local decoder.
+
+## Results and overlays
+
+- Overlay labels contain only `Low`, `Moderate`, `High`, `Very high` or `Check`.
+  Sugar values, source and estimate status live in Details.
+- Repeated confirmed SKU detections are grouped by stable catalog ID; compatible
+  estimates are grouped only when brand, name, pack size, sugar and band match.
+- `Confirmed` nutrition comes from the catalog. An AI visual estimate may be
+  colour-banded, but must remain explicitly labelled as an estimate.
+- The bottom handle is centred in the scanner viewport and leaves safe-area
+  space for other controls.
+
+## Gallery/upload contract
+
+Immediately after choosing a file, show the spinner. Keep it through image
+load, preflight and full analysis. Show “Product found — checking details…”
+only after positive preflight begins full analysis. Upload and live paths use
+the same resolution, crop, timeout and catalog-resolution policies. Detection
+boxes are mapped from the analysed crop back to the visible `object-fit: cover`
+preview.
+
+## Contextual recovery
+
+For `estimate` or `unknown`, Details can ask the user to turn the pack around.
+The device looks locally for EAN/UPC and nutrition-label text. A valid GTIN may
+be sent to `/api/scan/recover`; recovery frames and OCR text are not sent.
+Barcode failure is an availability/readability failure, not evidence that a
+product does not exist.
+
+User contribution is an explicit, review-pending action after an unresolved
+locally decoded barcode. It never changes the current scan or confirmed catalog.
+See
+[catalog-data.md](catalog-data.md).
