@@ -42,3 +42,43 @@ export function getMockShelfScan(clientFrameId: string): AnalyzeScanResponse {
     ],
   };
 }
+
+export const SUGAR_FIT_DEMO_IMAGE = "https://www.compraonline.alcampo.es/images-v3/37ea0506-72ec-4543-93c8-a77bb916ec12/ae2b89b3-55f0-4f03-a202-3c563b2b5338/500x500.jpg";
+
+/**
+ * A deterministic, camera-free entry point for investor demos and visual QA.
+ * It exercises the real Sugar Fit UI without presenting prototype calibration
+ * or an external vision provider as production behavior.
+ */
+export function getSugarFitDemoScan(): AnalyzeScanResponse {
+  return {
+    scanId: "demo-sugar-fit-corona",
+    clientFrameId: "demo-sugar-fit-corona",
+    provider: "mock",
+    analyzedAt: DEMO_TIME,
+    detections: [
+      {
+        id: "demo-corona-extra",
+        box: { x: 0.2, y: 0.08, width: 0.6, height: 0.78 },
+        confidence: 0.98,
+        status: "confirmed",
+        visualCandidate: { brand: "Corona", name: "Extra", packSize: "330 ml", gtin: "8411327013376" },
+        score: { band: "green", sugarPer100g: 0.2, source: "catalog" },
+        product: {
+          id: "corona-extra-330ml-es",
+          gtin: "8411327013376",
+          brand: "Corona",
+          name: "Extra, cerveza lager",
+          packSize: "330 ml",
+          imageUrl: SUGAR_FIT_DEMO_IMAGE,
+          energyKcalPer100g: null,
+          proteinPer100g: 0.3,
+          fatPer100g: null,
+          carbohydratesPer100g: null,
+          score: { band: "green", sugarPer100g: 0.2, source: "catalog" },
+        },
+        estimateReason: null,
+      },
+    ],
+  };
+}

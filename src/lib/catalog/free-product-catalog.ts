@@ -10,6 +10,8 @@ type OpenFoodFactsProduct = {
   product_name?: string;
   brands?: string;
   quantity?: string;
+  image_front_url?: string;
+  image_front_small_url?: string;
   nutriments?: { sugars_100g?: number; proteins_100g?: number; "energy-kcal_100g"?: number; fat_100g?: number; carbohydrates_100g?: number };
 };
 
@@ -62,8 +64,9 @@ function openFoodFactsProduct(product: OpenFoodFactsProduct, observedAt: string)
     brand: product.brands?.split(",")[0]?.trim() || null,
     name,
     packSize: product.quantity?.trim() || null,
-    // We identify from text and UPC first. Do not ingest or persist source photos.
-    imageUrl: null,
+    // Surface the selected front photo for this response. The prototype does
+    // not copy or persist the source image; the frozen scan remains a fallback.
+    imageUrl: product.image_front_url ?? product.image_front_small_url ?? null,
     referenceImages: [],
     energyKcalPer100g: product.nutriments?.["energy-kcal_100g"] ?? null,
     proteinPer100g: product.nutriments?.proteins_100g ?? null,
@@ -168,7 +171,7 @@ export class FreeProductCatalog implements ProductCatalogProvider {
     if (!gtin) return null;
     const products = await this.cached(`off:barcode:${gtin}`, { source: "open_food_facts", operation: "barcode" }, async () => {
       const startedAt = Date.now();
-      const result = await this.fetchOpenFoodFacts(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(gtin)}.json?fields=code,product_name,brands,quantity,nutriments`, {
+      const result = await this.fetchOpenFoodFacts(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(gtin)}.json?fields=code,product_name,brands,quantity,nutriments,image_front_url,image_front_small_url`, {
         headers: { "user-agent": this.userAgent },
       });
       if (result.kind === "budget_exhausted") return this.logSourceBudgetExhausted({ source: "open_food_facts", operation: "barcode" }, startedAt);
@@ -190,7 +193,7 @@ export class FreeProductCatalog implements ProductCatalogProvider {
   private async searchOpenFoodFacts(query: string, limit: number): Promise<CatalogProduct[]> {
     return this.cached(`off:search:${query.toLowerCase()}:${limit}`, { source: "open_food_facts", operation: "search" }, async () => {
       const startedAt = Date.now();
-      const params = new URLSearchParams({ search_terms: query, search_simple: "1", action: "process", json: "1", page_size: String(Math.min(limit, 3)), fields: "code,product_name,brands,quantity,nutriments" });
+      const params = new URLSearchParams({ search_terms: query, search_simple: "1", action: "process", json: "1", page_size: String(Math.min(limit, 3)), fields: "code,product_name,brands,quantity,nutriments,image_front_url,image_front_small_url" });
       const result = await this.fetchOpenFoodFacts(`https://world.openfoodfacts.org/cgi/search.pl?${params}`, {
         headers: { "user-agent": this.userAgent },
       });

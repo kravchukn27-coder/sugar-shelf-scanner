@@ -3,6 +3,14 @@ import type { CatalogProduct } from "./types";
 
 const VERIFIED_AT = "2026-08-25T00:00:00.000Z";
 
+// Investor-prototype artwork. These remote references are deliberately kept
+// out of the verified nutrition contract and can later move to owned storage.
+const PROTOTYPE_PRODUCT_IMAGES: Readonly<Record<string, string>> = {
+  "corona-extra-330ml-es": "https://www.compraonline.alcampo.es/images-v3/37ea0506-72ec-4543-93c8-a77bb916ec12/ae2b89b3-55f0-4f03-a202-3c563b2b5338/500x500.jpg",
+  "coca-cola-sabor-original-330ml-es": "https://images.openfoodfacts.org/images/products/544/900/000/0996/front_en.1129.400.jpg",
+  "fanta-naranja-330ml-es": "https://www.tutrebol.es/116817-large_default/refresco-naranja-fanta-330-ml.jpg",
+};
+
 function product(
   id: string,
   gtin: string,
@@ -23,7 +31,7 @@ function product(
     brand,
     name,
     packSize,
-    imageUrl: null,
+    imageUrl: PROTOTYPE_PRODUCT_IMAGES[id] ?? null,
     referenceImages: [],
     energyKcalPer100g,
     proteinPer100g,
