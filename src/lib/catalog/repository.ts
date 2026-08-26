@@ -56,16 +56,17 @@ function fromRow(row: ProductRow): CatalogProduct {
 const PRODUCT_SELECT = `
   SELECT p.id, p.canonical_brand, p.canonical_name, p.canonical_flavour,
          p.canonical_pack_size, p.image_url,
-         identifier.identifier_value AS gtin,
-         n.sugar_per_100g, n.protein_per_100g, n.source AS nutrition_source,
-         n.source_record_id, n.observed_at, n.verified_at
+         identifier.value AS gtin,
+         n.sugar_per_100g, n.protein_per_100g, provenance.source AS nutrition_source,
+         provenance.source_record_id, provenance.observed_at, provenance.verified_at
   FROM products p
   LEFT JOIN LATERAL (
-    SELECT identifier_value FROM product_identifiers
-    WHERE product_id = p.id AND identifier_type IN ('gtin', 'upc', 'ean')
-    ORDER BY identifier_type LIMIT 1
+    SELECT value FROM identifiers
+    WHERE product_id = p.id AND type IN ('gtin', 'upc', 'ean')
+    ORDER BY type LIMIT 1
   ) identifier ON true
-  LEFT JOIN product_nutrition n ON n.product_id = p.id`;
+  LEFT JOIN nutrition_facts n ON n.product_id = p.id
+  LEFT JOIN provenance provenance ON provenance.id = n.provenance_id`;
 
 /**
  * A PostgreSQL repository without a bundled database driver. Railway can pass
@@ -78,8 +79,8 @@ export class PostgresCatalogRepository implements CatalogRepository {
     const normalized = gtin.replace(/\D/g, "");
     if (!normalized) return null;
     const result = await this.db.query<ProductRow>(`${PRODUCT_SELECT}
-      JOIN product_identifiers barcode ON barcode.product_id = p.id
-      WHERE barcode.identifier_type IN ('gtin', 'upc', 'ean') AND barcode.identifier_value = $1
+      JOIN identifiers barcode ON barcode.product_id = p.id
+      WHERE barcode.type IN ('gtin', 'upc', 'ean') AND barcode.value = $1
       LIMIT 1`, [normalized]);
     return result.rows[0] ? fromRow(result.rows[0]) : null;
   }
@@ -89,7 +90,10 @@ export class PostgresCatalogRepository implements CatalogRepository {
     if (!searchText) return [];
     const result = await this.db.query<ProductRow>(`${PRODUCT_SELECT}
       WHERE p.normalized_search_text % $1
-      ORDER BY similarity(p.normalized_search_text, $1) DESC
+        OR EXISTS (SELECT 1 FROM product_aliases a WHERE a.product_id = p.id AND a.normalized_alias % $1)
+      ORDER BY GREATEST(similarity(p.normalized_search_text, $1), COALESCE((
+        SELECT MAX(similarity(a.normalized_alias, $1)) FROM product_aliases a WHERE a.product_id = p.id
+      ), 0)) DESC
       LIMIT $2`, [searchText, Math.min(Math.max(limit * 4, 8), 40)]);
     return result.rows
       .map((row) => {
@@ -112,6 +116,15 @@ export class PostgresCatalogRepository implements CatalogRepository {
     await this.db.query(`INSERT INTO scan_feedback (id, scan_id, candidate, selected_product_id, outcome)
       VALUES (gen_random_uuid(), $1, $2::jsonb, $3, $4)`, [feedback.scanId, JSON.stringify(feedback.candidate), feedback.productId, feedback.outcome]);
   }
+
+  /** A configured but empty database is not a catalog. */
+  public async hasReviewedProducts(): Promise<boolean> {
+    const result = await this.db.query<{ has_reviewed_products: boolean | string }>(
+      "SELECT EXISTS (SELECT 1 FROM provenance WHERE source = 'curated') AS has_reviewed_products",
+    );
+    const value = result.rows[0]?.has_reviewed_products;
+    return value === true || value === "true";
+  }
 }
 
 function toMatchFields(row: ProductRow): MatchFields {
@@ -126,4 +139,60 @@ export interface CatalogRepositoryFactoryOptions {
 /** Keeps the current curated-demo behavior until an explicit database executor is wired in. */
 export function createCatalogRepository(options: CatalogRepositoryFactoryOptions): ProductCatalogProvider {
   return options.executor ? new PostgresCatalogRepository(options.executor) : options.fallback;
+}
+
+/**
+ * PostgreSQL is authoritative only after a reviewed import has completed.
+ * A transient database failure must behave like an availability failure: the
+ * deterministic curated catalog and public-source fallback remain usable.
+ */
+export class ReviewedDatabaseFirstCatalog implements ProductCatalogProvider {
+  public constructor(
+    private readonly database: PostgresCatalogRepository,
+    private readonly fallback: ProductCatalogProvider,
+  ) {}
+
+  public async lookupBarcode(gtin: string): Promise<CatalogProduct | null> {
+    return this.fromDatabaseOrFallback(
+      () => this.database.lookupBarcode(gtin),
+      () => this.fallback.lookupBarcode(gtin),
+    );
+  }
+
+  public async searchCandidates(candidate: VisualCandidate, limit = 3): Promise<CatalogMatch[]> {
+    try {
+      const matches = await this.database.searchCandidates(candidate, limit);
+      // Do not let an uncertain database text hit suppress an exact curated
+      // hit or the established OFF/USDA availability fallback.
+      if (matches[0]?.confidence >= 0.88) return matches;
+    } catch {
+      // Intentionally fall through. Scan handling must not expose DB outages.
+    }
+    return this.fallback.searchCandidates(candidate, limit);
+  }
+
+  public async getProduct(id: string): Promise<CatalogProduct | null> {
+    return this.fromDatabaseOrFallback(
+      () => this.database.getProduct(id),
+      () => this.fallback.getProduct(id),
+    );
+  }
+
+  public async recordFeedback(feedback: CatalogFeedback): Promise<void> {
+    try {
+      await this.database.recordFeedback(feedback);
+    } catch {
+      await this.fallback.recordFeedback(feedback);
+    }
+  }
+
+  private async fromDatabaseOrFallback<T>(database: () => Promise<T | null>, fallback: () => Promise<T | null>): Promise<T | null> {
+    try {
+      const result = await database();
+      if (result) return result;
+    } catch {
+      // Availability failures never mean a product does not exist.
+    }
+    return fallback();
+  }
 }

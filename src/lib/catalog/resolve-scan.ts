@@ -1,10 +1,9 @@
 import type { AnalyzeScanResponse, Detection } from "@/lib/contracts/scan";
-import { CuratedProductCatalog } from "./curated-product-catalog";
-import { CURATED_PRODUCTS } from "./curated-products";
-import { FreeProductCatalog } from "./free-product-catalog";
 import { ProductResolver } from "./product-resolver";
+import { createRuntimeCatalog } from "./runtime-catalog";
 import { logCatalogResolutionTelemetry } from "./telemetry";
 import type { ServerEnv } from "@/lib/env";
+import type { ResolvedProduct } from "./types";
 
 async function resolveDetection(detection: Detection, resolver: ProductResolver): Promise<Detection> {
   const resolved = await resolver.resolve({
@@ -31,14 +30,25 @@ async function resolveDetection(detection: Detection, resolver: ProductResolver)
  */
 export async function resolveScan(response: AnalyzeScanResponse, env: ServerEnv): Promise<AnalyzeScanResponse> {
   const startedAt = performance.now();
-  const resolver = new ProductResolver(new FreeProductCatalog(
-    new CuratedProductCatalog(CURATED_PRODUCTS),
-    { usdaApiKey: env.USDA_FDC_API_KEY, openFoodFactsUserAgent: env.OPEN_FOOD_FACTS_USER_AGENT },
-  ));
+  const resolver = new ProductResolver(await createRuntimeCatalog({
+    databaseUrl: env.DATABASE_URL,
+    usdaApiKey: env.USDA_FDC_API_KEY,
+    openFoodFactsUserAgent: env.OPEN_FOOD_FACTS_USER_AGENT,
+  }));
   const resolvedResponse = {
     ...response,
     detections: await Promise.all(response.detections.map((detection) => resolveDetection(detection, resolver))),
   };
   logCatalogResolutionTelemetry(resolvedResponse.detections, performance.now() - startedAt);
   return resolvedResponse;
+}
+
+/** A barcode is decoded in the browser, then resolved without any vision call. */
+export async function resolveBarcode(gtin: string, env: ServerEnv): Promise<ResolvedProduct> {
+  const resolver = new ProductResolver(await createRuntimeCatalog({
+    databaseUrl: env.DATABASE_URL,
+    usdaApiKey: env.USDA_FDC_API_KEY,
+    openFoodFactsUserAgent: env.OPEN_FOOD_FACTS_USER_AGENT,
+  }));
+  return resolver.resolve({ brand: null, name: null, packSize: null, gtin, confidence: 1 });
 }

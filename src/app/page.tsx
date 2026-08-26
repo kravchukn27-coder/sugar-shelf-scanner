@@ -1,10 +1,17 @@
 "use client";
 
+import "./barcode-recovery.css";
+
 import { useCallback, useEffect, useRef, useState } from "react";
+import lensStyles from "./camera-lens.module.css";
 import type { AnalyzeScanResponse, Detection, PreflightScanResponse } from "@/lib/contracts/scan";
 import { formatSugarPer100g } from "@/lib/scoring/format-sugar";
 import { groupRepeatedDetections, type DetectionGroup } from "@/lib/scan/deduplicate-detections";
+import { applyCameraView, getCameraControls, rearCameraRequest, supportsTorch, type CameraControls } from "@/lib/scan/media-capabilities";
 import { shouldRunScannerScheduler, transitionScannerLifecycle, type ScannerLifecycleEvent, type ScannerLifecycleState } from "@/lib/scan/scanner-lifecycle";
+import { attemptLocalNutritionOcr, decodeLocalBarcode, getLocalBarcodeDetector, getLocalTextDetector, type RecoveryState } from "@/lib/recovery/local-recovery";
+import type { BarcodeRecoveryResponse } from "@/lib/contracts/scan";
+import { shouldOfferBarcodeRecovery } from "@/lib/recovery/recovery-ui";
 
 const FRAME_INTERVAL = 650;
 const bandCopy = { green: "Low sugar", yellow: "Moderate sugar", orange: "High sugar", red: "Very high sugar", unknown: "Needs a check" } as const;
@@ -12,14 +19,14 @@ const sourceCopy = { curated: "Sugar catalog", open_food_facts: "Open Food Facts
 const meterPosition = { green: "12.5%", yellow: "37.5%", orange: "62.5%", red: "87.5%", unknown: null } as const;
 const eligible = (d: Detection) => d.confidence >= .55 && Boolean(d.visualCandidate.brand || d.visualCandidate.name);
 const displaySugar = (value: number | null | undefined) => formatSugarPer100g(value) ?? "—";
-type TorchTrack = { getCapabilities?: () => { torch?: boolean } };
-const supportsTorch = (track: MediaStreamTrack | undefined) => Boolean((track as unknown as TorchTrack | undefined)?.getCapabilities?.().torch);
 function Chevron({ up = false }: { up?: boolean }) { return <svg aria-hidden="true" className={up ? "chevron up" : "chevron"} viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>; }
 function CloseIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17" /></svg>; }
 function TorchIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 3h6l-1 6h3l-7 12 1-8H8z" /></svg>; }
+function WideViewIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4M8 12h8" /></svg>; }
+function BarcodeIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5v14M7 5v14M10 5v14M14 5v14M17 5v14M20 5v14M12 5v14" /></svg>; }
 
 export default function HomePage() {
-  const videoRef = useRef<HTMLVideoElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0);
+  const videoRef = useRef<HTMLVideoElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryTimer = useRef<number | null>(null);
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
   const [failure, setFailure] = useState<string | null>(null);
   const [scan, setScan] = useState<AnalyzeScanResponse | null>(null);
@@ -27,10 +34,13 @@ export default function HomePage() {
   const [uploadUrl, setUploadUrl] = useState<string | null>(null);
   const [sheet, setSheet] = useState(false), [selected, setSelected] = useState<string | null>(null);
   const [torchAvailable, setTorchAvailable] = useState(false), [torchOn, setTorchOn] = useState(false);
+  const [cameraControls, setCameraControls] = useState<CameraControls>({ torchAvailable: false, standardZoom: null, wideZoom: null });
+  const [wideViewOn, setWideViewOn] = useState(false);
+  const [recovery, setRecovery] = useState<{ id: string; state: RecoveryState; labelSeen: boolean } | null>(null);
   const groups = groupRepeatedDetections((scan?.detections ?? []).filter(eligible));
   const dispatch = useCallback((event: ScannerLifecycleEvent) => setState((current) => transitionScannerLifecycle(current, event)), []);
-  const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
-  const clearResult = useCallback(() => { setScan(null); setFrozen(null); setFailure(null); setSheet(false); setSelected(null); }, []);
+  const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); setCameraControls({ torchAvailable: false, standardZoom: null, wideZoom: null }); setWideViewOn(false); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
+  const clearResult = useCallback(() => { if (recoveryTimer.current !== null) window.clearInterval(recoveryTimer.current); recoveryTimer.current = null; setRecovery(null); setScan(null); setFrozen(null); setFailure(null); setSheet(false); setSelected(null); }, []);
 
   const capture = useCallback((source: HTMLVideoElement | HTMLImageElement, width: number, quality: number) => {
     const canvas = canvasRef.current; const w = "videoWidth" in source ? source.videoWidth : source.naturalWidth; const h = "videoHeight" in source ? source.videoHeight : source.naturalHeight;
@@ -75,31 +85,85 @@ export default function HomePage() {
 
   const start = useCallback(async () => {
     const id = ++session.current; stopStream(); clearResult(); setUploadUrl(null); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
-    try { const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 1920 } }, audio: false }); if (id !== session.current || !videoRef.current) { stream.getTracks().forEach((t) => t.stop()); return; } streamRef.current = stream; setTorchAvailable(supportsTorch(stream.getVideoTracks()[0])); videoRef.current.srcObject = stream; await videoRef.current.play(); if (id !== session.current) { stream.getTracks().forEach((t) => t.stop()); if (videoRef.current) videoRef.current.srcObject = null; streamRef.current = null; } }
+    try { const stream = await navigator.mediaDevices.getUserMedia(rearCameraRequest()); if (id !== session.current || !videoRef.current) { stream.getTracks().forEach((t) => t.stop()); return; } streamRef.current = stream; let controls = getCameraControls(stream.getVideoTracks()[0]); if (controls.standardZoom !== null) { try { await applyCameraView(stream.getVideoTracks()[0], controls, "standard"); } catch { controls = { ...controls, standardZoom: null, wideZoom: null }; } } setCameraControls(controls); setTorchAvailable(controls.torchAvailable); videoRef.current.srcObject = stream; await videoRef.current.play(); if (id !== session.current) { stream.getTracks().forEach((t) => t.stop()); if (videoRef.current) videoRef.current.srcObject = null; streamRef.current = null; } }
     catch { if (id === session.current) { setFailure("Camera unavailable. Check permission and try again."); setState((current) => transitionScannerLifecycle(current, "ANALYZE_FAILURE")); } }
   }, [clearResult, stopStream]);
   const close = useCallback(() => { session.current += 1; stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
   const toggleTorch = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !torchOn; if (!track || !supportsTorch(track)) return setTorchAvailable(false); try { await track.applyConstraints({ advanced: [{ torch: next } as unknown as MediaTrackConstraintSet] }); setTorchOn(next); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
+  const toggleWideView = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !wideViewOn; try { const applied = await applyCameraView(track, cameraControls, next ? "wide" : "standard"); if (!applied) { setCameraControls((current) => ({ ...current, wideZoom: null })); setWideViewOn(false); return; } setWideViewOn(next); } catch { setCameraControls((current) => ({ ...current, wideZoom: null })); setWideViewOn(false); } }, [cameraControls, wideViewOn]);
   const retry = useCallback(() => { if (!uploadUrl) void start(); else { session.current += 1; clearResult(); dispatch("RETRY"); } }, [clearResult, dispatch, start, uploadUrl]);
+  const startRecovery = useCallback((id: string) => {
+    const video = videoRef.current;
+    const barcodeDetector = getLocalBarcodeDetector(), textDetector = getLocalTextDetector();
+    if (!video || !streamRef.current || (!barcodeDetector && !textDetector)) { setRecovery({ id, state: "unavailable", labelSeen: false }); return; }
+    if (recoveryTimer.current !== null) window.clearInterval(recoveryTimer.current);
+    const recoverySession = session.current; setFrozen(null); setSheet(false); setRecovery({ id, state: "searching", labelSeen: false });
+    const look = async () => {
+      const source = videoRef.current; if (!source || recoverySession !== session.current) return;
+      const [barcode, labelSeen] = await Promise.all([decodeLocalBarcode(source, barcodeDetector), attemptLocalNutritionOcr(source, textDetector)]);
+      if (recoverySession !== session.current) return;
+      if (labelSeen) setRecovery((current) => current?.id === id ? { ...current, labelSeen: true } : current);
+      if (!barcode) return;
+      if (recoveryTimer.current !== null) window.clearInterval(recoveryTimer.current); recoveryTimer.current = null;
+      setRecovery((current) => current?.id === id ? { ...current, state: "barcode_found" } : current);
+      try {
+        const response = await fetch("/api/scan/recover", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ gtin: barcode }) });
+        if (!response.ok || recoverySession !== session.current) return;
+        const result = await response.json() as BarcodeRecoveryResponse;
+        // A missed catalog lookup never overwrites the original estimate/unknown result.
+        if (result.status === "confirmed") setScan((current) => current ? { ...current, detections: current.detections.map((detection) => detection.id === id ? { ...detection, status: result.status, product: result.product, score: result.score, estimateReason: result.estimateReason, visualCandidate: { ...detection.visualCandidate, gtin: barcode } } : detection) } : current);
+      } catch { /* No recovery frame or OCR text is logged, persisted, or uploaded. */ }
+    };
+    void look(); recoveryTimer.current = window.setInterval(() => void look(), 800);
+  }, []);
+  const startErrorBarcodeRecovery = useCallback(() => {
+    const video = videoRef.current;
+    const barcodeDetector = getLocalBarcodeDetector();
+    if (!video || !streamRef.current || !barcodeDetector) { setFailure("Barcode scanning is not supported by this browser yet"); return; }
+    if (recoveryTimer.current !== null) window.clearInterval(recoveryTimer.current);
+    const recoverySession = session.current;
+    setFailure("Point the camera at the barcode");
+    const look = async () => {
+      const source = videoRef.current;
+      if (!source || recoverySession !== session.current) return;
+      const barcode = await decodeLocalBarcode(source, barcodeDetector);
+      if (!barcode || recoverySession !== session.current) return;
+      if (recoveryTimer.current !== null) window.clearInterval(recoveryTimer.current);
+      recoveryTimer.current = null;
+      setFailure("Barcode found — checking the catalog…");
+      try {
+        const response = await fetch("/api/scan/recover", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ gtin: barcode }) });
+        if (!response.ok || recoverySession !== session.current) return;
+        const result = await response.json() as BarcodeRecoveryResponse;
+        if (result.status !== "confirmed" || !result.product) { setFailure("This barcode is not in the confirmed catalog yet"); return; }
+        const detection: Detection = { id: `barcode-${barcode}`, box: { x: .12, y: .25, width: .76, height: .5 }, confidence: 1, status: result.status, visualCandidate: { brand: result.product.brand, name: result.product.name, packSize: result.product.packSize, gtin: barcode }, score: result.score, product: result.product, estimateReason: result.estimateReason };
+        setScan({ scanId: `barcode-${barcode}`, clientFrameId: `barcode-${barcode}`, provider: "mock", detections: [detection], analyzedAt: new Date().toISOString() });
+        setSelected(detection.id); setSheet(true); setFailure(null); dispatch("BARCODE_SUCCESS");
+      } catch { setFailure("Couldn’t check this barcode"); }
+    };
+    void look(); recoveryTimer.current = window.setInterval(() => void look(), 800);
+  }, [dispatch]);
   function upload(file: File | undefined) { if (!file) return; session.current += 1; stopStream(); clearResult(); setUploadUrl((old) => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(file); }); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY")); }
-  useEffect(() => () => { session.current += 1; stopStream(); }, [stopStream]);
+  useEffect(() => () => { session.current += 1; if (recoveryTimer.current !== null) window.clearInterval(recoveryTimer.current); stopStream(); }, [stopStream]);
   useEffect(() => { if (!shouldRunScannerScheduler(state) || sheet || uploadUrl) return; const timer = window.setInterval(() => { if (videoRef.current?.readyState && !inFlight.current) void preflight(videoRef.current); }, FRAME_INTERVAL); return () => window.clearInterval(timer); }, [preflight, sheet, state, uploadUrl]);
   useEffect(() => { if (!uploadUrl || !shouldRunScannerScheduler(state) || sheet) return; const image = new Image(); image.onload = () => void preflight(image); image.src = uploadUrl; }, [preflight, sheet, state, uploadUrl]);
   const failed = state === "no_scene" || state === "error";
 
   return <main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""}`} aria-label="Sugar product scanner">
     {uploadUrl ? <img className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video ref={videoRef} className="camera-preview" muted playsInline />}{frozen && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}{state !== "camera_off" && <div className="camera-vignette" />}
-    <header className={`camera-controls ${state === "live_searching" && torchAvailable ? "" : "end"}`}>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}<button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
+    <header className={`camera-controls ${state === "live_searching" && (torchAvailable || cameraControls.wideZoom !== null) ? "" : "end"}`}><div className={lensStyles.controls}>{failed ? <button className="round-control" onClick={() => void startErrorBarcodeRecovery()} aria-label="Scan a barcode"><BarcodeIcon /></button> : null}{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}{state === "live_searching" && cameraControls.wideZoom !== null ? <button className={`round-control ${wideViewOn ? lensStyles.active : ""}`} onClick={() => void toggleWideView()} aria-label={wideViewOn ? "Use standard camera view" : "Use wider camera view"} aria-pressed={wideViewOn}><WideViewIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
     {groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { setSelected(group.detection.id); setSheet(true); }} />)}
     {state === "live_searching" && !uploadUrl && <><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint">Point your camera at products</p></>}
     {state === "captured_analyzing" && <span className="scan-spinner" aria-label="Checking product details" />}
     {state === "camera_off" && <Prompt title="Scan products for sugar" action="Start scanning" onAction={() => void start()} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action="Try again" onAction={retry} failure />}
     {state === "captured_analyzing" && <CameraCopy>Product found — checking details…</CameraCopy>}
-    <label className={`gallery-button ${state === "camera_off" ? "flat" : ""} ${state === "results" ? "faint" : ""}`} aria-label="Choose a product photo"><input type="file" accept="image/*" onChange={(e) => upload(e.target.files?.[0])} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label>
-  </section>{state === "results" && <button className="result-handle" onClick={() => setSheet(true)}><span className="handle-dot found" /><span>{groups.length} products found</span><span className="handle-detail">Details</span><Chevron /></button>}{sheet && <ResultsSheet groups={groups} selectedId={selected} onSelect={setSelected} onClose={() => { setSheet(false); setSelected(null); }} />}<canvas ref={canvasRef} className="hidden-canvas" /></main>;
+    {state !== "camera_off" && state !== "captured_analyzing" && state !== "results" ? <label className="gallery-button" aria-label="Choose a product photo"><input type="file" accept="image/*" onChange={(e) => upload(e.target.files?.[0])} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label> : null}
+  </section>{state === "results" && <button className="result-handle" onClick={() => setSheet(true)}><span className="handle-dot found" /><span>{groups.length} products found</span><span className="handle-detail">Details</span><Chevron /></button>}{sheet && <ResultsSheet groups={groups} selectedId={selected} recovery={recovery} onRecover={startRecovery} onSelect={setSelected} onClose={() => { setSheet(false); setSelected(null); }} />}<canvas ref={canvasRef} className="hidden-canvas" /></main>;
 }
 
 function Prompt({ title, action, onAction, failure = false }: { title: string; action: string; onAction: () => void; failure?: boolean }) { return <div className={`scanner-prompt ${failure ? "failure" : ""}`} role={failure ? "status" : undefined}><strong>{title}</strong><button onClick={onAction}>{action}</button></div>; }
 function CameraCopy({ children }: { children: React.ReactNode }) { return <div className="camera-copy" aria-live="polite">{children}<span>Photos are sent for analysis and are not saved.</span></div>; }
 function ProductOverlay({ group, selected, onSelect }: { group: DetectionGroup; selected: boolean; onSelect: () => void }) { const { detection, box, count } = group; const label = detection.score.sugarPer100g === null ? "Check" : ({ green: "Low", yellow: "Moderate", orange: "High", red: "Very high", unknown: "Check" } as const)[detection.score.band]; const labelInside = box.y < .14; return <button className={`product-overlay ${detection.score.sugarPer100g === null ? "unknown" : detection.score.band} ${labelInside ? "label-inside" : ""} ${selected ? "selected" : ""}`} onClick={onSelect} aria-expanded={selected} style={{ left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.width * 100}%`, height: `${box.height * 100}%` }}><span className="overlay-label">{label}</span>{count > 1 && <span className="repeat-chip">×{count}</span>}{selected && <span className="overlay-check"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" /></svg></span>}</button>; }
-function ResultsSheet({ groups, selectedId, onSelect, onClose }: { groups: DetectionGroup[]; selectedId: string | null; onSelect: (id: string | null) => void; onClose: () => void }) { return <section className="result-sheet" aria-label="Recognized products"><div className="sheet-header"><button className="sheet-grabber" onClick={onClose} aria-label="Close details" /><span>{groups.length} products found</span><button onClick={onClose} aria-label="Close product list"><CloseIcon /></button></div><p className="sheet-intro">Tap a product to see its sugar impact.</p><div className="product-list">{groups.map(({ detection, count }) => { const open = selectedId === detection.id, hasSugar = detection.score.sugarPer100g !== null, title = [detection.visualCandidate.brand, detection.visualCandidate.name].filter(Boolean).join(" · "), source = detection.product?.provenance; return <article key={detection.id} className={`product-row ${open ? "open" : ""}`}><button className="product-summary" onClick={() => onSelect(open ? null : detection.id)}><span className={`score-orb ${hasSugar ? detection.score.band : "unknown"}`}><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4-9-4Zm0 0v10l9 4 9-4V7M12 11v10" /></svg></span><span className="product-name"><strong>{title || "Unidentified product"}</strong><span className={`status-tag ${detection.status === "confirmed" ? "confirmed" : detection.status === "estimate" ? "estimate" : "unconfirmed"}`}>{detection.status === "confirmed" ? "Confirmed" : detection.status === "estimate" ? "AI estimate" : "Needs confirmation"}</span></span>{count > 1 && <span className="repeat-count">×{count}</span>}<span className="sugar-value">{displaySugar(detection.score.sugarPer100g)}{hasSugar && "g"}<small>/100g</small></span><Chevron up={open} /></button>{open && <div className="product-details"><div className="sugar-meter"><div className="sugar-meter-label"><span>Sugar level</span><strong>{hasSugar ? bandCopy[detection.score.band] : "Not confirmed"}</strong></div>{hasSugar && meterPosition[detection.score.band] && <div className="sugar-meter-track"><span className="sugar-meter-marker" style={{ left: meterPosition[detection.score.band] as string }} /></div>}</div>{count > 1 && <div><span>In this scan</span><strong>{count} matching products</strong></div>}<div><span>Protein</span><strong>{detection.product?.proteinPer100g ? `${displaySugar(detection.product.proteinPer100g)}g / 100g` : "Not confirmed"}</strong></div><div><span>Source</span><strong>{source ? sourceCopy[source.source] : detection.status === "estimate" ? "AI estimate" : "Not confirmed"}</strong></div>{detection.estimateReason && <p>{detection.estimateReason}</p>}</div>}</article>; })}</div></section>; }
+function ResultsSheet({ groups, selectedId, recovery, onRecover, onSelect, onClose }: { groups: DetectionGroup[]; selectedId: string | null; recovery: { id: string; state: RecoveryState; labelSeen: boolean } | null; onRecover: (id: string) => void; onSelect: (id: string | null) => void; onClose: () => void }) { return <section className="result-sheet" aria-label="Recognized products"><div className="sheet-header"><button className="sheet-grabber" onClick={onClose} aria-label="Close details" /><span>{groups.length} products found</span><button onClick={onClose} aria-label="Close product list"><CloseIcon /></button></div><p className="sheet-intro">Tap a product to see its sugar impact.</p><div className="product-list">{groups.map(({ detection, count }) => { const open = selectedId === detection.id, hasSugar = detection.score.sugarPer100g !== null, title = [detection.visualCandidate.brand, detection.visualCandidate.name].filter(Boolean).join(" · "), source = detection.product?.provenance, recoveryForProduct = recovery?.id === detection.id ? recovery : null; return <article key={detection.id} className={`product-row ${open ? "open" : ""}`}><button className="product-summary" onClick={() => onSelect(open ? null : detection.id)}><span className={`score-orb ${hasSugar ? detection.score.band : "unknown"}`}><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4-9-4Zm0 0v10l9 4 9-4V7M12 11v10" /></svg></span><span className="product-name"><strong>{title || "Unidentified product"}</strong><span className={`status-tag ${detection.status === "confirmed" ? "confirmed" : detection.status === "estimate" ? "estimate" : "unconfirmed"}`}>{detection.status === "confirmed" ? "Confirmed" : detection.status === "estimate" ? "AI estimate" : "Needs confirmation"}</span></span>{count > 1 && <span className="repeat-count">×{count}</span>}<span className="sugar-value">{displaySugar(detection.score.sugarPer100g)}{hasSugar && "g"}<small>/100g</small></span><Chevron up={open} /></button>{open && <div className="product-details"><div className="sugar-meter"><div className="sugar-meter-label"><span>Sugar level</span><strong>{hasSugar ? bandCopy[detection.score.band] : "Not confirmed"}</strong></div>{hasSugar && meterPosition[detection.score.band] && <div className="sugar-meter-track"><span className="sugar-meter-marker" style={{ left: meterPosition[detection.score.band] as string }} /></div>}</div>{count > 1 && <div><span>In this scan</span><strong>{count} matching products</strong></div>}<div><span>Protein</span><strong>{detection.product?.proteinPer100g ? `${displaySugar(detection.product.proteinPer100g)}g / 100g` : "Not confirmed"}</strong></div><div><span>Source</span><strong>{source ? sourceCopy[source.source] : detection.status === "estimate" ? "AI estimate" : "Not confirmed"}</strong></div>{detection.estimateReason && <p>{detection.estimateReason}</p>}{shouldOfferBarcodeRecovery(detection.status, open) && <RecoveryCard recovery={recoveryForProduct} onStart={() => onRecover(detection.id)} />}</div>}</article>; })}</div></section>; }
+
+function RecoveryCard({ recovery, onStart }: { recovery: { state: RecoveryState; labelSeen: boolean } | null; onStart: () => void }) { const message = recovery?.state === "searching" ? "Turn the package to its barcode or nutrition label. Checking on this device…" : recovery?.state === "barcode_found" ? "Barcode found — checking the catalog…" : recovery?.state === "unavailable" ? "Barcode and nutrition-label recovery is not supported by this browser yet." : "Turn the package to its barcode or nutrition label for a local check."; return <div className="barcode-recovery-card"><strong>Need a confirmed result?</strong><p>{message}</p>{recovery?.labelSeen && <p className="barcode-recovery-note">Nutrition label detected locally. Its text is not saved or sent.</p>}{!recovery && <button onClick={onStart}>Continue with package</button>}</div>; }

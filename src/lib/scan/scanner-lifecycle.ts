@@ -15,6 +15,7 @@ export type ScannerLifecycleEvent =
   | "START"
   | "CAPTURED"
   | "ANALYZE_SUCCESS"
+  | "BARCODE_SUCCESS"
   | "NO_SCENE"
   | "ANALYZE_FAILURE"
   | "RETRY"
@@ -25,8 +26,8 @@ const transitions: Readonly<Record<ScannerLifecycleState, Readonly<Partial<Recor
   live_searching: { CAPTURED: "captured_analyzing", NO_SCENE: "no_scene", ANALYZE_FAILURE: "error" },
   captured_analyzing: { ANALYZE_SUCCESS: "results", NO_SCENE: "no_scene", ANALYZE_FAILURE: "error" },
   results: { RETRY: "live_searching" },
-  no_scene: { RETRY: "live_searching" },
-  error: { RETRY: "live_searching" },
+  no_scene: { RETRY: "live_searching", BARCODE_SUCCESS: "results" },
+  error: { RETRY: "live_searching", BARCODE_SUCCESS: "results" },
 };
 
 /**

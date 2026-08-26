@@ -8,20 +8,25 @@
     "postbuild": "mkdir -p .next/standalone/.next && cp -R .next/static .next/standalone/.next/static && cp -R public .next/standalone/public",
     "start": "node .next/standalone/server.js",
     "lint": "next lint",
+    "test": "tsx --test src/**/*.test.ts",
     "typecheck": "tsc --noEmit",
     "clean:next": "node scripts/clean-next.mjs",
+    "catalog:import": "tsx scripts/import-approved-catalog.ts",
     "verify": "npm run clean:next && npm run build && npm run typecheck"
   },
   "dependencies": {
     "next": "15.5.23",
+    "pg": "^8.23.0",
     "react": "19.1.1",
     "react-dom": "19.1.1",
     "zod": "3.24.1"
   },
   "devDependencies": {
     "@types/node": "22.15.3",
+    "@types/pg": "^8.23.1",
     "@types/react": "19.1.2",
     "@types/react-dom": "19.1.2",
+    "tsx": "^4.21.0",
     "typescript": "5.8.3"
   },
   "engines": {

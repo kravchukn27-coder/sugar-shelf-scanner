@@ -62,3 +62,14 @@ export const analyzeScanResponseSchema = z.object({
   analyzedAt: z.string().datetime(),
 });
 export type AnalyzeScanResponse = z.infer<typeof analyzeScanResponseSchema>;
+
+// Recovery sends a barcode only. In particular, it never uploads recovery
+// frames or browser OCR text to Gemini or any other provider.
+export const barcodeRecoveryRequestSchema = z.object({ gtin: z.string().regex(/^\d{8}$|^\d{12,14}$/) });
+export const barcodeRecoveryResponseSchema = z.object({
+  status: resolutionStatusSchema,
+  product: productSummarySchema.nullable(),
+  score: scoreSchema,
+  estimateReason: z.string().nullable(),
+});
+export type BarcodeRecoveryResponse = z.infer<typeof barcodeRecoveryResponseSchema>;

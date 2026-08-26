@@ -28,6 +28,12 @@ test("does not automatically retry no-scene or error states", () => {
   assert.equal(transitionScannerLifecycle("error", "RETRY"), "live_searching");
 });
 
+test("opens a confirmed local barcode result from a stopped error state", () => {
+  assert.equal(transitionScannerLifecycle("no_scene", "BARCODE_SUCCESS"), "results");
+  assert.equal(transitionScannerLifecycle("error", "BARCODE_SUCCESS"), "results");
+  assert.equal(transitionScannerLifecycle("live_searching", "BARCODE_SUCCESS"), "live_searching");
+});
+
 test("maps both preflight and full analysis failures to a stopped retry state", () => {
   assert.equal(transitionScannerLifecycle("live_searching", "NO_SCENE"), "no_scene");
   assert.equal(transitionScannerLifecycle("captured_analyzing", "NO_SCENE"), "no_scene");

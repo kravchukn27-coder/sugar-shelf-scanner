@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { CuratedProductCatalog } from "./curated-product-catalog";
 import { CURATED_PRODUCTS } from "./curated-products";
-import { estimatedSnackCandidate, matchingChobaniCandidate, unknownCandidate } from "./fixtures/catalog-fixtures";
+import {
+  coronaSpainCandidates,
+  estimatedSnackCandidate,
+  matchingSpanishCatalogCandidates,
+  matchingChobaniCandidate,
+  schweppesLimonCandidate,
+  unknownCandidate,
+  wrongCoronaSpainCandidates,
+} from "./fixtures/catalog-fixtures";
 import { ProductResolver } from "./product-resolver";
 import type { CatalogProduct, ProductCatalogProvider, VisualCandidate } from "./types";
 
@@ -14,6 +22,50 @@ test("confirms a high-confidence visual match against the curated catalog", asyn
   assert.equal(result.product?.id, "chobani-zero-sugar-strawberry");
   assert.equal(result.score.band, "green");
   assert.equal(result.score.source, "catalog");
+});
+
+test("confirms the approved Spanish Corona single bottle aliases using catalog nutrition", async () => {
+  for (const candidate of coronaSpainCandidates) {
+    const result = await resolver.resolve({ ...candidate, estimatedSugarPer100g: 42 });
+    assert.equal(result.status, "confirmed", candidate.name ?? "Corona candidate");
+    assert.equal(result.product?.id, "corona-extra-330ml-es");
+    assert.equal(result.product?.packSize, "330 ml");
+    assert.equal(result.product?.score.sugarPer100g, 0.2);
+    assert.equal(result.product?.proteinPer100g, 0.3);
+    assert.equal(result.score.source, "catalog");
+  }
+});
+
+test("does not confirm a different Corona variant or pack size", async () => {
+  for (const candidate of wrongCoronaSpainCandidates) {
+    const result = await resolver.resolve(candidate);
+    assert.notEqual(result.status, "confirmed", candidate.name ?? "Corona candidate");
+    assert.notEqual(result.product?.id, "corona-extra-330ml-es");
+  }
+});
+
+test("does not confirm Corona when Gemini identifies only the brand", async () => {
+  const result = await resolver.resolve({ brand: "Corona", name: null, packSize: "330 ml", confidence: 0.96 });
+  assert.notEqual(result.status, "confirmed");
+  assert.notEqual(result.product?.id, "corona-extra-330ml-es");
+});
+
+test("confirms approved Spanish Schweppes and La Lechera records from catalog nutrition", async () => {
+  for (const { candidate, productId, sugar, protein } of matchingSpanishCatalogCandidates) {
+    const result = await resolver.resolve({ ...candidate, estimatedSugarPer100g: 99 });
+    assert.equal(result.status, "confirmed", candidate.name ?? productId);
+    assert.equal(result.product?.id, productId);
+    assert.equal(result.score.source, "catalog");
+    assert.equal(result.score.sugarPer100g, sugar);
+    assert.equal(result.product?.proteinPer100g, protein);
+  }
+});
+
+test("selects Schweppes Tónica Limón instead of the same-brand Original variant", async () => {
+  const result = await resolver.resolve(schweppesLimonCandidate);
+  assert.equal(result.status, "confirmed");
+  assert.equal(result.product?.id, "schweppes-tonica-limon-330ml-es");
+  assert.notEqual(result.product?.id, "schweppes-tonica-original-330ml-es");
 });
 
 test("keeps vision nutrition as an explicitly estimated result", async () => {
