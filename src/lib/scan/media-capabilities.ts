@@ -10,26 +10,45 @@ type CapabilityTrack = {
   getSettings?: () => CameraTrackSettings;
   applyConstraints?: (constraints: MediaTrackConstraints) => Promise<void>;
 };
-export type CameraControls = { torchAvailable: boolean; standardZoom: number | null; wideZoom: number | null };
-export type CameraView = "standard" | "wide";
+export type CameraControls = { torchAvailable: boolean; standardZoom: number | null; closerZoom: number | null };
+export type CameraView = "standard" | "closer";
 
 export function getCameraControls(track: MediaStreamTrack | undefined): CameraControls {
   const capabilities = (track as CapabilityTrack | undefined)?.getCapabilities?.();
   const min = capabilities?.zoom?.min, max = capabilities?.zoom?.max;
   const hasZoomRange = Number.isFinite(min) && Number.isFinite(max) && (min as number) <= (max as number);
   const standardZoom = hasZoomRange && (min as number) <= 1 && (max as number) >= 1 ? 1 : null;
-  const wideZoom = standardZoom !== null && (min as number) < standardZoom ? min as number : null;
-  return { torchAvailable: capabilities?.torch === true, standardZoom, wideZoom };
+  // The scanner's user-facing control is deliberately a closer 2× view, not
+  // an ultra-wide 0.5× view. Do not expose a misleading button on devices
+  // that cannot actually provide a useful close view.
+  const closerZoom = standardZoom !== null && (max as number) >= 2 ? 2 : null;
+  return { torchAvailable: capabilities?.torch === true, standardZoom, closerZoom };
 }
 
 export function supportsTorch(track: MediaStreamTrack | undefined): boolean { return getCameraControls(track).torchAvailable; }
 
 /** Apply a reported zoom value only; unsupported controls remain inert. */
 export async function applyCameraView(track: MediaStreamTrack | undefined, controls: CameraControls, view: CameraView): Promise<boolean> {
-  const zoom = view === "wide" ? controls.wideZoom : controls.standardZoom;
+  const zoom = view === "closer" ? controls.closerZoom : controls.standardZoom;
   const applyConstraints = (track as CapabilityTrack | undefined)?.applyConstraints;
   if (zoom === null || !applyConstraints) return false;
   await applyConstraints.call(track, { advanced: [{ zoom } as MediaTrackConstraintSet] });
+  return true;
+}
+
+/**
+ * Prefer a sharper portrait video mode only after Safari has selected a rear
+ * source. This is a quality preference, never a camera/lens selector, and a
+ * browser may keep its current mode when the request cannot be satisfied.
+ */
+export async function preferCameraCaptureQuality(track: MediaStreamTrack | undefined): Promise<boolean> {
+  const applyConstraints = (track as CapabilityTrack | undefined)?.applyConstraints;
+  if (!applyConstraints) return false;
+  await applyConstraints.call(track, {
+    width: { ideal: 1440 },
+    height: { ideal: 1920 },
+    aspectRatio: { ideal: 3 / 4 },
+  });
   return true;
 }
 

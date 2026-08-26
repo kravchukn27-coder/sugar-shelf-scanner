@@ -9,7 +9,7 @@ import { formatSugarPer100g } from "@/lib/scoring/format-sugar";
 import { groupRepeatedDetections, type DetectionGroup } from "@/lib/scan/deduplicate-detections";
 import { getCenteredFrameCrop, mapAnalyzedBoxToPreview } from "@/lib/scan/frame-crop";
 import { getCameraDiagnosticSnapshot, type CameraDiagnosticSnapshot } from "@/lib/scan/camera-diagnostics";
-import { applyCameraView, getCameraControls, getCameraDeviceId, rearCameraRequest, supportsTorch, type CameraControls } from "@/lib/scan/media-capabilities";
+import { applyCameraView, getCameraControls, getCameraDeviceId, preferCameraCaptureQuality, rearCameraRequest, supportsTorch, type CameraControls } from "@/lib/scan/media-capabilities";
 import { shouldRunScannerScheduler, transitionScannerLifecycle, type ScannerLifecycleEvent, type ScannerLifecycleState } from "@/lib/scan/scanner-lifecycle";
 import { attemptLocalNutritionOcr, decodeLocalBarcode, getLocalBarcodeDetector, getLocalTextDetector, type RecoveryState } from "@/lib/recovery/local-recovery";
 import type { BarcodeRecoveryResponse } from "@/lib/contracts/scan";
@@ -24,7 +24,7 @@ const displaySugar = (value: number | null | undefined) => formatSugarPer100g(va
 function Chevron({ up = false }: { up?: boolean }) { return <svg aria-hidden="true" className={up ? "chevron up" : "chevron"} viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>; }
 function CloseIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17" /></svg>; }
 function TorchIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 3h6l-1 6h3l-7 12 1-8H8z" /></svg>; }
-function WideViewIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4M8 12h8" /></svg>; }
+function ZoomInIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="5.5" /><path d="M10.5 7.5v6M7.5 10.5h6M15 15l4 4" /></svg>; }
 function BarcodeIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5v14M7 5v14M10 5v14M14 5v14M17 5v14M20 5v14M12 5v14" /></svg>; }
 
 export default function HomePage() {
@@ -42,12 +42,12 @@ export default function HomePage() {
   const [showCameraDiagnostics, setShowCameraDiagnostics] = useState(false);
   const [sheet, setSheet] = useState(false), [selected, setSelected] = useState<string | null>(null);
   const [torchAvailable, setTorchAvailable] = useState(false), [torchOn, setTorchOn] = useState(false);
-  const [cameraControls, setCameraControls] = useState<CameraControls>({ torchAvailable: false, standardZoom: null, wideZoom: null });
-  const [wideViewOn, setWideViewOn] = useState(false);
+  const [cameraControls, setCameraControls] = useState<CameraControls>({ torchAvailable: false, standardZoom: null, closerZoom: null });
+  const [closerViewOn, setCloserViewOn] = useState(false);
   const [recovery, setRecovery] = useState<{ id: string; state: RecoveryState; labelSeen: boolean } | null>(null);
   const groups = groupRepeatedDetections((scan?.detections ?? []).filter(eligible));
   const dispatch = useCallback((event: ScannerLifecycleEvent) => setState((current) => transitionScannerLifecycle(current, event)), []);
-  const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); setCameraDiagnostics(null); setCameraControls({ torchAvailable: false, standardZoom: null, wideZoom: null }); setWideViewOn(false); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
+  const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); setCameraDiagnostics(null); setCameraControls({ torchAvailable: false, standardZoom: null, closerZoom: null }); setCloserViewOn(false); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
   const clearResult = useCallback(() => { if (recoveryTimer.current !== null) window.clearInterval(recoveryTimer.current); recoveryTimer.current = null; setRecovery(null); setScan(null); setFrozen(null); setFailure(null); setSheet(false); setSelected(null); setUploadBusy(false); }, []);
 
   const capture = useCallback((source: HTMLVideoElement | HTMLImageElement, width: number, quality: number, zoom = 1) => {
@@ -128,8 +128,9 @@ export default function HomePage() {
       streamRef.current = stream;
       const track = stream.getVideoTracks()[0];
       preferredCameraDeviceId.current = getCameraDeviceId(track) ?? preferredCameraDeviceId.current;
+      try { await preferCameraCaptureQuality(track); } catch { /* Retain Safari's selected mode if its quality preference is unsupported. */ }
       let controls = getCameraControls(track);
-      if (controls.standardZoom !== null) { try { await applyCameraView(track, controls, "standard"); } catch { controls = { ...controls, standardZoom: null, wideZoom: null }; } }
+      if (controls.standardZoom !== null) { try { await applyCameraView(track, controls, "standard"); } catch { controls = { ...controls, standardZoom: null, closerZoom: null }; } }
       setCameraControls(controls); setTorchAvailable(controls.torchAvailable); setCameraDiagnostics(getCameraDiagnosticSnapshot(track)); videoRef.current.srcObject = stream; await videoRef.current.play();
       if (id !== session.current) { stream.getTracks().forEach((t) => t.stop()); if (videoRef.current) videoRef.current.srcObject = null; streamRef.current = null; }
     }
@@ -137,7 +138,7 @@ export default function HomePage() {
   }, [clearResult, stopStream]);
   const close = useCallback(() => { session.current += 1; stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
   const toggleTorch = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !torchOn; if (!track || !supportsTorch(track)) return setTorchAvailable(false); try { await track.applyConstraints({ advanced: [{ torch: next } as unknown as MediaTrackConstraintSet] }); setTorchOn(next); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
-  const toggleWideView = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !wideViewOn; try { const applied = await applyCameraView(track, cameraControls, next ? "wide" : "standard"); if (!applied) { setCameraControls((current) => ({ ...current, wideZoom: null })); setWideViewOn(false); return; } setWideViewOn(next); } catch { setCameraControls((current) => ({ ...current, wideZoom: null })); setWideViewOn(false); } }, [cameraControls, wideViewOn]);
+  const toggleCloserView = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !closerViewOn; try { const applied = await applyCameraView(track, cameraControls, next ? "closer" : "standard"); if (!applied) { setCameraControls((current) => ({ ...current, closerZoom: null })); setCloserViewOn(false); return; } setCloserViewOn(next); setCameraDiagnostics(getCameraDiagnosticSnapshot(track)); } catch { setCameraControls((current) => ({ ...current, closerZoom: null })); setCloserViewOn(false); } }, [cameraControls, closerViewOn]);
   const retry = useCallback(() => { if (!uploadUrl) void start(); else { session.current += 1; clearResult(); setUploadBusy(true); dispatch("RETRY"); } }, [clearResult, dispatch, start, uploadUrl]);
   const startRecovery = useCallback((id: string) => {
     const video = videoRef.current;
@@ -221,7 +222,7 @@ export default function HomePage() {
 
   return <main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""}`} aria-label="Sugar product scanner">
     {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video ref={videoRef} className="camera-preview" muted playsInline />}{frozen && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}{state !== "camera_off" && <div className="camera-vignette" />}
-    <header className={`camera-controls ${state === "live_searching" && (torchAvailable || cameraControls.wideZoom !== null) ? "" : "end"}`}><div className={lensStyles.controls}>{failed ? <button className="round-control" onClick={() => void startErrorBarcodeRecovery()} aria-label="Scan a barcode"><BarcodeIcon /></button> : null}{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}{state === "live_searching" && cameraControls.wideZoom !== null ? <button className={`round-control ${wideViewOn ? lensStyles.active : ""}`} onClick={() => void toggleWideView()} aria-label={wideViewOn ? "Use standard camera view" : "Use wider camera view"} aria-pressed={wideViewOn}><WideViewIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
+    <header className={`camera-controls ${state === "live_searching" && (torchAvailable || cameraControls.closerZoom !== null) ? "" : "end"}`}><div className={lensStyles.controls}>{failed ? <button className="round-control" onClick={() => void startErrorBarcodeRecovery()} aria-label="Scan a barcode"><BarcodeIcon /></button> : null}{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}{state === "live_searching" && cameraControls.closerZoom !== null ? <button className={`round-control ${closerViewOn ? lensStyles.active : ""}`} onClick={() => void toggleCloserView()} aria-label={closerViewOn ? "Use standard 1× view" : "Zoom in to 2×"} aria-pressed={closerViewOn}><ZoomInIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
     {groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { setSelected(group.detection.id); setSheet(true); }} />)}
     {state === "live_searching" && !uploadUrl && <><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint">Point your camera at products</p></>}
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}
