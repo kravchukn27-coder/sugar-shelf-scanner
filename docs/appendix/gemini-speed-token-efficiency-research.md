@@ -20,7 +20,9 @@ The artifact is the primary version; update it first, then re-sync this file.
 | D2 | **Done** — commit `0be75b3` | The catalog DB probe starts alongside Gemini analysis instead of after it (`analyze/route.ts`). Shipped together with C1 in the same commit; unaffected by C1's revert. |
 | C5 (revised) | **Done** — commit `e4274bd`, pushed to `main` | Original scope (retry with the same 30s timeout) was rejected: worst case would have gone from 30s to 60s of silent wait, against the spirit of section B. Shipped instead: one bounded retry on `analyze`, only for `provider_timeout` or a `provider_error` with a 5xx status — never for a parsed-but-invalid response or a client-side config error — using a separate, shorter 8s timeout for the retry attempt (worst case now ~38s, not 60s). `src/lib/vision/gemini.ts` only. `npx tsc --noEmit` clean, all 79 existing tests pass. No automated test covers the retry path itself — `gemini.ts` has no test file at all, and standing one up (mocking `fetch`/`AbortController` timing) was judged out of scope for a "cheap" task; flagging this as a real coverage gap rather than a solved item. |
 | D4 | **Done** — commit `4e4720e`, pushed to `main` | The former unreachable recovery path was replaced by the one-shot Details-only recovery camera. It has no live Gemini scheduler and no default scanner barcode control. |
-| C2, C3, C4, D1, D3 | Not started | See rollout order below. C2/C3 explicitly deferred pending a larger fixture set / confirmed model access; C4, D1, D3 have no blocker, next in rollout order. |
+| C2, C3, C4 | Not started | C2/C3 explicitly deferred pending a larger fixture set / confirmed model access; C4 remains a later tuning pass. |
+| D1 | **Done** — commit `047b50d` | Live preflight is skipped while the downscaled frame is moving. |
+| D3 | **Implemented locally** | Live-only client blur/brightness/exposure gate with a bounded three-skip fallback, aggregate `qualitySkipped` metric, and `NEXT_PUBLIC_FRAME_QUALITY_ENABLED` rollback flag. Requires iPhone fixture calibration before treating thresholds as final. |
 
 ## Method
 

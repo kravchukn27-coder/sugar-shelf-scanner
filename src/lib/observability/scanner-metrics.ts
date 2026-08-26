@@ -26,6 +26,7 @@ export const scannerMetricsSchema = z.object({
   analyzeRttMs: bucketedTimingSchema.optional(),
   renderMs: bucketedTimingSchema.optional(),
   preflightAttempts: z.number().finite().int().min(0).max(90),
+  qualitySkipped: z.number().finite().int().min(0).max(90),
 }).strict();
 
 export type ScannerMetrics = z.infer<typeof scannerMetricsSchema>;

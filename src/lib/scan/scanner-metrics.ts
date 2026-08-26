@@ -18,6 +18,7 @@ export type ScannerMetricsPayload = {
   analyzeRttMs?: number;
   renderMs?: number;
   preflightAttempts: number;
+  qualitySkipped: number;
 };
 
 type Clock = () => number;
@@ -39,6 +40,7 @@ function elapsed(startedAt: number, now: number) {
 type RunContext = {
   startedAt: number;
   preflightAttempts: number;
+  qualitySkipped: number;
   captureReadyMs?: number;
   captureEncodeMs?: number;
   preflightRttMs?: number;
@@ -62,7 +64,7 @@ export function createScannerMetrics(clock: Clock = () => performance.now()) {
 
   return {
     reset() {
-      context = { startedAt: clock(), preflightAttempts: 0, emitted: false };
+      context = { startedAt: clock(), preflightAttempts: 0, qualitySkipped: 0, emitted: false };
     },
     discard() {
       context = null;
@@ -84,6 +86,9 @@ export function createScannerMetrics(clock: Clock = () => performance.now()) {
       }
       return clock();
     },
+    recordQualitySkip() {
+      if (context) context.qualitySkipped = Math.min(MAX_PREFLIGHT_ATTEMPTS, context.qualitySkipped + 1);
+    },
     finishRequest(stage: RequestStage, startedAt: number) {
       if (!context) return;
       const duration = elapsed(startedAt, clock());
@@ -102,6 +107,7 @@ export function createScannerMetrics(clock: Clock = () => performance.now()) {
       const payload: ScannerMetricsPayload = {
         completion,
         preflightAttempts: context.preflightAttempts,
+        qualitySkipped: context.qualitySkipped,
       };
       if (context.captureReadyMs !== undefined) payload.captureReadyMs = context.captureReadyMs;
       if (context.captureEncodeMs !== undefined) payload.captureEncodeMs = bucketDuration(context.captureEncodeMs);

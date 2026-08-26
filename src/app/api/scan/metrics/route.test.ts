@@ -7,6 +7,7 @@ const metric = {
   captureReadyMs: 100,
   preflightRttMs: 250,
   preflightAttempts: 1,
+  qualitySkipped: 0,
 };
 
 async function withMetricsFlag(value: string | undefined, run: () => Promise<void>) {

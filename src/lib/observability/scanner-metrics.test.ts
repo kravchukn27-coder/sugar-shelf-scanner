@@ -10,6 +10,7 @@ const validMetric = {
   analyzeRttMs: 1_000,
   renderMs: 75,
   preflightAttempts: 2,
+  qualitySkipped: 1,
 };
 
 test("scanner metrics accepts only capped 25ms aggregate buckets", () => {

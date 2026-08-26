@@ -27,6 +27,7 @@ test("buckets aggregate timings and counts only dispatched preflight attempts", 
     analyzeRttMs: 75,
     renderMs: 25,
     preflightAttempts: 1,
+    qualitySkipped: 0,
   });
 });
 
@@ -46,4 +47,12 @@ test("caps a noisy scanner run without storing unbounded values", () => {
   metrics.reset();
   for (let index = 0; index < 100; index += 1) metrics.startRequest("preflight");
   assert.equal(metrics.terminal("preflight_terminal")?.preflightAttempts, 90);
+});
+
+test("caps aggregate quality skips without retaining frame details", () => {
+  const metrics = createScannerMetrics(() => 0);
+  metrics.reset();
+  metrics.recordQualitySkip();
+  metrics.recordQualitySkip();
+  assert.equal(metrics.terminal("preflight_terminal")?.qualitySkipped, 2);
 });
