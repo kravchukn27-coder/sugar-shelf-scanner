@@ -72,13 +72,16 @@ loop, never direct catalog mutation. It appears only after the user opens
 Details, locally decodes a valid barcode, and that barcode remains unresolved.
 Choosing **Send for review** is the explicit submission action.
 
-1. The browser keeps recovery frames and OCR text local. The submitted payload
-   is a validated GTIN, user-typed brand/name/pack size, optional user-typed
-   sugar/protein per 100g, and whether a label was seen locally. It contains no
-   image, OCR text, account identity, precise location, device ID or stored IP.
-2. The API validates GTIN checksum and nutrition bounds, applies a bounded
-   per-instance guard, and stores a `pending_review` row only. A duplicate
-   pending GTIN is rejected rather than creating another review item.
+1. The browser keeps recovery frames and OCR text local except for the one
+   explicitly consented nutrition-label request. The submitted review payload
+   contains user-confirmed brand/name/pack size, optional GTIN, nullable energy
+   (kcal), protein, fat, carbohydrates and sugars per 100g, and safe
+   provenance/consent/confidence metadata. It contains no image, OCR text,
+   account identity, precise location, device ID or stored IP.
+2. The API validates GTIN checksum and nutrition bounds, rejects undeclared
+   properties, applies a bounded per-instance guard, and stores a
+   `pending_review` row only. A duplicate pending GTIN is rejected; without a
+   GTIN, a normalised identity digest gives controlled review-queue dedupe.
 3. `catalog_proposals` is never read by matching or barcode lookup, so neither
    a suggestion nor its nutrition can make a SKU `confirmed`.
 4. A curator independently verifies the package and authoritative source,
@@ -98,3 +101,12 @@ automatic promotion from Gemini, barcode or OCR is permitted.
 
 The moderation procedure lives in [catalog-proposals.md](catalog-proposals.md).
 It is a companion runbook, not a new runtime source of truth.
+
+### Demo presentation versus verified catalog data
+
+For the planned recovery demo, a user who presses **OK** after barcode or
+nutrition-label capture may see the submitted draft accepted in their current
+demo result. That temporary experience is not the production confirmation
+rule. A real `confirmed` catalog row requires manual curator review of the
+package/source and a provenance-backed import. The application must preserve
+that distinction in the data model and UI before public release.
