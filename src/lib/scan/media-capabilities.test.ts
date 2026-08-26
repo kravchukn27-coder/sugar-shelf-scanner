@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyCameraView, getCameraControls, rearCameraRequest, supportsTorch } from "./media-capabilities";
+import { applyCameraView, getCameraControls, getCameraDeviceId, rearCameraRequest, supportsTorch } from "./media-capabilities";
 
-function track(capabilities: { torch?: boolean; zoom?: { min?: number; max?: number } }, applyConstraints?: (constraints: MediaTrackConstraints) => Promise<void>) {
-  return { getCapabilities: () => capabilities, applyConstraints } as unknown as MediaStreamTrack;
+function track(
+  capabilities: { torch?: boolean; zoom?: { min?: number; max?: number } },
+  applyConstraints?: (constraints: MediaTrackConstraints) => Promise<void>,
+  deviceId?: string,
+) {
+  return { getCapabilities: () => capabilities, applyConstraints, getSettings: () => ({ deviceId }) } as unknown as MediaStreamTrack;
 }
 
 test("reports a wider view only when 1× and a lower zoom are available", () => {
@@ -23,6 +27,14 @@ test("applies only advertised standard or wide zoom values", async () => {
   assert.equal(await applyCameraView(track({}), getCameraControls(track({})), "wide"), false);
 });
 
-test("requests the rear camera before optional track controls are applied", () => {
-  assert.deepEqual(rearCameraRequest(), { video: { facingMode: { ideal: "environment" }, zoom: { ideal: 1 }, width: { ideal: 1280 }, height: { ideal: 1920 } }, audio: false });
+test("remembers an exposed source identifier so retries can request the same camera", () => {
+  assert.equal(getCameraDeviceId(track({}, undefined, "rear-camera-id")), "rear-camera-id");
+  assert.equal(getCameraDeviceId(track({}, undefined, "   ")), null);
+  assert.equal(getCameraDeviceId(undefined), null);
+});
+
+test("keeps the first rear request lens-neutral and pins a known source on retry", () => {
+  assert.deepEqual(rearCameraRequest(), { video: { facingMode: { ideal: "environment" } }, audio: false });
+  assert.deepEqual(rearCameraRequest("rear-camera-id"), { video: { deviceId: { exact: "rear-camera-id" } }, audio: false });
+  assert.deepEqual(rearCameraRequest("   "), { video: { facingMode: { ideal: "environment" } }, audio: false });
 });

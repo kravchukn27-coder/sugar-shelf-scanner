@@ -7,7 +7,8 @@ import lensStyles from "./camera-lens.module.css";
 import type { AnalyzeScanResponse, Detection, PreflightScanResponse } from "@/lib/contracts/scan";
 import { formatSugarPer100g } from "@/lib/scoring/format-sugar";
 import { groupRepeatedDetections, type DetectionGroup } from "@/lib/scan/deduplicate-detections";
-import { applyCameraView, getCameraControls, rearCameraRequest, supportsTorch, type CameraControls } from "@/lib/scan/media-capabilities";
+import { getCenteredFrameCrop } from "@/lib/scan/frame-crop";
+import { applyCameraView, getCameraControls, getCameraDeviceId, rearCameraRequest, supportsTorch, type CameraControls } from "@/lib/scan/media-capabilities";
 import { shouldRunScannerScheduler, transitionScannerLifecycle, type ScannerLifecycleEvent, type ScannerLifecycleState } from "@/lib/scan/scanner-lifecycle";
 import { attemptLocalNutritionOcr, decodeLocalBarcode, getLocalBarcodeDetector, getLocalTextDetector, type RecoveryState } from "@/lib/recovery/local-recovery";
 import type { BarcodeRecoveryResponse } from "@/lib/contracts/scan";
@@ -26,7 +27,7 @@ function WideViewIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><pa
 function BarcodeIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5v14M7 5v14M10 5v14M14 5v14M17 5v14M20 5v14M12 5v14" /></svg>; }
 
 export default function HomePage() {
-  const videoRef = useRef<HTMLVideoElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryTimer = useRef<number | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryTimer = useRef<number | null>(null), preferredCameraDeviceId = useRef<string | null>(null);
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
   const [failure, setFailure] = useState<string | null>(null);
   const [scan, setScan] = useState<AnalyzeScanResponse | null>(null);
@@ -42,19 +43,22 @@ export default function HomePage() {
   const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); setCameraControls({ torchAvailable: false, standardZoom: null, wideZoom: null }); setWideViewOn(false); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
   const clearResult = useCallback(() => { if (recoveryTimer.current !== null) window.clearInterval(recoveryTimer.current); recoveryTimer.current = null; setRecovery(null); setScan(null); setFrozen(null); setFailure(null); setSheet(false); setSelected(null); }, []);
 
-  const capture = useCallback((source: HTMLVideoElement | HTMLImageElement, width: number, quality: number) => {
+  const capture = useCallback((source: HTMLVideoElement | HTMLImageElement, width: number, quality: number, zoom = 1) => {
     const canvas = canvasRef.current; const w = "videoWidth" in source ? source.videoWidth : source.naturalWidth; const h = "videoHeight" in source ? source.videoHeight : source.naturalHeight;
-    const preview = source.getBoundingClientRect(), aspect = preview.width / preview.height;
-    if (!canvas || !w || !h || !Number.isFinite(aspect) || aspect <= 0) return null;
-    let sx = 0, sy = 0, sw = w, sh = h;
-    if (w / h > aspect) { sw = h * aspect; sx = (w - sw) / 2; } else { sh = w / aspect; sy = (h - sh) / 2; }
-    canvas.width = width; canvas.height = Math.max(1, Math.round(width / aspect)); canvas.getContext("2d")?.drawImage(source, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    const preview = source.getBoundingClientRect();
+    const crop = getCenteredFrameCrop(w, h, preview.width, preview.height, zoom);
+    if (!canvas || !crop) return null;
+    canvas.width = width; canvas.height = Math.max(1, Math.round(width / crop.aspect)); canvas.getContext("2d")?.drawImage(source, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, canvas.width, canvas.height);
     return canvas.toDataURL("image/jpeg", quality);
   }, []);
 
   const analyze = useCallback(async (source: HTMLVideoElement | HTMLImageElement, id: number) => {
-    const image = capture(source, 960, .7); if (!image || id !== session.current) return;
-    if (source instanceof HTMLVideoElement) setFrozen(image); dispatch("CAPTURED");
+    // Keep the live camera at its standard field of view. Once preflight has
+    // positively identified a product, this modest centred crop gives Gemini
+    // a closer frozen frame without selecting a different physical lens.
+    const image = capture(source, 960, .7, 1.12); if (!image || id !== session.current) return;
+    if (source instanceof HTMLVideoElement) setFrozen(image);
+    dispatch("CAPTURED");
     const controller = new AbortController(); abortRef.current = controller;
     try {
       const response = await fetch("/api/scan/analyze", { method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal, body: JSON.stringify({ imageBase64: image.split(",")[1], mimeType: "image/jpeg", context: "shelf", clientFrameId: `frame-${++frame.current}` }) });
@@ -64,7 +68,7 @@ export default function HomePage() {
       if (id !== session.current) return;
       if (result.detections.some(eligible)) { setScan(result); dispatch("ANALYZE_SUCCESS"); } else { setFailure("No recognizable packaged products found"); dispatch("NO_SCENE"); }
     } catch (error) { if (id === session.current && !(error instanceof DOMException && error.name === "AbortError")) { setFailure("Couldn’t analyze this frame"); dispatch("ANALYZE_FAILURE"); } }
-    finally { if (id === session.current) { inFlight.current = false; abortRef.current = null; } }
+    finally { if (id === session.current && abortRef.current === controller) { inFlight.current = false; abortRef.current = null; } }
   }, [capture, dispatch]);
 
   const preflight = useCallback(async (source: HTMLVideoElement | HTMLImageElement) => {
@@ -80,12 +84,35 @@ export default function HomePage() {
       if (result.decision !== "candidate" || result.packagedProductCount < 1 || result.confidence < .75) { setFailure(result.decision === "uncertain" ? "Move closer to a packaged product" : "No packaged products found — move closer"); dispatch("NO_SCENE"); return; }
       await analyze(source, id);
     } catch (error) { if (id === session.current && !(error instanceof DOMException && error.name === "AbortError")) { setFailure("Couldn’t check this scene"); dispatch("ANALYZE_FAILURE"); } }
-    finally { if (id === session.current && state !== "captured_analyzing") { inFlight.current = false; abortRef.current = null; } }
+    finally {
+      // Full analysis owns its own controller. Do not clear inFlight here once
+      // it has begun: that would let an upload/live scheduler start another
+      // request or make Close unable to abort the full Gemini request.
+      if (id === session.current && abortRef.current === controller) { inFlight.current = false; abortRef.current = null; }
+    }
   }, [analyze, capture, dispatch, sheet, state]);
 
   const start = useCallback(async () => {
     const id = ++session.current; stopStream(); clearResult(); setUploadUrl(null); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
-    try { const stream = await navigator.mediaDevices.getUserMedia(rearCameraRequest()); if (id !== session.current || !videoRef.current) { stream.getTracks().forEach((t) => t.stop()); return; } streamRef.current = stream; let controls = getCameraControls(stream.getVideoTracks()[0]); if (controls.standardZoom !== null) { try { await applyCameraView(stream.getVideoTracks()[0], controls, "standard"); } catch { controls = { ...controls, standardZoom: null, wideZoom: null }; } } setCameraControls(controls); setTorchAvailable(controls.torchAvailable); videoRef.current.srcObject = stream; await videoRef.current.play(); if (id !== session.current) { stream.getTracks().forEach((t) => t.stop()); if (videoRef.current) videoRef.current.srcObject = null; streamRef.current = null; } }
+    try {
+      // A device ID is a best-effort way to keep the same browser-selected rear
+      // source across retry. If iOS no longer exposes it, fall back to rear.
+      let stream: MediaStream;
+      try { stream = await navigator.mediaDevices.getUserMedia(rearCameraRequest(preferredCameraDeviceId.current)); }
+      catch (error) {
+        if (!preferredCameraDeviceId.current) throw error;
+        preferredCameraDeviceId.current = null;
+        stream = await navigator.mediaDevices.getUserMedia(rearCameraRequest());
+      }
+      if (id !== session.current || !videoRef.current) { stream.getTracks().forEach((t) => t.stop()); return; }
+      streamRef.current = stream;
+      const track = stream.getVideoTracks()[0];
+      preferredCameraDeviceId.current = getCameraDeviceId(track) ?? preferredCameraDeviceId.current;
+      let controls = getCameraControls(track);
+      if (controls.standardZoom !== null) { try { await applyCameraView(track, controls, "standard"); } catch { controls = { ...controls, standardZoom: null, wideZoom: null }; } }
+      setCameraControls(controls); setTorchAvailable(controls.torchAvailable); videoRef.current.srcObject = stream; await videoRef.current.play();
+      if (id !== session.current) { stream.getTracks().forEach((t) => t.stop()); if (videoRef.current) videoRef.current.srcObject = null; streamRef.current = null; }
+    }
     catch { if (id === session.current) { setFailure("Camera unavailable. Check permission and try again."); setState((current) => transitionScannerLifecycle(current, "ANALYZE_FAILURE")); } }
   }, [clearResult, stopStream]);
   const close = useCallback(() => { session.current += 1; stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
@@ -146,7 +173,14 @@ export default function HomePage() {
   function upload(file: File | undefined) { if (!file) return; session.current += 1; stopStream(); clearResult(); setUploadUrl((old) => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(file); }); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY")); }
   useEffect(() => () => { session.current += 1; if (recoveryTimer.current !== null) window.clearInterval(recoveryTimer.current); stopStream(); }, [stopStream]);
   useEffect(() => { if (!shouldRunScannerScheduler(state) || sheet || uploadUrl) return; const timer = window.setInterval(() => { if (videoRef.current?.readyState && !inFlight.current) void preflight(videoRef.current); }, FRAME_INTERVAL); return () => window.clearInterval(timer); }, [preflight, sheet, state, uploadUrl]);
-  useEffect(() => { if (!uploadUrl || !shouldRunScannerScheduler(state) || sheet) return; const image = new Image(); image.onload = () => void preflight(image); image.src = uploadUrl; }, [preflight, sheet, state, uploadUrl]);
+  useEffect(() => {
+    if (!uploadUrl || !shouldRunScannerScheduler(state) || sheet) return;
+    const image = new Image();
+    let cancelled = false;
+    image.onload = () => { if (!cancelled) void preflight(image); };
+    image.src = uploadUrl;
+    return () => { cancelled = true; image.onload = null; };
+  }, [preflight, sheet, state, uploadUrl]);
   const failed = state === "no_scene" || state === "error";
 
   return <main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""}`} aria-label="Sugar product scanner">

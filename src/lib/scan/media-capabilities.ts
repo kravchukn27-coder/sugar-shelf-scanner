@@ -4,7 +4,12 @@
  * select wide or ultra-wide hardware for the same requested zoom.
  */
 export type CameraTrackCapabilities = { torch?: boolean; zoom?: { min?: number; max?: number } };
-type CapabilityTrack = { getCapabilities?: () => CameraTrackCapabilities; applyConstraints?: (constraints: MediaTrackConstraints) => Promise<void> };
+type CameraTrackSettings = { deviceId?: string };
+type CapabilityTrack = {
+  getCapabilities?: () => CameraTrackCapabilities;
+  getSettings?: () => CameraTrackSettings;
+  applyConstraints?: (constraints: MediaTrackConstraints) => Promise<void>;
+};
 export type CameraControls = { torchAvailable: boolean; standardZoom: number | null; wideZoom: number | null };
 export type CameraView = "standard" | "wide";
 
@@ -29,22 +34,27 @@ export async function applyCameraView(track: MediaStreamTrack | undefined, contr
 }
 
 /**
- * Ask for the rear stream at 1× from the first camera negotiation. Applying
- * zoom only after a stream starts is too late on some iPhone/Safari camera
- * stacks: Safari may already have selected an ultra-wide/macro field of view.
- * This stays an ideal preference—the browser remains free to ignore an
- * unsupported zoom constraint, and later capability checks keep the UI safe.
+ * Return the source identifier currently selected by the browser, if exposed.
+ * Supplying it to a later getUserMedia call is the only standards-based way to
+ * ask for that same source again. `facingMode` identifies a direction, not a
+ * particular rear lens, and a zoom constraint does not identify one either.
  */
-export function rearCameraRequest(): MediaStreamConstraints {
+export function getCameraDeviceId(track: MediaStreamTrack | undefined): string | null {
+  const deviceId = (track as CapabilityTrack | undefined)?.getSettings?.().deviceId?.trim();
+  return deviceId || null;
+}
+
+/**
+ * Request the same rear source on a retry when a prior track identified it.
+ * On the first request, keep the profile deliberately narrow: constraints such
+ * as ideal zoom and a capture resolution participate in browser source/mode
+ * selection but cannot guarantee a physical iPhone lens. Standard 1× is
+ * applied only after capability inspection, on the selected track.
+ */
+export function rearCameraRequest(preferredDeviceId?: string | null): MediaStreamConstraints {
+  const deviceId = preferredDeviceId?.trim();
   return {
-    // TypeScript's bundled DOM declarations lag this optional browser
-    // constraint, even though we already feature-detect it after startup.
-    video: {
-      facingMode: { ideal: "environment" },
-      zoom: { ideal: 1 },
-      width: { ideal: 1280 },
-      height: { ideal: 1920 },
-    } as MediaTrackConstraints,
+    video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: "environment" } },
     audio: false,
   };
 }
