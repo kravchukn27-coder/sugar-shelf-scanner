@@ -16,8 +16,9 @@ The artifact is the primary version; update it first, then re-sync this file.
 | --- | --- | --- |
 | B1, B2, B3 | **Done** — commit `39ac549`, pushed to `main` | Staged `captured_analyzing` copy + soft "uncertain" hint instead of hard-failing the live search loop. `src/app/page.tsx` only. |
 | C1, D2 | **Done** — commit `0be75b3` | `mediaResolution: "MEDIA_RESOLUTION_LOW"` added to preflight's `generationConfig` (confirmed against the live Generative Language API discovery document — the field is real and exactly named this, not a guess); catalog DB probe (`createRuntimeCatalog`) now starts alongside the Gemini analyze call instead of after it, via a `catalog` promise param on `resolveScan`. |
-| C5 (revised) | **Done** — pending commit | Original scope (retry with the same 30s timeout) was rejected: worst case would have gone from 30s to 60s of silent wait, against the spirit of section B. Shipped instead: one bounded retry on `analyze`, only for `provider_timeout` or a `provider_error` with a 5xx status — never for a parsed-but-invalid response or a client-side config error — using a separate, shorter 8s timeout for the retry attempt (worst case now ~38s, not 60s). `src/lib/vision/gemini.ts` only. `npx tsc --noEmit` clean, all 79 existing tests pass. No automated test covers the retry path itself — `gemini.ts` has no test file at all, and standing one up (mocking `fetch`/`AbortController` timing) was judged out of scope for a "cheap" task; flagging this as a real coverage gap rather than a solved item. |
-| A1, A2, B (verified on-device), C2–C4, D1, D3, D4 | Not started | See rollout order below. |
+| C5 (revised) | **Done** — commit `e4274bd`, pushed to `main` | Original scope (retry with the same 30s timeout) was rejected: worst case would have gone from 30s to 60s of silent wait, against the spirit of section B. Shipped instead: one bounded retry on `analyze`, only for `provider_timeout` or a `provider_error` with a 5xx status — never for a parsed-but-invalid response or a client-side config error — using a separate, shorter 8s timeout for the retry attempt (worst case now ~38s, not 60s). `src/lib/vision/gemini.ts` only. `npx tsc --noEmit` clean, all 79 existing tests pass. No automated test covers the retry path itself — `gemini.ts` has no test file at all, and standing one up (mocking `fetch`/`AbortController` timing) was judged out of scope for a "cheap" task; flagging this as a real coverage gap rather than a solved item. |
+| A1, A2, B (verified on-device), C2–C4, D1, D3 | Not started | See rollout order below. |
+| D4 | **Done** — commit `4e4720e`, pushed to `main` | The former unreachable recovery path was replaced by the one-shot Details-only recovery camera. It has no live Gemini scheduler and no default scanner barcode control. |
 
 ## Method
 
@@ -128,10 +129,9 @@ git history of `src/lib/env.ts`.
 - **D3. Cheap client-side blur/brightness pre-check** before sending a frame
   to preflight — no ML, just a heuristic on the downscaled canvas. Overlaps
   D1 mechanically but targets image quality, not motion.
-- **D4. Decide the fate of the unreachable `RecoveryCamera` path** — not
-  wired into any live UI (`recovery-camera.tsx`, confirmed via grep). Zero
-  cost today (unreachable code makes zero requests). **Being handled by
-  another agent/track — not touched here.**
+- **D4. Done — replace the unreachable recovery path.** The Details-only
+  one-shot recovery camera shipped in `4e4720e`; it captures only after a user
+  tap, uses a local barcode decoder first, and never joins the live scheduler.
 
 ## Rollout order (no target latency numbers fixed yet — set after the A1 window)
 
@@ -143,6 +143,69 @@ git history of `src/lib/env.ts`.
 6. **C2, C3** — accuracy-risk changes; C2 explicitly deferred (needs a real
    fixture set), C3 needs model-access confirmation first.
 7. **C4, C5** — tuning, after A1 gives real distributions.
+
+## A1/A2 execution plan
+
+**Scope.** Add a 14-day, explicitly enabled measurement window. It must not
+alter scanner decisions, issue Gemini calls, persist data in PostgreSQL, or
+correlate a person or device across scans.
+
+### 1. Define the measurement contract first
+
+- Keep the existing server `scan`, `vision` and `catalog` timings compatible;
+  add `db_probe` and `catalog_resolution` to analyze `Server-Timing` when
+  available. `db_probe` measures `createRuntimeCatalog` from launch to
+  ready/fallback; `catalog_resolution` measures matching after the provider is
+  ready. They run in parallel with vision and must never be summed as wall time.
+- The browser holds only an in-memory run context. It records rounded/bucketed
+  `captureReadyMs`, `captureEncodeMs`, preflight/analyze RTT, `renderMs`, and
+  `preflightAttempts`. No timestamp, scan/frame/session ID, image metadata,
+  product data, GTIN, device/camera information or error text may enter it.
+- Emit at most one `scanner_completed` event for a non-aborted terminal run,
+  with `completion` equal to `analysis_completed`, `preflight_terminal`, or
+  `request_failure`. Dashboards must show these buckets separately; this avoids
+  treating discovery failures as zero-attempt successes. Close, permission
+  failure, page unload, stale session and recovery emit nothing.
+
+### 2. Implement opt-in, schema-restricted telemetry
+
+- Add server and browser flags, both defaulting to off. A stale browser bundle
+  must still receive `204` and no log when the server flag is off.
+- Add a strict `/api/scan/metrics` contract accepting only finite, capped,
+  bucketed aggregate values and the bounded completion enum. It must reject
+  unknown fields, set `Cache-Control: no-store`, write no database row and log
+  only the allowlisted aggregate event.
+- In `page.tsx`, reset the context on Start/upload/Retry; increment the attempt
+  counter immediately before each dispatched preflight request. Send the one
+  final summary through `sendBeacon` with `fetch(..., { keepalive: true })`
+  fallback, after result paint or terminal state. Telemetry never blocks UI.
+- Keep Gemini `usageMetadata` logging under the existing
+  `VISION_USAGE_METRICS_ENABLED` flag. Token counters come only from Gemini,
+  never from JPEG byte size.
+
+### 3. Verify before production enablement
+
+- Unit-test timing normalization, bucket/cap boundaries, single emission,
+  abort/retry reset and the payload allowlist. Route tests cover disabled
+  no-op, strict rejection and safe logging. Analyze-route tests prove parallel
+  DB-probe timing without changing catalog fallback.
+- Run `npm test`, `npm run verify`, typecheck and `git diff --check`.
+- On iPhone Safari and upload: verify no extra request while disabled; when
+  enabled, inspect that at most one small aggregate payload follows each
+  non-aborted terminal run and no image/OCR/identity appears in it.
+
+### 4. Operate and remove
+
+- Deploy with both flags off. Enable for exactly 14 days only after confirming
+  Railway log retention and access controls.
+- Review daily aggregates only: counts by completion, p50/p95 stage timing,
+  p50/p95 preflight attempts, Gemini usage counters and the ratio of attempts
+  to completed runs. Beacon loss means browser summaries are a lower bound.
+- Immediately disable both flags for a forbidden field, telemetry endpoint
+  errors above 0.5%, duplicate summaries above 5%, any additional Gemini
+  request, or an iPhone/time-to-result regression. At day 14 keep only the
+  aggregate decision table and remove temporary event logging unless it gains
+  an owner and retention policy.
 
 ## Open items — resolutions and deferrals from this round
 
@@ -164,5 +227,5 @@ git history of `src/lib/env.ts`.
 - **Fixture-set size for vision-accuracy testing** — explicitly **deferred**.
   Not a priority for the current demo; only relevant once C2/C3 move past
   discussion.
-- **Unreachable `RecoveryCamera` path (D4)** — explicitly **out of scope**
-  here, owned by a separate agent/track.
+- **Recovery camera path (D4)** — resolved in `4e4720e`; keep its one-shot
+  request boundary covered by the recovery QA suite.
