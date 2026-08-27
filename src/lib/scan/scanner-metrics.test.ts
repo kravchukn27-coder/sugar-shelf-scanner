@@ -23,10 +23,13 @@ test("buckets aggregate timings and counts only dispatched preflight attempts", 
     completion: "analysis_completed",
     captureReadyMs: 75,
     captureEncodeMs: 75,
-    preflightRttMs: 275,
+    timeToFirstPreflightDispatchMs: 125,
+    preflightLastRttMs: 275,
+    preflightTotalRttMs: 275,
     analyzeRttMs: 75,
     renderMs: 25,
     preflightAttempts: 1,
+    motionSkipped: 0,
     qualitySkipped: 0,
   });
 });
@@ -55,4 +58,36 @@ test("caps aggregate quality skips without retaining frame details", () => {
   metrics.recordQualitySkip();
   metrics.recordQualitySkip();
   assert.equal(metrics.terminal("preflight_terminal")?.qualitySkipped, 2);
+});
+
+test("records motion skips separately from quality skips", () => {
+  const metrics = createScannerMetrics(() => 0);
+  metrics.reset();
+  metrics.recordMotionSkip();
+  metrics.recordMotionSkip();
+  metrics.recordQualitySkip();
+  assert.deepEqual(metrics.terminal("preflight_terminal"), {
+    completion: "preflight_terminal",
+    preflightAttempts: 0,
+    motionSkipped: 2,
+    qualitySkipped: 1,
+  });
+});
+
+test("keeps both the last and total preflight RTT", () => {
+  const metrics = createScannerMetrics(testClock(0, 10, 110, 130, 330));
+  metrics.reset();
+  const first = metrics.startRequest("preflight");
+  metrics.finishRequest("preflight", first);
+  const second = metrics.startRequest("preflight");
+  metrics.finishRequest("preflight", second);
+  assert.deepEqual(metrics.terminal("preflight_terminal"), {
+    completion: "preflight_terminal",
+    timeToFirstPreflightDispatchMs: 25,
+    preflightLastRttMs: 200,
+    preflightTotalRttMs: 300,
+    preflightAttempts: 2,
+    motionSkipped: 0,
+    qualitySkipped: 0,
+  });
 });

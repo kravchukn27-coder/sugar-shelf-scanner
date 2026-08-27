@@ -35,3 +35,12 @@ export function getServerEnv(): ServerEnv {
 export function isScannerMetricsEnabled(environment: NodeJS.ProcessEnv = process.env) {
   return environment.SCANNER_METRICS_ENABLED === "true";
 }
+
+/**
+ * Provider token counters are a temporary, server-only diagnostic. Keep this
+ * separate from browser scanner summaries so a public build flag can never
+ * enable usage logging by itself.
+ */
+export function isVisionUsageMetricsEnabled(environment: NodeJS.ProcessEnv = process.env) {
+  return environment.VISION_USAGE_METRICS_ENABLED === "true";
+}

@@ -22,10 +22,13 @@ export const scannerMetricsSchema = z.object({
   completion: scannerCompletionSchema,
   captureReadyMs: bucketedTimingSchema.optional(),
   captureEncodeMs: bucketedTimingSchema.optional(),
-  preflightRttMs: bucketedTimingSchema.optional(),
+  timeToFirstPreflightDispatchMs: bucketedTimingSchema.optional(),
+  preflightLastRttMs: bucketedTimingSchema.optional(),
+  preflightTotalRttMs: bucketedTimingSchema.optional(),
   analyzeRttMs: bucketedTimingSchema.optional(),
   renderMs: bucketedTimingSchema.optional(),
   preflightAttempts: z.number().finite().int().min(0).max(90),
+  motionSkipped: z.number().finite().int().min(0).max(90),
   qualitySkipped: z.number().finite().int().min(0).max(90),
 }).strict();
 

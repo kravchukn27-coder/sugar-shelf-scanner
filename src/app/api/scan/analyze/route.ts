@@ -70,7 +70,7 @@ export async function POST(request: Request) {
 
     const visionStartedAt = performance.now();
     const visionResponse = env.VISION_PROVIDER === "gemini"
-      ? await analyzeWithGemini(parsed.data, env, startedAt)
+      ? await analyzeWithGemini(parsed.data, env, startedAt, request.signal)
       : getMockShelfScan(parsed.data.clientFrameId);
     const visionMs = performance.now() - visionStartedAt;
     const catalogStartedAt = performance.now();

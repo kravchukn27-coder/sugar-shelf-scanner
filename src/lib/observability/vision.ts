@@ -6,7 +6,7 @@
  * collects stdout, so every field must be safe to retain outside the request.
  */
 export type VisionOperation = "preflight" | "analyze" | "nutrition_label";
-export type VisionOutcome = "success" | "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response" | "not_configured" | "unexpected_error";
+export type VisionOutcome = "success" | "client_cancelled" | "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response" | "not_configured" | "unexpected_error";
 
 type VisionTelemetry = {
   operation: VisionOperation;
@@ -22,8 +22,24 @@ type VisionTelemetry = {
   status: number;
 };
 
+export type VisionUsageTelemetry = {
+  operation: Extract<VisionOperation, "preflight" | "analyze">;
+  model: string;
+  durationMs: number;
+  status: 200;
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  thoughtsTokenCount?: number;
+  totalTokenCount?: number;
+};
+
 export function logVisionTelemetry(metric: VisionTelemetry) {
   // JSON makes this easy to query in Railway logs without relying on text
   // parsing. `model` is configuration, not customer or product data.
   console.info(JSON.stringify({ event: "vision_request", ...metric }));
+}
+
+/** Provider-supplied counters only; callers gate this temporary event. */
+export function logVisionUsageTelemetry(metric: VisionUsageTelemetry) {
+  console.info(JSON.stringify({ event: "vision_usage", ...metric }));
 }

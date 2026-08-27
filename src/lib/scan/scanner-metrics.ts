@@ -14,10 +14,13 @@ export type ScannerMetricsPayload = {
   completion: ScannerMetricsCompletion;
   captureReadyMs?: number;
   captureEncodeMs?: number;
-  preflightRttMs?: number;
+  timeToFirstPreflightDispatchMs?: number;
+  preflightLastRttMs?: number;
+  preflightTotalRttMs?: number;
   analyzeRttMs?: number;
   renderMs?: number;
   preflightAttempts: number;
+  motionSkipped: number;
   qualitySkipped: number;
 };
 
@@ -40,10 +43,13 @@ function elapsed(startedAt: number, now: number) {
 type RunContext = {
   startedAt: number;
   preflightAttempts: number;
+  motionSkipped: number;
   qualitySkipped: number;
   captureReadyMs?: number;
   captureEncodeMs?: number;
-  preflightRttMs?: number;
+  timeToFirstPreflightDispatchMs?: number;
+  preflightLastRttMs?: number;
+  preflightTotalRttMs?: number;
   analyzeRttMs?: number;
   renderStartedAt?: number;
   renderMs?: number;
@@ -64,7 +70,7 @@ export function createScannerMetrics(clock: Clock = () => performance.now()) {
 
   return {
     reset() {
-      context = { startedAt: clock(), preflightAttempts: 0, qualitySkipped: 0, emitted: false };
+      context = { startedAt: clock(), preflightAttempts: 0, motionSkipped: 0, qualitySkipped: 0, emitted: false };
     },
     discard() {
       context = null;
@@ -81,19 +87,31 @@ export function createScannerMetrics(clock: Clock = () => performance.now()) {
       context.captureEncodeMs = Math.min(MAX_DURATION_MS, (context.captureEncodeMs ?? 0) + duration);
     },
     startRequest(stage: RequestStage) {
+      const startedAt = clock();
       if (stage === "preflight" && context) {
         context.preflightAttempts = Math.min(MAX_PREFLIGHT_ATTEMPTS, context.preflightAttempts + 1);
+        if (context.timeToFirstPreflightDispatchMs === undefined) {
+          context.timeToFirstPreflightDispatchMs = elapsed(context.startedAt, startedAt);
+        }
       }
-      return clock();
+      return startedAt;
     },
     recordQualitySkip() {
       if (context) context.qualitySkipped = Math.min(MAX_PREFLIGHT_ATTEMPTS, context.qualitySkipped + 1);
+    },
+    recordMotionSkip() {
+      if (context) context.motionSkipped = Math.min(MAX_PREFLIGHT_ATTEMPTS, context.motionSkipped + 1);
     },
     finishRequest(stage: RequestStage, startedAt: number) {
       if (!context) return;
       const duration = elapsed(startedAt, clock());
       if (duration === undefined) return;
-      context[stage === "preflight" ? "preflightRttMs" : "analyzeRttMs"] = duration;
+      if (stage === "preflight") {
+        context.preflightLastRttMs = duration;
+        context.preflightTotalRttMs = Math.min(MAX_DURATION_MS, (context.preflightTotalRttMs ?? 0) + duration);
+      } else {
+        context.analyzeRttMs = duration;
+      }
     },
     startRender() {
       if (context && context.renderStartedAt === undefined) context.renderStartedAt = clock();
@@ -107,11 +125,14 @@ export function createScannerMetrics(clock: Clock = () => performance.now()) {
       const payload: ScannerMetricsPayload = {
         completion,
         preflightAttempts: context.preflightAttempts,
+        motionSkipped: context.motionSkipped,
         qualitySkipped: context.qualitySkipped,
       };
       if (context.captureReadyMs !== undefined) payload.captureReadyMs = context.captureReadyMs;
       if (context.captureEncodeMs !== undefined) payload.captureEncodeMs = bucketDuration(context.captureEncodeMs);
-      if (context.preflightRttMs !== undefined) payload.preflightRttMs = context.preflightRttMs;
+      if (context.timeToFirstPreflightDispatchMs !== undefined) payload.timeToFirstPreflightDispatchMs = context.timeToFirstPreflightDispatchMs;
+      if (context.preflightLastRttMs !== undefined) payload.preflightLastRttMs = context.preflightLastRttMs;
+      if (context.preflightTotalRttMs !== undefined) payload.preflightTotalRttMs = bucketDuration(context.preflightTotalRttMs);
       if (context.analyzeRttMs !== undefined) payload.analyzeRttMs = context.analyzeRttMs;
       if (context.renderMs !== undefined) payload.renderMs = context.renderMs;
       return payload;

@@ -5,8 +5,11 @@ import { POST } from "./route";
 const metric = {
   completion: "preflight_terminal",
   captureReadyMs: 100,
-  preflightRttMs: 250,
+  timeToFirstPreflightDispatchMs: 100,
+  preflightLastRttMs: 250,
+  preflightTotalRttMs: 250,
   preflightAttempts: 1,
+  motionSkipped: 0,
   qualitySkipped: 0,
 };
 

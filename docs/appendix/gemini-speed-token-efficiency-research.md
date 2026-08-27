@@ -18,7 +18,7 @@ The artifact is the primary version; update it first, then re-sync this file.
 | B1, B2, B3 | **Done** — commit `39ac549`, pushed to `main` | Staged `captured_analyzing` copy + soft "uncertain" hint instead of hard-failing the live search loop. `src/app/page.tsx` only. |
 | C1 | **Reverted** — commit `875aa66` | `mediaResolution: "MEDIA_RESOLUTION_LOW"` (shipped in `0be75b3`) was removed from preflight after it regressed recognition of small packaged products; preflight now uses Gemini's default media resolution again. Closed — do not retry without a fixture-set regression test. |
 | D2 | **Done** — commit `0be75b3` | The catalog DB probe starts alongside Gemini analysis instead of after it (`analyze/route.ts`). Shipped together with C1 in the same commit; unaffected by C1's revert. |
-| C5 (revised) | **Done** — commit `e4274bd`, pushed to `main` | Original scope (retry with the same 30s timeout) was rejected: worst case would have gone from 30s to 60s of silent wait, against the spirit of section B. Shipped instead: one bounded retry on `analyze`, only for `provider_timeout` or a `provider_error` with a 5xx status — never for a parsed-but-invalid response or a client-side config error — using a separate, shorter 8s timeout for the retry attempt (worst case now ~38s, not 60s). `src/lib/vision/gemini.ts` only. `npx tsc --noEmit` clean, all 79 existing tests pass. No automated test covers the retry path itself — `gemini.ts` has no test file at all, and standing one up (mocking `fetch`/`AbortController` timing) was judged out of scope for a "cheap" task; flagging this as a real coverage gap rather than a solved item. |
+| C5 (revised) | **Done** — commit `e4274bd`, pushed to `main` | Original scope (retry with the same 30s timeout) was rejected: worst case would have gone from 30s to 60s of silent wait, against the spirit of section B. Shipped instead: one bounded retry on `analyze`, only for `provider_timeout` or a `provider_error` with a 5xx status — never for a parsed-but-invalid response or a client-side config error — using a separate, shorter 8s timeout for the retry attempt (worst case now ~38s, not 60s). `src/lib/vision/gemini.test.ts` now covers one retry, client cancellation before/between attempts, and timeout-versus-client-cancel classification. |
 | D4 | **Done** — commit `4e4720e`, pushed to `main` | The former unreachable recovery path was replaced by the one-shot Details-only recovery camera. It has no live Gemini scheduler and no default scanner barcode control. |
 | C2, C3, C4 | Not started | C2/C3 explicitly deferred pending a larger fixture set / confirmed model access; C4 remains a later tuning pass. |
 | D1 | **Done** — commit `047b50d` | Live preflight is skipped while the downscaled frame is moving. |
@@ -113,8 +113,9 @@ git history of `src/lib/env.ts`.
   wait, undermining section B. Shipped instead: retry only on
   `provider_timeout` or a 5xx `provider_error` — never on a parsed-but-invalid
   response or a client config error — with its own shorter 8s timeout, so
-  worst case is ~38s, not 60s. `gemini.ts` has no test file; the retry path
-  itself is unverified by automated tests.
+  worst case is ~38s, not 60s. `gemini.test.ts` covers the retry and the
+  cancellation boundary; route tests verify that both scan routes pass the
+  incoming request signal to Gemini.
   *Verify:* `ANALYZE_FAILURE` cause breakdown before/after via existing
   `vision_request` telemetry.
 

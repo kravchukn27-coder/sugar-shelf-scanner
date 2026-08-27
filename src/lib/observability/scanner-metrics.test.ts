@@ -6,10 +6,13 @@ const validMetric = {
   completion: "analysis_completed" as const,
   captureReadyMs: 125,
   captureEncodeMs: 50,
-  preflightRttMs: 250,
+  timeToFirstPreflightDispatchMs: 125,
+  preflightLastRttMs: 250,
+  preflightTotalRttMs: 500,
   analyzeRttMs: 1_000,
   renderMs: 75,
   preflightAttempts: 2,
+  motionSkipped: 1,
   qualitySkipped: 1,
 };
 
@@ -18,12 +21,14 @@ test("scanner metrics accepts only capped 25ms aggregate buckets", () => {
   assert.equal(scannerMetricsSchema.safeParse({ ...validMetric, analyzeRttMs: 1_001 }).success, false);
   assert.equal(scannerMetricsSchema.safeParse({ ...validMetric, renderMs: 60_025 }).success, false);
   assert.equal(scannerMetricsSchema.safeParse({ ...validMetric, preflightAttempts: 91 }).success, false);
+  assert.equal(scannerMetricsSchema.safeParse({ ...validMetric, motionSkipped: 91 }).success, false);
 });
 
 test("scanner metrics rejects identifiers and all unknown fields", () => {
   assert.equal(scannerMetricsSchema.safeParse({ ...validMetric, scanId: "do-not-log" }).success, false);
   assert.equal(scannerMetricsSchema.safeParse({ ...validMetric, clientFrameId: "frame-1" }).success, false);
   assert.equal(scannerMetricsSchema.safeParse({ ...validMetric, imageBase64: "do-not-log" }).success, false);
+  assert.equal(scannerMetricsSchema.safeParse({ ...validMetric, preflightRttMs: 250 }).success, false);
 });
 
 test("scanner metrics logger emits only the allowlisted aggregate event", () => {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeGeminiDetections } from "./gemini";
+import type { ServerEnv } from "@/lib/env";
+import { analyzeWithGemini, extractGeminiUsageMetadata, normalizeGeminiDetections, preflightWithGemini, VisionRequestError } from "./gemini";
 
 function detection(index: number) {
   return {
@@ -26,4 +27,141 @@ test("drops one malformed detection without discarding the rest of the shelf", (
     detection(3),
   ]);
   assert.deepEqual(result.map((item) => item.visualCandidate.name), ["Product 0", "Product 3"]);
+});
+
+const env: ServerEnv = {
+  VISION_PROVIDER: "gemini",
+  GEMINI_API_KEY: "test-key",
+  GEMINI_VISION_MODEL: "gemini-test",
+  GEMINI_PREFLIGHT_MODEL: "gemini-test",
+};
+const analyzeInput = { imageBase64: "AQID", mimeType: "image/jpeg" as const, context: "shelf" as const, clientFrameId: "frame-1" };
+const preflightInput = { imageBase64: "AQID", mimeType: "image/jpeg" as const, context: "shelf" as const, clientFrameId: "preflight-1" };
+
+function providerJson(value: unknown) {
+  return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(value) }] } }] }), { status: 200 });
+}
+
+function abortWhenSignalled(init: RequestInit | undefined) {
+  return new Promise<Response>((_resolve, reject) => {
+    const signal = init?.signal;
+    assert.ok(signal);
+    signal.addEventListener("abort", () => reject(new DOMException("cancelled", "AbortError")), { once: true });
+  });
+}
+
+test("extracts only valid Gemini usageMetadata counters", () => {
+  assert.deepEqual(extractGeminiUsageMetadata({
+    usageMetadata: {
+      promptTokenCount: 10,
+      candidatesTokenCount: 20,
+      thoughtsTokenCount: 30,
+      totalTokenCount: 60,
+      ignoredProviderField: "not logged",
+    },
+  }), {
+    promptTokenCount: 10,
+    candidatesTokenCount: 20,
+    thoughtsTokenCount: 30,
+    totalTokenCount: 60,
+  });
+});
+
+test("ignores missing or malformed Gemini usageMetadata", () => {
+  assert.equal(extractGeminiUsageMetadata({}), undefined);
+  assert.equal(extractGeminiUsageMetadata({ usageMetadata: { promptTokenCount: -1 } }), undefined);
+  assert.equal(extractGeminiUsageMetadata({ usageMetadata: { totalTokenCount: "60" } }), undefined);
+});
+
+test("preflight propagates a client abort to Gemini", async () => {
+  const originalFetch = globalThis.fetch;
+  const client = new AbortController();
+  let calls = 0;
+  globalThis.fetch = async (_url, init) => {
+    calls += 1;
+    return abortWhenSignalled(init);
+  };
+  try {
+    const pending = preflightWithGemini(preflightInput, env, performance.now(), client.signal);
+    client.abort();
+    await assert.rejects(pending, (error: unknown) => error instanceof VisionRequestError && error.code === "client_cancelled" && error.status === 499);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a provider AbortError without a client signal stays a timeout", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new DOMException("provider timeout", "AbortError");
+  };
+  try {
+    await assert.rejects(
+      preflightWithGemini(preflightInput, env, performance.now()),
+      (error: unknown) => error instanceof VisionRequestError && error.code === "provider_timeout" && error.status === 504,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a cancelled analyze does not retry or call Gemini when already aborted", async () => {
+  const originalFetch = globalThis.fetch;
+  const client = new AbortController();
+  let calls = 0;
+  globalThis.fetch = async (_url, init) => {
+    calls += 1;
+    return abortWhenSignalled(init);
+  };
+  try {
+    const pending = analyzeWithGemini(analyzeInput, env, performance.now(), client.signal);
+    client.abort();
+    await assert.rejects(pending, (error: unknown) => error instanceof VisionRequestError && error.code === "client_cancelled");
+    assert.equal(calls, 1);
+
+    const preAborted = new AbortController();
+    preAborted.abort();
+    await assert.rejects(analyzeWithGemini(analyzeInput, env, performance.now(), preAborted.signal), (error: unknown) => error instanceof VisionRequestError && error.code === "client_cancelled");
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a retryable provider failure still gets one analyze retry", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) return new Response(JSON.stringify({ error: { message: "temporary" } }), { status: 503 });
+    return providerJson({ detections: [] });
+  };
+  try {
+    const result = await analyzeWithGemini(analyzeInput, env, performance.now());
+    assert.equal(calls, 2);
+    assert.deepEqual(result.detections, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a client cancellation between analyze attempts prevents the retry", async () => {
+  const originalFetch = globalThis.fetch;
+  const client = new AbortController();
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    client.abort();
+    return new Response(JSON.stringify({ error: { message: "temporary" } }), { status: 503 });
+  };
+  try {
+    await assert.rejects(
+      analyzeWithGemini(analyzeInput, env, performance.now(), client.signal),
+      (error: unknown) => error instanceof VisionRequestError && error.code === "client_cancelled" && error.status === 499,
+    );
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

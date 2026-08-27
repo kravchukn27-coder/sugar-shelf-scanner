@@ -58,10 +58,11 @@ intake. Before enabling, verify Railway log retention/access controls and run
 the iPhone disabled/enabled network checks in
 [gemini-usage-observability.md](gemini-usage-observability.md).
 
-Gemini usage metadata remains separately controlled by
-`VISION_USAGE_METRICS_ENABLED=true`. Log only operation, model, status,
-duration and provider token counters; aggregate daily, then turn all temporary
-flags off and remove per-request logging unless it receives an owner and
-retention policy.
+Gemini usage metadata remains separately controlled by the server-only
+`VISION_USAGE_METRICS_ENABLED=true`. It logs only operation, model, status,
+duration and provider token counters; `vision_request` timing/outcome events
+are separate. Aggregate both streams daily by UTC day, then turn all three
+measurement flags off and remove `vision_usage` logging unless it receives an
+owner and retention policy.
 
 Full implementation and privacy boundary: [gemini-usage-observability.md](gemini-usage-observability.md).

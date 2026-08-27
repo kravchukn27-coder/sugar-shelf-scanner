@@ -19,8 +19,10 @@ number of preflight attempts and full analyses is the main controllable cost.
 
 ## Proposed temporary measurement
 
-Add an opt-in server flag, `VISION_USAGE_METRICS_ENABLED=true`. When it is off,
-the application must behave exactly as it does today.
+`VISION_USAGE_METRICS_ENABLED=true` is an opt-in, server-only flag. When it is
+off, the application must behave exactly as it does today. Existing
+`vision_request` timing/outcome events remain available independently; this
+flag controls only the temporary provider-token event below.
 
 When it is on, after a completed Gemini response log one structured event with
 only:
@@ -58,9 +60,10 @@ capability on normal preflight/analyze responses; without that header the
 browser sends no `/api/scan/metrics` request.
 
 At most one no-store, terminal summary is sent for a non-aborted run. Its
-strict allowlist is a completion class, capped preflight-attempt count and
-25-ms-bucketed timing values for capture-ready, encode, preflight RTT, analyze
-RTT and render. It contains no IDs, timestamps, product/result data, image
+strict allowlist is a completion class, capped preflight-attempt/motion/quality
+counts and 25-ms-bucketed timing values for capture-ready, encode,
+time-to-first-preflight-dispatch, last and total preflight RTT, analyze RTT and
+render. It contains no IDs, timestamps, product/result data, image
 properties, error text, device/camera data, OCR, GTIN or IP, and the endpoint
 does not write PostgreSQL rows. Closed, recovered, stale and cancelled runs
 send nothing. Server `Server-Timing` additionally exposes independent
@@ -69,9 +72,11 @@ and must not be summed as total request time.
 
 ## Operating procedure
 
-1. Confirm Railway log retention/access controls, then enable the relevant
-   flags in Railway for a fixed 14-day observation window. Deploy the browser
-   flag only for that window.
+1. Confirm Railway log retention/access controls, name an observation owner,
+   fix a UTC start/end date and enable the relevant Railway flags for exactly
+   14 days. Deploy `NEXT_PUBLIC_SCANNER_METRICS_ENABLED=true` only for that
+   window; it is a build-time browser gate, while
+   `SCANNER_METRICS_ENABLED=true` remains the server capability/intake gate.
 2. Review aggregate daily totals only: count of `preflight` and `analyze`,
    p50/p95 duration, average/p95 input tokens, output/thinking tokens, and
    full-analysis-to-preflight ratio.
@@ -81,10 +86,11 @@ and must not be summed as total request time.
    estimate in application code. Gemini documents image token allocation and
    media-resolution behaviour at <https://ai.google.dev/gemini-api/docs/media-resolution>.
 4. Review scanner-stage aggregates separately by completion: count, p50/p95
-   of each timing stage, and p50/p95 preflight attempts. Browser summaries are
-   a lower bound because a backgrounded browser may drop a beacon.
+   of each timing stage, p50/p95 preflight attempts, and daily motion/quality
+   skip counts. Browser summaries are a lower bound because a backgrounded
+   browser may drop a beacon.
 5. After 14 days, export only the aggregate table into a decision note, turn
-   both flag pairs off, and remove the temporary per-request logging in a
+   all three measurement flags off, and remove the temporary per-request logging in a
    follow-up change unless it has a clear operational owner and retention policy.
 
 ## Decision thresholds

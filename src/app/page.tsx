@@ -17,8 +17,9 @@ import { getCameraDiagnosticSnapshot, type CameraDiagnosticSnapshot } from "@/li
 import { applyCameraView, getCameraControls, getCameraDeviceId, preferCameraCaptureQuality, rearCameraRequest, supportsTorch, type CameraControls } from "@/lib/scan/media-capabilities";
 import { shouldRunScannerScheduler, transitionScannerLifecycle, type ScannerLifecycleEvent, type ScannerLifecycleState } from "@/lib/scan/scanner-lifecycle";
 import { createScannerMetrics, type ScannerMetricsCompletion } from "@/lib/scan/scanner-metrics";
-import { isFrameMoving, sampleLuma } from "@/lib/scan/frame-stillness";
-import { sampleFrameQuality, shouldBypassQualityAfterSkips, shouldSkipPreflight } from "@/lib/scan/frame-quality";
+import { sampleLuma } from "@/lib/scan/frame-stillness";
+import { sampleFrameQuality } from "@/lib/scan/frame-quality";
+import { createInitialLiveFrameBaseline, decideLiveFrameSchedulerTick } from "@/lib/scan/live-frame-scheduler";
 import { decodeLocalBarcode, type RecoveryState } from "@/lib/recovery/local-recovery";
 import { reportLocalBarcodeDecode } from "@/lib/recovery/recovery-decode-metrics";
 import type { BarcodeRecoveryResponse, NutritionLabelDraft, NutritionLabelRecoveryResponse } from "@/lib/contracts/scan";
@@ -32,6 +33,9 @@ const PREFLIGHT_CANDIDATE_CONFIDENCE_THRESHOLD = 0.65;
 const clientScannerMetricsEnabled = process.env.NEXT_PUBLIC_SCANNER_METRICS_ENABLED === "true";
 // Default-on for live camera; set NEXT_PUBLIC_FRAME_QUALITY_ENABLED=false for fast rollback.
 const clientFrameQualityEnabled = process.env.NEXT_PUBLIC_FRAME_QUALITY_ENABLED !== "false";
+// Roll out the earlier stillness baseline independently; disabled preserves
+// the existing scheduler timing while retaining the new code path in tests.
+const immediateBaselineEnabled = process.env.NEXT_PUBLIC_IMMEDIATE_BASELINE_ENABLED === "true";
 const bandCopy = { green: "Low sugar", yellow: "Moderate sugar", orange: "High sugar", red: "Very high sugar", unknown: "Needs a check" } as const;
 const sourceCopy = { curated: "Sugar catalog", open_food_facts: "Open Food Facts", usda_food_data_central: "USDA FoodData Central", commercial: "Verified provider" } as const;
 const meterPosition = { green: "12.5%", yellow: "37.5%", orange: "62.5%", red: "87.5%", unknown: null } as const;
@@ -147,6 +151,22 @@ export default function HomePage() {
     return canvas.toDataURL("image/jpeg", quality);
   }, []);
 
+  const sampleLiveFrame = useCallback((video: HTMLVideoElement) => {
+    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth || !video.videoHeight) return null;
+    const canvas = stillnessCanvas.current ?? (stillnessCanvas.current = document.createElement("canvas"));
+    canvas.width = 16; canvas.height = 12;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    try {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      return { luma: sampleLuma(ctx, canvas.width, canvas.height), data };
+    } catch {
+      // iOS can briefly expose a playing video before its pixels are readable.
+      return null;
+    }
+  }, []);
+
   const analyze = useCallback(async (source: HTMLVideoElement | HTMLImageElement, id: number) => {
     // The default final frame uses a modest centred crop after preflight. The
     // optional 1× control keeps it un-cropped for a direct framing comparison.
@@ -234,11 +254,15 @@ export default function HomePage() {
       try { await preferCameraCaptureQuality(track); } catch { /* Retain Safari's selected mode if its quality preference is unsupported. */ }
       let controls = getCameraControls(track);
       if (controls.standardZoom !== null) { try { await applyCameraView(track, controls, "standard"); } catch { controls = { ...controls, standardZoom: null, closerZoom: null }; } }
-      setCameraControls(controls); setTorchAvailable(controls.torchAvailable); setCameraDiagnostics(getCameraDiagnosticSnapshot(track)); videoRef.current.srcObject = stream; await videoRef.current.play(); scannerMetrics.current.markCaptureReady();
+      setCameraControls(controls); setTorchAvailable(controls.torchAvailable); setCameraDiagnostics(getCameraDiagnosticSnapshot(track)); videoRef.current.srcObject = stream; await videoRef.current.play();
+      if (id === session.current) {
+        scannerMetrics.current.markCaptureReady();
+        stillnessFingerprint.current = createInitialLiveFrameBaseline(immediateBaselineEnabled, sampleLiveFrame(videoRef.current)?.luma ?? null);
+      }
       if (id !== session.current) { stream.getTracks().forEach((t) => t.stop()); if (videoRef.current) videoRef.current.srcObject = null; streamRef.current = null; }
     }
     catch { if (id === session.current) { setFailure("Camera unavailable. Check permission and try again."); setState((current) => transitionScannerLifecycle(current, "ANALYZE_FAILURE")); } }
-  }, [clearResult, resetScanMetrics, stopStream]);
+  }, [clearResult, resetScanMetrics, sampleLiveFrame, stopStream]);
   const close = useCallback(() => { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
   const toggleTorch = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !torchOn; if (!track || !supportsTorch(track)) return setTorchAvailable(false); try { await track.applyConstraints({ advanced: [{ torch: next } as unknown as MediaTrackConstraintSet] }); setTorchOn(next); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
   const toggleTrueOneXCapture = useCallback(async () => {
@@ -359,34 +383,22 @@ export default function HomePage() {
   useEffect(() => { if (!shouldRunScannerScheduler(state) || sheet || uploadUrl || recoveryCamera) return; const timer = window.setInterval(() => {
     const video = videoRef.current;
     if (!video?.readyState || inFlight.current) return;
-    const canvas = stillnessCanvas.current ?? (stillnessCanvas.current = document.createElement("canvas"));
-    canvas.width = 16; canvas.height = 12;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) { qualitySkipStreak.current = 0; void preflight(video); return; }
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const sample = sampleLuma(ctx, canvas.width, canvas.height);
-    const previous = stillnessFingerprint.current;
-    // Always advance the baseline to this tick's sample, even when the frame is
-    // moving or preflight is skipped, so the next comparison is tick-vs-tick.
-    stillnessFingerprint.current = sample;
-    if (previous && isFrameMoving(previous, sample)) {
-      qualitySkipStreak.current = 0;
-      return;
-    }
-    if (!clientFrameQualityEnabled) {
-      qualitySkipStreak.current = 0;
-      void preflight(video);
-      return;
-    }
-    const quality = sampleFrameQuality(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
-    if (shouldSkipPreflight(quality)) {
-      qualitySkipStreak.current += 1;
-      scannerMetrics.current.recordQualitySkip();
-      if (!shouldBypassQualityAfterSkips(qualitySkipStreak.current)) return;
-    }
-    qualitySkipStreak.current = 0;
+    const sample = sampleLiveFrame(video);
+    if (!sample) { qualitySkipStreak.current = 0; void preflight(video); return; }
+    const decision = decideLiveFrameSchedulerTick({
+      previous: stillnessFingerprint.current,
+      current: sample.luma,
+      quality: clientFrameQualityEnabled ? sampleFrameQuality(sample.data, 16, 12) : null,
+      qualityEnabled: clientFrameQualityEnabled,
+      qualitySkipStreak: qualitySkipStreak.current,
+    });
+    stillnessFingerprint.current = decision.baseline;
+    qualitySkipStreak.current = decision.qualitySkipStreak;
+    if (decision.action === "motion_skip") { scannerMetrics.current.recordMotionSkip(); return; }
+    if (decision.qualitySkipped) scannerMetrics.current.recordQualitySkip();
+    if (decision.action === "quality_skip") return;
     void preflight(video);
-  }, FRAME_INTERVAL); return () => window.clearInterval(timer); }, [preflight, recoveryCamera, sheet, state, uploadUrl]);
+  }, FRAME_INTERVAL); return () => window.clearInterval(timer); }, [preflight, recoveryCamera, sampleLiveFrame, sheet, state, uploadUrl]);
   useEffect(() => {
     if (!uploadUrl || !shouldRunScannerScheduler(state) || sheet) return;
     const image = new Image();

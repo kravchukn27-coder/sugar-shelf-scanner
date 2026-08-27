@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { AnalyzeScanRequest, AnalyzeScanResponse, Detection, PreflightScanRequest, PreflightScanResponse } from "@/lib/contracts/scan";
 import type { NormalizedBox, ScoreBand } from "@/lib/contracts/product";
-import type { ServerEnv } from "@/lib/env";
-import { logVisionTelemetry, type VisionOperation, type VisionOutcome } from "@/lib/observability/vision";
+import { isVisionUsageMetricsEnabled, type ServerEnv } from "@/lib/env";
+import { logVisionTelemetry, logVisionUsageTelemetry, type VisionOperation, type VisionOutcome } from "@/lib/observability/vision";
 
 // Multimodal detection on a full shelf can take longer than a text response.
 // The scanner freezes the captured frame while waiting, so prefer a reliable
@@ -46,11 +46,53 @@ export class VisionRequestError extends Error {
   constructor(
     message: string,
     public readonly status: number,
-    public readonly code: "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response",
+    public readonly code: "client_cancelled" | "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response",
   ) {
     super(message);
     this.name = "VisionRequestError";
   }
+}
+
+type AttemptAbort = {
+  signal: AbortSignal;
+  reason: () => "client_cancelled" | "provider_timeout" | null;
+  dispose: () => void;
+};
+
+/**
+ * Each Gemini attempt has its own bounded timeout, while the incoming Route
+ * Handler request can stop every attempt (including a pending retry) as soon
+ * as the browser closes or retries the scanner.
+ */
+function createAttemptAbort(requestSignal: AbortSignal | undefined, timeoutMs: number): AttemptAbort {
+  const controller = new AbortController();
+  let abortReason: "client_cancelled" | "provider_timeout" | null = null;
+  const abortForClient = () => {
+    if (controller.signal.aborted) return;
+    abortReason = "client_cancelled";
+    controller.abort(requestSignal?.reason);
+  };
+  if (requestSignal?.aborted) abortForClient();
+  else requestSignal?.addEventListener("abort", abortForClient, { once: true });
+  const timeout = setTimeout(() => {
+    if (controller.signal.aborted) return;
+    abortReason = "provider_timeout";
+    controller.abort(new DOMException("Gemini request timed out.", "TimeoutError"));
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    reason: () => abortReason,
+    dispose: () => {
+      clearTimeout(timeout);
+      requestSignal?.removeEventListener("abort", abortForClient);
+    },
+  };
+}
+
+function abortVisionError(reason: "client_cancelled" | "provider_timeout" | null): VisionRequestError {
+  return reason === "client_cancelled"
+    ? new VisionRequestError("Scan request was cancelled by the client.", 499, "client_cancelled")
+    : new VisionRequestError("Vision provider took too long to respond. Try again.", 504, "provider_timeout");
 }
 
 async function throwGeminiProviderError(response: Response, action: "analyze" | "preflight"): Promise<never> {
@@ -91,6 +133,36 @@ function logAttempt(
     timeoutMs,
     outcome: error ? telemetryOutcome(error) : "success",
     status: error ? telemetryStatus(error) : 200,
+  });
+}
+
+const geminiUsageMetadataSchema = z.object({
+  promptTokenCount: z.number().finite().int().min(0).optional(),
+  candidatesTokenCount: z.number().finite().int().min(0).optional(),
+  thoughtsTokenCount: z.number().finite().int().min(0).optional(),
+  totalTokenCount: z.number().finite().int().min(0).optional(),
+});
+
+/** Extract only provider-issued aggregate counters; malformed fields are ignored. */
+export function extractGeminiUsageMetadata(payload: unknown) {
+  const root = z.object({ usageMetadata: geminiUsageMetadataSchema.optional() }).passthrough().safeParse(payload);
+  return root.success ? root.data.usageMetadata : undefined;
+}
+
+function logGeminiUsage(
+  operation: Extract<VisionOperation, "preflight" | "analyze">,
+  model: string,
+  startedAt: number,
+  payload: unknown,
+) {
+  if (!isVisionUsageMetricsEnabled()) return;
+  const usage = extractGeminiUsageMetadata(payload);
+  logVisionUsageTelemetry({
+    operation,
+    model,
+    durationMs: Math.round(performance.now() - startedAt),
+    status: 200,
+    ...(usage ?? {}),
   });
 }
 
@@ -206,18 +278,19 @@ export function normalizeGeminiDetections(items: unknown[]): Detection[] {
   return detections;
 }
 
-async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, timeoutMs: number): Promise<AnalyzeScanResponse> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, timeoutMs: number, requestSignal?: AbortSignal): Promise<AnalyzeScanResponse> {
+  const attemptStartedAt = performance.now();
+  const abort = createAttemptAbort(requestSignal, timeoutMs);
   try {
     // analyzeWithGemini already rejected a missing key before ever calling
     // this helper (including on a retry, since the key does not change
     // between attempts) — the assertion just satisfies a type that cannot
     // narrow across the function boundary.
+    if (abort.signal.aborted) throw abortVisionError(abort.reason());
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.GEMINI_VISION_MODEL)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY!)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      signal: controller.signal,
+      signal: abort.signal,
       body: JSON.stringify({
         contents: [{ parts: [{ text: promptFor(input.context) }, { inline_data: { mime_type: input.mimeType, data: input.imageBase64.replace(/^data:[^;]+;base64,/, "") } }] }],
         generationConfig: {
@@ -251,7 +324,9 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, timeout
     if (!response.ok) {
       await throwGeminiProviderError(response, "analyze");
     }
-    const parsed = parseGeminiText(await response.json(), geminiResponseSchema);
+    const payload = await response.json();
+    logGeminiUsage("analyze", env.GEMINI_VISION_MODEL, attemptStartedAt, payload);
+    const parsed = parseGeminiText(payload, geminiResponseSchema);
     const detections = normalizeGeminiDetections(parsed.detections);
     return {
       scanId: `gemini-${crypto.randomUUID()}`,
@@ -262,12 +337,12 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, timeout
     };
   } catch (error) {
     if (error instanceof VisionRequestError) throw error;
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new VisionRequestError("Vision provider took too long to respond. Try again.", 504, "provider_timeout");
+    if (abort.reason() || (error instanceof Error && error.name === "AbortError")) {
+      throw abortVisionError(abort.reason());
     }
     throw new VisionRequestError("Unable to reach the vision provider.", 502, "provider_error");
   } finally {
-    clearTimeout(timeout);
+    abort.dispose();
   }
 }
 
@@ -279,7 +354,7 @@ function isRetryableAnalyzeFailure(error: unknown): boolean {
     && (error.code === "provider_timeout" || (error.code === "provider_error" && error.status >= 500));
 }
 
-export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEnv, receivedAt: number): Promise<AnalyzeScanResponse> {
+export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEnv, receivedAt: number, requestSignal?: AbortSignal): Promise<AnalyzeScanResponse> {
   const startedAt = performance.now();
   try {
     if (!env.GEMINI_API_KEY) throw new VisionRequestError("Gemini is not configured.", 503, "provider_error");
@@ -289,12 +364,12 @@ export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEn
     }
 
     try {
-      const result = await attemptAnalyze(input, env, GEMINI_TIMEOUT_MS);
+      const result = await attemptAnalyze(input, env, GEMINI_TIMEOUT_MS, requestSignal);
       logAttempt("analyze", env.GEMINI_VISION_MODEL, receivedAt, startedAt, GEMINI_TIMEOUT_MS);
       return result;
     } catch (firstError) {
       if (!isRetryableAnalyzeFailure(firstError)) throw firstError;
-      const result = await attemptAnalyze(input, env, GEMINI_ANALYZE_RETRY_TIMEOUT_MS);
+      const result = await attemptAnalyze(input, env, GEMINI_ANALYZE_RETRY_TIMEOUT_MS, requestSignal);
       logAttempt("analyze", env.GEMINI_VISION_MODEL, receivedAt, startedAt, GEMINI_TIMEOUT_MS + GEMINI_ANALYZE_RETRY_TIMEOUT_MS);
       return result;
     }
@@ -309,8 +384,9 @@ export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEn
  * this runs; a caller must only freeze and invoke full analysis after a
  * `candidate` result. No image is persisted here.
  */
-export async function preflightWithGemini(input: PreflightScanRequest, env: ServerEnv, receivedAt: number): Promise<PreflightScanResponse> {
+export async function preflightWithGemini(input: PreflightScanRequest, env: ServerEnv, receivedAt: number, requestSignal?: AbortSignal): Promise<PreflightScanResponse> {
   const startedAt = performance.now();
+  let abort: AttemptAbort | undefined;
   try {
     if (!env.GEMINI_API_KEY) throw new VisionRequestError("Gemini is not configured.", 503, "provider_error");
     const bytes = imageByteLength(input.imageBase64);
@@ -318,13 +394,13 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
       throw new VisionRequestError("Preflight image must be a valid base64 image smaller than 2 MB.", 413, "bad_image");
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), GEMINI_PREFLIGHT_TIMEOUT_MS);
+    abort = createAttemptAbort(requestSignal, GEMINI_PREFLIGHT_TIMEOUT_MS);
     try {
+    if (abort.signal.aborted) throw abortVisionError(abort.reason());
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.GEMINI_PREFLIGHT_MODEL)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      signal: controller.signal,
+      signal: abort.signal,
       body: JSON.stringify({
         contents: [{ parts: [{ text: preflightPrompt() }, { inline_data: { mime_type: input.mimeType, data: input.imageBase64.replace(/^data:[^;]+;base64,/, "") } }] }],
         generationConfig: {
@@ -350,7 +426,9 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
     if (!response.ok) {
       await throwGeminiProviderError(response, "preflight");
     }
-    const parsed = parseGeminiText(await response.json(), geminiPreflightResponseSchema);
+    const payload = await response.json();
+    logGeminiUsage("preflight", env.GEMINI_PREFLIGHT_MODEL, startedAt, payload);
+    const parsed = parseGeminiText(payload, geminiPreflightResponseSchema);
     // Keep the invariant meaningful even if a model returns internally
     // inconsistent fields despite the schema instructions.
     const isCandidate = parsed.decision === "candidate" && parsed.packagedProductCount > 0;
@@ -365,15 +443,15 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
       analyzedAt: new Date().toISOString(),
     };
     } finally {
-      clearTimeout(timeout);
+      abort.dispose();
     }
   } catch (error) {
     if (error instanceof VisionRequestError) {
       logAttempt("preflight", env.GEMINI_PREFLIGHT_MODEL, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, error);
       throw error;
     }
-    if (error instanceof Error && error.name === "AbortError") {
-      const timeoutError = new VisionRequestError("Vision provider took too long to respond. Try again.", 504, "provider_timeout");
+    if (abort?.reason() || (error instanceof Error && error.name === "AbortError")) {
+      const timeoutError = abortVisionError(abort?.reason() ?? null);
       logAttempt("preflight", env.GEMINI_PREFLIGHT_MODEL, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, timeoutError);
       throw timeoutError;
     }
