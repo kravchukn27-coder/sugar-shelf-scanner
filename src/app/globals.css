@@ -60,3 +60,18 @@
 @keyframes scanner-home-wave{from{opacity:.35;transform:scaleX(.25)}to{opacity:.9;transform:scaleX(1)}}
 @media(max-height:720px){.scanner-home{grid-template-rows:55% 45%}.scanner-home-visual{padding-top:max(54px,calc(env(safe-area-inset-top) + 28px))}.scanner-home-orbit{width:min(62vw,260px)}.scanner-home-brand-card{min-height:110px;border-radius:32px}.scanner-home-copy{padding-top:20px}.scanner-home-copy p{margin-top:10px}.scanner-home-primary{min-height:54px;margin-top:20px}.scanner-home-replay{margin-top:8px}}
 @media(prefers-reduced-motion:reduce){.scanner-home-orbit,.scanner-home-brand-card,.scanner-home-copy h1,.scanner-home-copy p,.scanner-home-primary,.scanner-home-replay,.scanner-home-wave{animation:none}}
+
+/* Live iPhone viewfinder: WebKit's visible video compositor can retain stale
+   letterboxing across camera sessions. The video remains the technical media
+   source (capture, torch and scheduler), while canvases paint its decoded
+   pixels in a deterministic 3:4 foreground plus a clearly non-actionable
+   blurred backdrop. Existing controls intentionally remain scene-relative. */
+.technical-camera-source{position:absolute!important;width:1px!important;height:1px!important;inset:auto!important;right:0!important;bottom:0!important;opacity:0!important;pointer-events:none!important}
+.camera-canvas-backdrop{position:absolute;z-index:0;inset:-24px;width:calc(100% + 48px);height:calc(100% + 48px);opacity:.72;filter:blur(22px) saturate(.88) brightness(.54);transform:scale(1.03);pointer-events:none}
+.camera-live-preview{position:absolute;z-index:2;left:0;right:0;top:50%;width:100%;aspect-ratio:3 / 4;max-height:100%;margin:auto;transform:translateY(-50%);overflow:hidden;background:transparent}.camera-live-preview.active{background:#08080a}
+.camera-canvas-foreground{position:absolute;inset:0;width:100%;height:100%;display:block}
+.camera-live-preview .viewfinder-guide{z-index:2;inset:18px;border:1.5px solid rgba(255,255,255,.7);border-radius:22px}
+.camera-live-preview .live-hint{z-index:3;inset:18px;margin:0;padding:0 24px;font-size:15px}
+.camera-result-preview{z-index:2;left:0;right:0;top:50%;width:100%;height:auto;aspect-ratio:3 / 4;max-height:100%;margin:auto;transform:translateY(-50%);object-fit:cover;opacity:1}
+.camera-result-overlay-stage{position:absolute;z-index:3;left:0;right:0;top:50%;width:100%;aspect-ratio:3 / 4;max-height:100%;margin:auto;transform:translateY(-50%);pointer-events:none}
+.camera-result-overlay-stage .product-overlay{pointer-events:auto}

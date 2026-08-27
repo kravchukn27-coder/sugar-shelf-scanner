@@ -11,6 +11,7 @@ import { createSugarScore } from "@/lib/scoring/sugar-score";
 import { calculateSugarFit } from "@/lib/scoring/sugar-fit";
 import { groupRepeatedDetections, sortDetectionGroupsBySugarFit, type DetectionGroup } from "@/lib/scan/deduplicate-detections";
 import { getCenteredFrameCrop } from "@/lib/scan/frame-crop";
+import { createCanvasPreviewLoop } from "@/lib/scan/canvas-preview";
 import { getCameraDiagnosticSnapshot, type CameraDiagnosticSnapshot } from "@/lib/scan/camera-diagnostics";
 import { applyCameraView, getCameraControls, getCameraDeviceId, preferCameraCaptureQuality, rearCameraRequest, supportsTorch } from "@/lib/scan/media-capabilities";
 import { shouldRunScannerScheduler, transitionScannerLifecycle, type ScannerLifecycleEvent, type ScannerLifecycleState } from "@/lib/scan/scanner-lifecycle";
@@ -110,8 +111,9 @@ async function scanFailureMessage(response: Response) {
 }
 
 export default function HomePage() {
-  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), resultMetrics = useRef({ source: null as "camera" | "upload" | null, started: false, resultShown: false, productOpened: false, recommendationOpened: false }), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), preflightRetryStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
+  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), livePreviewRef = useRef<HTMLDivElement>(null), liveCanvasRef = useRef<HTMLCanvasElement>(null), liveBackdropCanvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), resultMetrics = useRef({ source: null as "camera" | "upload" | null, started: false, resultShown: false, productOpened: false, recommendationOpened: false }), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), preflightRetryStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
+  const [canvasPreviewActive, setCanvasPreviewActive] = useState(false);
   const [liveHint, setLiveHint] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [scan, setScan] = useState<AnalyzeScanResponse | null>(null);
@@ -217,7 +219,9 @@ export default function HomePage() {
     // The detached Image used for uploads has no layout box. Analyze the same
     // crop that the visible upload preview uses, otherwise Gemini's normalized
     // boxes cannot line up with portrait photos on screen.
-    const preview = source instanceof HTMLImageElement ? uploadPreviewRef.current?.getBoundingClientRect() ?? source.getBoundingClientRect() : source.getBoundingClientRect();
+    // The visible live preview is a stable 3:4 canvas; use its rect rather
+    // than the hidden WebKit video surface so the JPEG crop matches it.
+    const preview = source instanceof HTMLImageElement ? uploadPreviewRef.current?.getBoundingClientRect() ?? source.getBoundingClientRect() : livePreviewRef.current?.getBoundingClientRect() ?? source.getBoundingClientRect();
     const crop = getCenteredFrameCrop(w, h, preview.width, preview.height, zoom);
     if (!canvas || !crop) return null;
     canvas.width = width; canvas.height = Math.max(1, Math.round(width / crop.aspect)); canvas.getContext("2d")?.drawImage(source, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, canvas.width, canvas.height);
@@ -240,10 +244,35 @@ export default function HomePage() {
     }
   }, []);
 
+  // iOS Safari can paint the <video> decoder surface with stale letterboxing
+  // after a camera restart. Keep that element only as the media source and
+  // paint its decoded pixels ourselves. Both canvases deliberately share one
+  // stream: the sharp 3:4 foreground is the real viewfinder, while the full
+  // screen copy is only a blurred backdrop and never implies extra FOV.
+  useEffect(() => {
+    setCanvasPreviewActive(false);
+    if (state !== "live_searching" || uploadUrl || recoveryCamera) return;
+    const video = videoRef.current;
+    const foreground = liveCanvasRef.current;
+    const backdrop = liveBackdropCanvasRef.current;
+    if (!video || !foreground || !backdrop) return;
+    let painted = false;
+    const loop = createCanvasPreviewLoop({ video, targets: [{ canvas: foreground, fps: 30 }, { canvas: backdrop, fps: 15 }], maxPixels: 1_250_000, maxDevicePixelRatio: 2, onFrameDrawn: () => { if (!painted) { painted = true; setCanvasPreviewActive(true); } } });
+    const onVisibilityChange = () => {
+      if (document.hidden) loop.stop();
+      else loop.start();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    loop.start();
+    return () => { document.removeEventListener("visibilitychange", onVisibilityChange); loop.stop(); };
+  }, [recoveryCamera, state, uploadUrl]);
+
   const analyze = useCallback(async (source: HTMLVideoElement | HTMLImageElement, id: number) => {
-    // The final frame uses a modest centred crop after preflight.
+    // Live captures use the identical centred 3:4 crop painted in the
+    // viewfinder canvas, so the user never sees a different field of view in
+    // the frozen result. Gallery images retain their existing preview crop.
     const encodeStartedAt = performance.now();
-    const image = capture(source, 960, .7, 1.12); scannerMetrics.current.recordCaptureEncode(encodeStartedAt); if (!image || id !== session.current) return;
+    const image = capture(source, 960, .7); scannerMetrics.current.recordCaptureEncode(encodeStartedAt); if (!image || id !== session.current) return;
     // Keep the exact JPEG sent to Gemini for both camera and gallery scans.
     // Detection boxes and per-product thumbnails then share one coordinate
     // system instead of being remapped onto the uncropped gallery original.
@@ -553,10 +582,11 @@ export default function HomePage() {
   const recoveryActive = recoveryCamera !== null;
 
   return <main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""} ${recoveryActive ? "recovery-active" : ""}`} aria-label={recoveryActive ? "Recovery camera" : "Sugar product scanner"}>
-    {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video key={cameraKey} ref={videoRef} className="camera-preview" muted playsInline />}{frozen && !recoveryActive && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}{state !== "camera_off" && <div className="camera-vignette" />}
+    {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video key={cameraKey} ref={videoRef} className={`camera-preview ${!recoveryActive && canvasPreviewActive ? "technical-camera-source" : ""}`} muted playsInline />}
+    {state === "live_searching" && !uploadUrl && !recoveryActive && <><canvas ref={liveBackdropCanvasRef} className="camera-canvas-backdrop" aria-hidden="true" /><div ref={livePreviewRef} className={`camera-live-preview ${canvasPreviewActive ? "active" : ""}`}><canvas ref={liveCanvasRef} className="camera-canvas-foreground" aria-hidden="true" /><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p></div></>}
+    {frozen && !recoveryActive && <img className={`camera-preview frozen-preview ${!uploadUrl ? "camera-result-preview" : ""}`} src={frozen} alt="Captured products" />}{state !== "camera_off" && <div className="camera-vignette" />}
     {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && torchAvailable ? "" : "end"}`}><div>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
-    {state === "live_searching" && !uploadUrl && <><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p></>}
-    {groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}
+    <div className={frozen && !uploadUrl && !recoveryActive ? "camera-result-overlay-stage" : "camera-overlay-stage"}>{groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}</div>
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}
     {state === "camera_off" && <ScannerHome onStart={() => void start()} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action="Try again" onAction={retry} failure />}
     {state === "captured_analyzing" && <CameraCopy>{analysisPhase === "identifying" ? "Calculating Your Fit" : analysisPhase === "catalog" ? "Personalizing your result" : "Still working on your result"}</CameraCopy>}
