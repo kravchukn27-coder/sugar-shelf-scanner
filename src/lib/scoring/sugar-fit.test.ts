@@ -26,6 +26,13 @@ test("gives a high-sugar can a low fit for the prototype day", () => {
   assert.equal(result.reasons[1], "Very high sugar impact");
 });
 
+test("never displays a Sugar Fit below 1", () => {
+  const result = calculateSugarFit({ sugarPer100g: 100, packSize: "100 g", name: "High-sugar snack" });
+  assert.ok(result);
+  assert.equal(result.score, 1);
+  assert.equal(result.tone, "red");
+});
+
 test("keeps unavailable sugar unscored", () => {
   assert.equal(calculateSugarFit({ sugarPer100g: null, packSize: "330 ml" }), null);
 });

@@ -43,10 +43,7 @@ function ProductPhoto({ detection, frozenImage, compact = false }: { detection: 
   if (frozenImage) {
     const { box } = detection;
     const cropStyle = {
-      width: `${100 / box.width}%`,
-      height: `${100 / box.height}%`,
-      left: `${(-box.x / box.width) * 100}%`,
-      top: `${(-box.y / box.height) * 100}%`,
+      objectPosition: `${(box.x + (box.width / 2)) * 100}% ${(box.y + (box.height / 2)) * 100}%`,
     };
     return <span className={`sugar-fit-photo crop ${compact ? "compact" : ""}`}><img src={frozenImage} alt={`${title} from this scan`} style={cropStyle} /></span>;
   }

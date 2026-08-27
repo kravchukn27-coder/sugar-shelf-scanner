@@ -7,7 +7,7 @@
 .sugar-fit-photo{position:relative;display:grid;place-items:center;width:64px;height:64px;overflow:hidden;border-radius:16px;background:#fff;box-shadow:inset 0 0 0 1px rgba(32,26,35,.07);color:#6d626d;font-size:20px;font-weight:800}
 .sugar-fit-photo.compact{width:48px;height:54px;border-radius:13px;font-size:16px}
 .sugar-fit-photo>img{width:100%;height:100%;display:block;object-fit:contain}
-.sugar-fit-photo.crop>img{position:absolute;max-width:none;object-fit:fill}
+.sugar-fit-photo.crop>img{position:absolute;inset:0;object-fit:cover}
 .sugar-fit-photo.fallback{background:linear-gradient(145deg,#f6f0dc,#e6d7a1);color:#5b4928}
 .sugar-fit-product-copy{min-width:0;display:grid;gap:3px}
 .sugar-fit-product-copy strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:17px;letter-spacing:-.02em}

@@ -98,7 +98,7 @@ export function calculateSugarFit(input: SugarFitInput): SugarFitResult | null {
 
   // Prototype-only calibration: the public metric will be validated and tuned
   // separately. Keep this isolated from the catalog's factual sugar score.
-  const score = Math.round(clamp((densityScore * .45 + servingScore * .35 + dayScore * .2) * .95));
+  const score = Math.round(clamp((densityScore * .45 + servingScore * .35 + dayScore * .2) * .95, 1, 100));
   const copy = fitCopy(score);
   const reasons = [
     sugarPerPack === null
