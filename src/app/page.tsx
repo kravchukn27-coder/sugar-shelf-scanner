@@ -40,9 +40,21 @@ const LIVE_HINT_COPY = {
   dark: "Move to better light",
   glare: "Reduce glare — tilt the product",
   uncertain: "Getting a closer look…",
+  connection: "Reconnecting…",
 } as const;
 type LiveHintReason = keyof typeof LIVE_HINT_COPY;
 const LIVE_HINT_STREAK_THRESHOLD = 2;
+// `uncertain` and `connection` already cost a real (if unsuccessful) Gemini
+// round trip, so they replace the default text immediately instead of
+// waiting for a repeat like the locally-detected motion/quality reasons do.
+const LIVE_HINT_IMMEDIATE_REASONS = new Set<LiveHintReason>(["uncertain", "connection"]);
+// A preflight failure only means "Gemini never answered" (timeout/5xx) for
+// these codes. It is retried silently up to this many times before giving up
+// with the blocking Try again prompt — that prompt is a deliberate token
+// guard for a genuine empty scene, and must stay reachable, but a transient
+// network blip on a live tick shouldn't cost the user a manual retry.
+const PREFLIGHT_TRANSIENT_CODES = new Set(["provider_timeout", "provider_error"]);
+const PREFLIGHT_TRANSIENT_RETRY_LIMIT = 2;
 const clientScannerMetricsEnabled = process.env.NEXT_PUBLIC_SCANNER_METRICS_ENABLED === "true";
 // Default-on for live camera; set NEXT_PUBLIC_FRAME_QUALITY_ENABLED=false for fast rollback.
 const clientFrameQualityEnabled = process.env.NEXT_PUBLIC_FRAME_QUALITY_ENABLED !== "false";
@@ -69,7 +81,7 @@ async function scanFailureMessage(response: Response) {
 }
 
 export default function HomePage() {
-  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
+  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), preflightRetryStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
   const [liveHint, setLiveHint] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -143,11 +155,8 @@ export default function HomePage() {
   const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); setCameraDiagnostics(null); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
   const clearResult = useCallback(() => { setRecovery(null); setRecoveryCamera(null); setRecoveryBusy(false); setRecoveryMessage(null); setRecoverySubmissionBanner(null); setLabelDraft(null); setScan(null); setFrozen(null); setFailure(null); setSheet(false); setSelected(null); setUploadBusy(false); }, []);
   const turnTorchOffAfterCapture = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; if (!torchOn || !track) return; try { await track.applyConstraints({ advanced: [{ torch: false } as unknown as MediaTrackConstraintSet] }); setTorchOn(false); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
-  // `uncertain` shows immediately (it already cost a real Gemini round trip);
-  // a local skip reason only surfaces after two consecutive same-reason ticks
-  // so a cause flickering between blur and glare frame-to-frame doesn't spam copy.
   const noteLiveHint = useCallback((reason: LiveHintReason | null) => {
-    if (reason === "uncertain") { liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(LIVE_HINT_COPY.uncertain); return; }
+    if (reason && LIVE_HINT_IMMEDIATE_REASONS.has(reason)) { liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(LIVE_HINT_COPY[reason]); return; }
     if (!reason) { liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); return; }
     const streak = liveHintStreak.current;
     const count = streak.reason === reason ? streak.count + 1 : 1;
@@ -227,7 +236,24 @@ export default function HomePage() {
       const response = await fetch("/api/scan/preflight", { method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal, body: JSON.stringify({ imageBase64: image.split(",")[1], mimeType: "image/jpeg", context: "shelf", clientFrameId: `preflight-${++frame.current}` }) });
       finishRequestTiming(); noteMetricsCapability(response);
       if (id !== session.current) return;
-      if (!response.ok) { if (source instanceof HTMLImageElement) setUploadBusy(false); setFailure("Couldn’t check this scene"); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); return; }
+      if (!response.ok) {
+        const isUpload = source instanceof HTMLImageElement;
+        if (isUpload) { setUploadBusy(false); setFailure("Couldn’t check this scene"); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); return; }
+        const payload = await response.json().catch(() => null) as { code?: unknown } | null;
+        const code = typeof payload?.code === "string" ? payload.code : null;
+        if (code && PREFLIGHT_TRANSIENT_CODES.has(code) && preflightRetryStreak.current < PREFLIGHT_TRANSIENT_RETRY_LIMIT) {
+          preflightRetryStreak.current += 1;
+          noteLiveHint("connection");
+          completeScanMetrics(id, "request_failure");
+          return;
+        }
+        preflightRetryStreak.current = 0;
+        setFailure("Couldn’t check this scene");
+        dispatch("ANALYZE_FAILURE");
+        completeScanMetrics(id, "request_failure");
+        return;
+      }
+      preflightRetryStreak.current = 0;
       const result = await response.json() as PreflightScanResponse;
       if (id !== session.current) return;
       if (result.decision !== "candidate" || result.packagedProductCount < 1 || result.confidence < PREFLIGHT_CANDIDATE_CONFIDENCE_THRESHOLD) {
@@ -241,7 +267,23 @@ export default function HomePage() {
         return;
       }
       await analyze(source, id);
-    } catch (error) { finishRequestTiming(); if (id === session.current && !(error instanceof DOMException && error.name === "AbortError")) { if (source instanceof HTMLImageElement) setUploadBusy(false); setFailure("Couldn’t check this scene"); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); } }
+    } catch (error) {
+      finishRequestTiming();
+      if (id === session.current && !(error instanceof DOMException && error.name === "AbortError")) {
+        const isUpload = source instanceof HTMLImageElement;
+        if (isUpload) { setUploadBusy(false); setFailure("Couldn’t check this scene"); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); }
+        else if (preflightRetryStreak.current < PREFLIGHT_TRANSIENT_RETRY_LIMIT) {
+          preflightRetryStreak.current += 1;
+          noteLiveHint("connection");
+          completeScanMetrics(id, "request_failure");
+        } else {
+          preflightRetryStreak.current = 0;
+          setFailure("Couldn’t check this scene");
+          dispatch("ANALYZE_FAILURE");
+          completeScanMetrics(id, "request_failure");
+        }
+      }
+    }
     finally {
       // Full analysis owns its own controller. Do not clear inFlight here once
       // it has begun: that would let an upload/live scheduler start another
@@ -251,7 +293,7 @@ export default function HomePage() {
   }, [analyze, capture, completeScanMetrics, dispatch, noteLiveHint, noteMetricsCapability, sheet, state]);
 
   const start = useCallback(async () => {
-    const id = ++session.current; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); stopStream(); clearResult(); resetScanMetrics(); setUploadUrl(null); setCameraKey((key) => key + 1); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
+    const id = ++session.current; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); stopStream(); clearResult(); resetScanMetrics(); setUploadUrl(null); setCameraKey((key) => key + 1); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
     try {
       // A device ID is a best-effort way to keep the same browser-selected rear
       // source across retry. If iOS no longer exposes it, fall back to rear.
@@ -278,13 +320,13 @@ export default function HomePage() {
     }
     catch { if (id === session.current) { setFailure("Camera unavailable. Check permission and try again."); setState((current) => transitionScannerLifecycle(current, "ANALYZE_FAILURE")); } }
   }, [clearResult, resetScanMetrics, sampleLiveFrame, stopStream]);
-  const close = useCallback(() => { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
+  const close = useCallback(() => { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
   const toggleTorch = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !torchOn; if (!track || !supportsTorch(track)) return setTorchAvailable(false); try { await track.applyConstraints({ advanced: [{ torch: next } as unknown as MediaTrackConstraintSet] }); setTorchOn(next); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
-  const retry = useCallback(() => { if (!uploadUrl) void start(); else { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); clearResult(); resetScanMetrics(); setUploadBusy(true); dispatch("RETRY"); } }, [clearResult, dispatch, resetScanMetrics, start, uploadUrl]);
+  const retry = useCallback(() => { if (!uploadUrl) void start(); else { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); clearResult(); resetScanMetrics(); setUploadBusy(true); dispatch("RETRY"); } }, [clearResult, dispatch, resetScanMetrics, start, uploadUrl]);
   const startRecovery = useCallback((id: string, mode: "package" | "label" = "package") => {
     session.current += 1;
     stillnessFingerprint.current = null;
-    qualitySkipStreak.current = 0; motionSkipStreak.current = 0;
+    qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0;
     liveHintStreak.current = { reason: null, count: 0 };
     setLiveHint(null);
     const recoverySession = session.current;
@@ -364,7 +406,7 @@ export default function HomePage() {
     if (!file || uploadBusy) return;
     session.current += 1;
     stillnessFingerprint.current = null;
-    qualitySkipStreak.current = 0; motionSkipStreak.current = 0;
+    qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0;
     liveHintStreak.current = { reason: null, count: 0 };
     setLiveHint(null);
     stopStream();
@@ -405,7 +447,7 @@ export default function HomePage() {
     const video = videoRef.current;
     if (!video?.readyState || inFlight.current) return;
     const sample = sampleLiveFrame(video);
-    if (!sample) { qualitySkipStreak.current = 0; motionSkipStreak.current = 0; noteLiveHint(null); void preflight(video); return; }
+    if (!sample) { qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; noteLiveHint(null); void preflight(video); return; }
     const quality = clientFrameQualityEnabled ? sampleFrameQuality(sample.data, 16, 12) : null;
     const decision = decideLiveFrameSchedulerTick({
       previous: stillnessFingerprint.current,

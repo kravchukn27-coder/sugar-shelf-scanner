@@ -7,8 +7,14 @@ import { logVisionTelemetry, logVisionUsageTelemetry, type VisionOperation, type
 // Multimodal detection on a full shelf can take longer than a text response.
 // The scanner freezes the captured frame while waiting, so prefer a reliable
 // result over cancelling a valid request at the former 12-second threshold.
-const GEMINI_TIMEOUT_MS = 30_000;
-const GEMINI_PREFLIGHT_TIMEOUT_MS = 8_000;
+// Trimmed from 30s to 25s (still well clear of that 12s regression) once the
+// threshold benchmark showed typical latency around 2-3s.
+const GEMINI_TIMEOUT_MS = 25_000;
+// A preflight timeout on the live camera no longer ends the session outright:
+// the client retries a bounded number of times with a "Reconnecting…" hint
+// before falling back to the blocking prompt, so this can run tighter than
+// it used to without turning a network blip into a forced Try again tap.
+const GEMINI_PREFLIGHT_TIMEOUT_MS = 5_000;
 // One bounded retry on a transient transport failure (timeout/5xx), never on
 // a parsed-but-invalid or low-confidence response. Deliberately shorter than
 // the first attempt so a repeat failure does not double the user's wait.
