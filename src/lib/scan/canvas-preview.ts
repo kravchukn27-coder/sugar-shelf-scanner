@@ -22,6 +22,12 @@ export type CanvasPreviewTarget = {
   canvas: HTMLCanvasElement;
   /** Maximum refresh rate. The sharp layer normally uses 30; blur 15. */
   fps: number;
+  /**
+   * Use an already-painted canvas instead of the raw video. The backdrop uses
+   * the sharp 3:4 foreground as its source, so it is a blurred enlargement of
+   * exactly the same composition rather than a competing camera crop.
+   */
+  sourceCanvas?: HTMLCanvasElement;
   blurPx?: number;
   brightness?: number;
 };
@@ -118,6 +124,36 @@ export function drawVideoFrameToCanvas(video: HTMLVideoElement, target: CanvasPr
   return true;
 }
 
+/** Draw an existing canvas into a target with the same centred cover geometry. */
+export function drawCanvasFrameToCanvas(source: HTMLCanvasElement, target: CanvasPreviewTarget, options?: {
+  maxPixels?: number;
+  maxDevicePixelRatio?: number;
+  devicePixelRatio?: number;
+}): boolean {
+  const cssSize = { width: target.canvas.clientWidth, height: target.canvas.clientHeight };
+  const crop = getCoverCrop({ width: source.width, height: source.height }, cssSize);
+  if (!crop) return false;
+  const backing = getCanvasBackingSize(
+    cssSize,
+    options?.devicePixelRatio ?? (typeof window === "undefined" ? 1 : window.devicePixelRatio),
+    options?.maxPixels ?? DEFAULT_MAX_PIXELS,
+    options?.maxDevicePixelRatio ?? DEFAULT_MAX_DPR,
+  );
+  if (!backing) return false;
+  if (target.canvas.width !== backing.width) target.canvas.width = backing.width;
+  if (target.canvas.height !== backing.height) target.canvas.height = backing.height;
+  const context = target.canvas.getContext("2d");
+  if (!context) return false;
+  context.save();
+  context.clearRect(0, 0, backing.width, backing.height);
+  context.filter = target.blurPx || target.brightness
+    ? `blur(${target.blurPx ?? 0}px) brightness(${target.brightness ?? 1})`
+    : "none";
+  context.drawImage(source, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, backing.width, backing.height);
+  context.restore();
+  return true;
+}
+
 type VideoFrameCallbackVideo = HTMLVideoElement & {
   requestVideoFrameCallback?: (callback: () => void) => number;
 };
@@ -140,7 +176,9 @@ export function createCanvasPreviewLoop(options: CanvasPreviewLoopOptions) {
     let painted = false;
     for (const target of options.targets) {
       if (shouldRenderCanvasFrame(lastDraws.get(target) ?? null, time, target.fps)
-        && drawVideoFrameToCanvas(options.video, target, options)) {
+        && (target.sourceCanvas
+          ? drawCanvasFrameToCanvas(target.sourceCanvas, target, options)
+          : drawVideoFrameToCanvas(options.video, target, options))) {
         lastDraws.set(target, time);
         painted = true;
       }

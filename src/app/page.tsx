@@ -258,7 +258,7 @@ export default function HomePage() {
     const backdrop = liveBackdropCanvasRef.current;
     if (!video || !foreground || !backdrop) return;
     let painted = false;
-    const loop = createCanvasPreviewLoop({ video, targets: [{ canvas: foreground, fps: 30 }, { canvas: backdrop, fps: 15 }], maxPixels: 1_250_000, maxDevicePixelRatio: 2, onFrameDrawn: () => { if (!painted) { painted = true; setCanvasPreviewActive(true); } } });
+    const loop = createCanvasPreviewLoop({ video, targets: [{ canvas: foreground, fps: 30 }, { canvas: backdrop, fps: 15, sourceCanvas: foreground }], maxPixels: 1_250_000, maxDevicePixelRatio: 2, onFrameDrawn: () => { if (!painted) { painted = true; setCanvasPreviewActive(true); } } });
     const onVisibilityChange = () => {
       if (document.hidden) loop.stop();
       else loop.start();

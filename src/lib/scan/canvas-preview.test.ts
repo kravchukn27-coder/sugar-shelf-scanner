@@ -11,6 +11,15 @@ test("creates the centred 3:4 crop of a 4:3 Safari camera frame", () => {
   });
 });
 
+test("turns the sharp 3:4 foreground into an enlarged portrait backdrop", () => {
+  assert.deepEqual(getCoverCrop({ width: 402, height: 536 }, { width: 402, height: 714 }), {
+    sx: 50.109243697479,
+    sy: 0,
+    sw: 301.781512605042,
+    sh: 536,
+  });
+});
+
 test("uses the full source when source and destination aspects match", () => {
   assert.deepEqual(getCoverCrop({ width: 1440, height: 1920 }, { width: 402, height: 536 }), {
     sx: 0,
