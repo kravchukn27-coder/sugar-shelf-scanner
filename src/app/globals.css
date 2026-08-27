@@ -38,3 +38,24 @@
 @keyframes camera-copy-pulse{0%,100%{opacity:.42;scale:.72}50%{opacity:1;scale:1}}
 @keyframes camera-copy-progress{0%{transform:translateX(-115%)}100%{transform:translateX(340%)}}
 @media(prefers-reduced-motion:reduce){.camera-copy-indicator:before,.camera-copy-indicator:after,.camera-copy-indicator i:before,.camera-copy-indicator i:after,.camera-copy-progress i{animation:none}.camera-copy-progress i{width:100%;opacity:.65}}
+
+/* Branded idle screen: the final onboarding frame becomes the real scanner home. */
+.camera-scene.idle .camera-controls{display:none}
+.scanner-home{position:absolute;inset:0;z-index:5;display:grid;grid-template-rows:58% 42%;overflow:hidden;color:#1f2025;background:radial-gradient(circle at 76% 16%,rgba(55,155,255,.34),transparent 34%),radial-gradient(circle at 14% 34%,rgba(241,78,88,.22),transparent 31%),linear-gradient(180deg,#e9f4fe 0%,#fff 78%)}
+.scanner-home:before{content:"";position:absolute;inset:0;opacity:.12;background-image:radial-gradient(rgba(31,32,37,.28) .65px,transparent .65px);background-size:7px 7px;mask-image:linear-gradient(to bottom,#000,transparent 65%);pointer-events:none}
+.scanner-home-visual{position:relative;display:grid;place-items:center;padding:max(68px,calc(env(safe-area-inset-top) + 42px)) 24px 0}
+.scanner-home-orbit{position:relative;display:grid;place-items:center;width:min(72vw,350px);aspect-ratio:1;border-radius:50%;background:radial-gradient(circle,rgba(55,155,255,.18),rgba(255,255,255,.5) 56%,transparent 70%);animation:scanner-home-halo .9s cubic-bezier(.2,.86,.26,1) both}
+.scanner-home-brand-card{position:relative;display:grid;place-items:center;width:82%;min-height:128px;padding:26px 18px;overflow:visible;border:1px solid rgba(255,255,255,.94);border-radius:38px;background:rgba(255,255,255,.88);box-shadow:0 24px 60px rgba(31,32,37,.13);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);animation:scanner-home-card .85s .1s cubic-bezier(.2,.86,.26,1) both}
+.scanner-home-logo{position:relative;z-index:2;display:block;width:min(58%,160px);height:auto;color:#1f2025;overflow:visible}
+.scanner-home-wave{position:absolute;left:14%;right:14%;bottom:22px;height:3px;border-radius:99px;background:linear-gradient(90deg,transparent,#379bff,#f14e58,transparent);animation:scanner-home-wave 1.5s ease-in-out infinite alternate}
+.scanner-home-copy{position:relative;display:grid;align-content:start;justify-items:center;padding:28px 24px max(28px,env(safe-area-inset-bottom));text-align:center}
+.scanner-home-copy h1{max-width:480px;margin:0;font-size:clamp(28px,7.2vw,36px);line-height:1.08;letter-spacing:-.035em;font-weight:560;animation:scanner-home-rise .75s .28s cubic-bezier(.2,.86,.26,1) both}
+.scanner-home-copy p{margin:16px 0 0;color:#7d7b82;font-size:clamp(16px,4.2vw,19px);line-height:1.35;letter-spacing:-.018em;font-weight:400;animation:scanner-home-rise .75s .4s cubic-bezier(.2,.86,.26,1) both}
+.scanner-home-copy button{width:min(100%,520px);min-height:60px;margin-top:28px;padding:17px 24px;border-radius:999px;color:#fff;background:#1f2025;box-shadow:0 14px 28px rgba(31,32,37,.24),inset 0 1px 0 rgba(255,255,255,.18);font-size:18px;font-weight:600;animation:scanner-home-rise .75s .52s cubic-bezier(.2,.86,.26,1) both;transition:transform .18s ease,box-shadow .18s ease}
+.scanner-home-copy button:active{transform:scale(.98);box-shadow:0 8px 18px rgba(31,32,37,.22)}
+@keyframes scanner-home-halo{from{opacity:0;transform:scale(.72)}to{opacity:1;transform:scale(1)}}
+@keyframes scanner-home-card{from{opacity:0;transform:translateY(18px) scale(.9)}to{opacity:1;transform:none}}
+@keyframes scanner-home-rise{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+@keyframes scanner-home-wave{from{opacity:.35;transform:scaleX(.25)}to{opacity:.9;transform:scaleX(1)}}
+@media(max-height:720px){.scanner-home{grid-template-rows:55% 45%}.scanner-home-visual{padding-top:max(54px,calc(env(safe-area-inset-top) + 28px))}.scanner-home-orbit{width:min(62vw,260px)}.scanner-home-brand-card{min-height:110px;border-radius:32px}.scanner-home-copy{padding-top:20px}.scanner-home-copy p{margin-top:10px}.scanner-home-copy button{min-height:54px;margin-top:20px}}
+@media(prefers-reduced-motion:reduce){.scanner-home-orbit,.scanner-home-brand-card,.scanner-home-copy h1,.scanner-home-copy p,.scanner-home-copy button,.scanner-home-wave{animation:none}}

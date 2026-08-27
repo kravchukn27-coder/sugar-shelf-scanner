@@ -387,7 +387,7 @@ export default function HomePage() {
     {groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { setSelected(group.detection.id); setSheet(true); }} />)}
     {state === "live_searching" && !uploadUrl && <><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint">{liveHint ?? "Scan a product to see how it fits your day"}</p></>}
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}
-    {state === "camera_off" && <Prompt title="Scan products for sugar" action="Start scanning" onAction={() => void start()} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action="Try again" onAction={retry} failure />}
+    {state === "camera_off" && <ScannerHome onStart={() => void start()} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action="Try again" onAction={retry} failure />}
     {state === "captured_analyzing" && <CameraCopy>{analysisPhase === "identifying" ? "Calculating your Sugar Fit" : analysisPhase === "catalog" ? "Personalizing your result" : "Still working on your result"}</CameraCopy>}
     {state !== "camera_off" && state !== "captured_analyzing" && state !== "results" ? <label className={`gallery-button ${uploadBusy ? "busy" : ""}`} aria-label="Choose a product photo" aria-disabled={uploadBusy}><input type="file" accept="image/*" disabled={uploadBusy} onChange={(e) => { upload(e.target.files?.[0]); e.currentTarget.value = ""; }} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label> : null}
     {showCameraDiagnostics && cameraDiagnostics ? <CameraDiagnostics snapshot={cameraDiagnostics} /> : null}</>}
@@ -415,6 +415,37 @@ function RecoveryCamera({ mode, gtin, allowLabel, busy, cameraReady, message, dr
   };
   const cameraProblem = !cameraReady && message?.startsWith("Camera unavailable");
   return <div className="recovery-camera" role="dialog" aria-modal="true" aria-label="Recovery camera"><div className="recovery-camera-shade"><button className="round-control" onClick={onClose} aria-label="Close recovery"><CloseIcon /></button><div className="recovery-camera-copy"><strong>{mode === "package" ? "Photograph the package barcode" : "Photograph Nutrition Facts"}</strong><span>{mode === "package" ? "One still photo. Nothing is analysed continuously." : "One consented Gemini request after you tap Take photo."}</span></div>{!draft && <button className="recovery-take" disabled={busy || !cameraReady} onClick={() => { setHasAttempt(true); onCapture(); }}>{busy ? "Reading…" : !cameraReady ? "Starting camera…" : hasAttempt ? "Retake" : "Take photo"}</button>}{cameraProblem && <button className="recovery-secondary" onClick={onRestartCamera}>Try camera again</button>}{mode === "package" && allowLabel && !draft && !cameraProblem && <button className="recovery-secondary" disabled={busy || !cameraReady} onClick={() => onModeChange("label")}>Take nutrition-label photo</button>}{message && <p className="recovery-status" aria-live="polite">{message}</p>}{draft && <div className="recovery-draft"><strong>Review draft — provisional, pending curator review</strong>{(["brand", "name", "packSize", "energyKcal", "proteinPer100g", "fatPer100g", "carbohydratesPer100g", "sugarPer100g"] as (keyof NutritionLabelDraft)[]).map((key) => <label key={key}>{key}<input disabled={submitState === "saving"} value={typeof draft[key] === "object" ? "" : String(draft[key] ?? "")} onChange={(event) => update(key, event.target.value)} /></label>)}{submitState === "error" && <p className="recovery-submit-error" role="alert">{submitErrorMessage ?? GENERIC_PROPOSAL_ERROR_MESSAGE}</p>}{submitState === "duplicate" && <p className="barcode-recovery-note" role="status">This item is already waiting for curator review.</p>}<div className="recovery-draft-actions recovery-draft-submit">{submitState === "duplicate" ? <button onClick={onClose}>Close</button> : <><button disabled={submitState === "saving"} onClick={onRetake}>Retake</button><button disabled={submitState === "saving"} onClick={() => void submit()}>{submitState === "saving" ? "Submitting…" : "OK — submit for review"}</button></>}</div></div>}</div></div>;
+}
+
+function SugarNoWordmark() {
+  return <svg className="scanner-home-logo" viewBox="0 0 103 20" aria-hidden="true">
+    <path d="M96.3079 15.3691C92.7922 15.3691 90.1816 12.9902 90.1816 9.4323C90.1816 5.89548 92.8132 3.5376 96.3079 3.5376C99.7816 3.5376 102.413 5.91653 102.413 9.4323C102.413 12.9902 99.8237 15.3691 96.3079 15.3691ZM96.3079 13.0112C98.35 13.0112 99.3395 11.306 99.3395 9.4323C99.3395 7.57968 98.329 5.89548 96.3079 5.89548C94.2658 5.89548 93.2553 7.55862 93.2553 9.4323C93.2553 11.306 94.2658 13.0112 96.3079 13.0112Z" fill="currentColor" />
+    <path d="M77.96 15.0736V9.19997C77.96 6.98946 78.5494 3.72632 83.4757 3.72632C88.381 3.72632 88.9705 6.98946 88.9705 9.19997V15.0736H85.8968V9.22102C85.8968 7.49471 85.4968 6.06315 83.4757 6.06315C81.4547 6.06315 81.0336 7.47366 81.0336 9.22102V15.0736H77.96Z" fill="currentColor" />
+    <path d="M68.832 15.0737V9.20006C68.832 4.75798 71.1478 3.87378 74.3057 3.87378C75.0215 3.87378 75.7794 3.91588 76.5794 3.97904V6.18955C75.8215 6.14745 75.1057 6.06324 74.4952 6.06324C72.9162 6.06324 71.8847 6.54745 71.8847 9.22111V15.1158L68.832 15.0737Z" fill="currentColor" />
+    <path d="M64.0624 15.0739V13.6844C63.3466 14.8002 62.1676 15.2844 60.8624 15.3686C57.4098 15.6002 55.0098 12.8845 55.0098 9.47395C55.0098 5.97924 57.7255 3.70557 61.1361 3.70557C64.0834 3.70557 67.1361 5.83187 67.1361 8.98974V15.0739H64.0624ZM61.0098 13.0318C62.8624 13.0318 64.0413 11.2424 64.0413 9.51605C64.0413 7.68449 62.9676 6.14766 61.0098 6.14766C59.115 6.14766 58.1045 7.70554 58.1045 9.4529C58.1045 11.1792 59.0729 13.0318 61.0098 13.0318Z" fill="currentColor" />
+    <path d="M42.2248 18.1055L44.5617 16.5476C45.5932 17.4318 46.1196 17.6423 47.488 17.6423C49.1301 17.6423 50.288 16.3792 50.288 14.7581V14.316C49.3616 15.0318 48.2459 15.3686 47.088 15.3686C43.6353 15.3686 41.2354 12.8845 41.2354 9.47395C41.2354 6.00029 43.9722 3.70557 47.3617 3.70557C50.309 3.70557 53.3616 5.83187 53.3616 8.98974V14.8423C53.3616 18.0213 50.3932 20.0002 47.4248 20.0002C45.509 20.0002 43.5722 19.5581 42.2248 18.1055ZM47.2353 13.0318C49.088 13.0318 50.2669 11.2424 50.2669 9.51605C50.2669 7.68449 49.1932 6.14766 47.2353 6.14766C45.3406 6.14766 44.3301 7.70554 44.3301 9.4529C44.3301 11.1792 45.2985 13.0318 47.2353 13.0318Z" fill="currentColor" />
+    <path d="M28.8037 3.97949H31.8774V9.87419C31.8774 11.6215 32.2984 13.011 34.3195 13.011C36.3405 13.011 36.7405 11.6005 36.7405 9.87419V3.97949L39.8142 4.0216V9.89524C39.8142 12.1058 39.2247 15.3689 34.3195 15.3689C29.3932 15.3689 28.8037 12.1058 28.8037 9.89524V3.97949Z" fill="currentColor" />
+    <path d="M16.8057 13.4948L19.0162 11.8106C19.9214 12.6527 20.5741 12.9685 21.9425 12.9685C22.4688 12.9685 23.9214 12.8633 23.7109 11.979C23.353 11.0527 21.6899 10.9264 20.8688 10.7369C18.8478 10.2527 16.8267 9.32643 16.8267 6.9475C16.8267 4.8633 19.0162 3.5791 21.7951 3.5791C24.2162 3.5791 26.153 4.54752 26.8477 6.18961L24.1741 7.17908C23.732 6.35803 22.8688 5.91593 21.6267 5.91593C20.5951 5.91593 19.9636 6.29487 19.9636 6.9054C19.9636 8.27381 22.3004 8.50538 23.2688 8.75801C25.0162 9.17906 26.9741 9.85274 26.9741 12.1054C26.9741 14.2527 24.532 15.4106 21.8372 15.4106C19.6057 15.4106 18.0267 14.7369 16.8057 13.4948Z" fill="currentColor" />
+    <path d="M1.22105 15.0736L2.08421 11.0947H0L0.73684 8.84205H2.56841L3.15789 6.06312H0.631577L1.36842 3.8105H3.66315L4.50525 0H7.47367L6.63156 3.8105H9.51577L10.3579 0H13.3263L12.4842 3.8105H14.6736L13.9579 6.06312H11.9789L11.3684 8.84205H13.8737L13.1368 11.0947H10.8842L9.99998 15.0736H7.03156L7.91577 11.0947H5.03157L4.16841 15.0736H1.22105ZM5.53683 8.84205H8.42103L9.0105 6.06312H6.1263L5.53683 8.84205Z" fill="currentColor" />
+  </svg>;
+}
+
+function ScannerHome({ onStart }: { onStart: () => void }) {
+  return <div className="scanner-home">
+    <div className="scanner-home-visual">
+      <div className="scanner-home-orbit">
+        <div className="scanner-home-brand-card" aria-label="#sugarno">
+          <SugarNoWordmark />
+          <span className="scanner-home-wave" aria-hidden="true" />
+        </div>
+      </div>
+    </div>
+    <div className="scanner-home-copy">
+      <h1>See the shelf differently.</h1>
+      <p>Point. Scan. Know what fits.</p>
+      <button type="button" onClick={onStart}>Start scanning</button>
+    </div>
+  </div>;
 }
 
 function Prompt({ title, action, onAction, failure = false }: { title: string; action: string; onAction: () => void; failure?: boolean }) {
