@@ -36,7 +36,7 @@ export const preflightScanResponseSchema = z.object({
   clientFrameId: z.string().min(1),
   provider: z.enum(["mock", "gemini"]),
   decision: preflightDecisionSchema,
-  packagedProductCount: z.number().int().min(0).max(12),
+  packagedProductCount: z.number().int().min(0).max(20),
   confidence: z.number().min(0).max(1),
   reasonCode: preflightReasonCodeSchema,
   analyzedAt: z.string().datetime(),

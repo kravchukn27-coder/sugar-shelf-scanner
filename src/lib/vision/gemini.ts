@@ -15,7 +15,7 @@ const GEMINI_PREFLIGHT_TIMEOUT_MS = 8_000;
 const GEMINI_ANALYZE_RETRY_TIMEOUT_MS = 8_000;
 const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 const MAX_PREFLIGHT_IMAGE_BYTES = 2 * 1024 * 1024;
-const MAX_DETECTIONS = 12;
+const MAX_DETECTIONS = 20;
 
 const geminiDetectionSchema = z.object({
   // Gemini object detection boxes use a 0..1000 coordinate system: [ymin, xmin, ymax, xmax].
@@ -30,7 +30,9 @@ const geminiDetectionSchema = z.object({
 });
 
 const geminiResponseSchema = z.object({
-  detections: z.array(geminiDetectionSchema).max(MAX_DETECTIONS),
+  // Validate detections independently below. A single malformed item or an
+  // over-complete shelf response must not discard every usable product.
+  detections: z.array(z.unknown()),
 });
 
 const geminiPreflightResponseSchema = z.object({
@@ -190,6 +192,20 @@ function toDetection(item: z.infer<typeof geminiDetectionSchema>, index: number)
   };
 }
 
+export function normalizeGeminiDetections(items: unknown[]): Detection[] {
+  const detections: Detection[] = [];
+  // Gemini is also instructed with maxItems, but keep a defensive input cap in
+  // case a provider version ignores the response schema.
+  for (const [index, item] of items.slice(0, MAX_DETECTIONS * 4).entries()) {
+    const parsed = geminiDetectionSchema.safeParse(item);
+    if (!parsed.success) continue;
+    const detection = toDetection(parsed.data, index);
+    if (detection) detections.push(detection);
+    if (detections.length === MAX_DETECTIONS) break;
+  }
+  return detections;
+}
+
 async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, timeoutMs: number): Promise<AnalyzeScanResponse> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -214,6 +230,7 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, timeout
             properties: {
               detections: {
                 type: "ARRAY",
+                maxItems: MAX_DETECTIONS,
                 items: {
                   type: "OBJECT",
                   properties: {
@@ -235,7 +252,7 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, timeout
       await throwGeminiProviderError(response, "analyze");
     }
     const parsed = parseGeminiText(await response.json(), geminiResponseSchema);
-    const detections = parsed.detections.map(toDetection).filter((item): item is Detection => item !== null);
+    const detections = normalizeGeminiDetections(parsed.detections);
     return {
       scanId: `gemini-${crypto.randomUUID()}`,
       clientFrameId: input.clientFrameId,

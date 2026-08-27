@@ -42,6 +42,14 @@ function TorchIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path 
 function BarcodeIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5v14M7 5v14M10 5v14M14 5v14M17 5v14M20 5v14M12 5v14" /></svg>; }
 type RecoveryInfo = { id: string; state: RecoveryState; labelSeen: boolean; barcode: string | null };
 
+async function scanFailureMessage(response: Response) {
+  const payload = await response.json().catch(() => null) as { code?: unknown } | null;
+  if (payload?.code === "rate_limited") return "Too many scans — wait a moment and try again";
+  if (payload?.code === "provider_timeout") return "This scan took too long — try a closer photo";
+  if (payload?.code === "bad_image") return "This photo couldn’t be processed — choose another one";
+  return "Couldn’t analyze this capture";
+}
+
 export default function HomePage() {
   const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0);
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
@@ -141,7 +149,7 @@ export default function HomePage() {
       const response = await fetch("/api/scan/analyze", { method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal, body: JSON.stringify({ imageBase64: image.split(",")[1], mimeType: "image/jpeg", context: "shelf", clientFrameId: `frame-${++frame.current}` }) });
       finishRequestTiming(); noteMetricsCapability(response);
       if (id !== session.current) return;
-      if (!response.ok) { setFailure("Couldn’t analyze this capture"); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); return; }
+      if (!response.ok) { setFailure(await scanFailureMessage(response)); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); return; }
       const result = await response.json() as AnalyzeScanResponse;
       if (id !== session.current) return;
       if (result.detections.some(eligible)) { setScan(result); dispatch("ANALYZE_SUCCESS"); } else { setFailure("No recognizable packaged products found"); dispatch("NO_SCENE"); }
