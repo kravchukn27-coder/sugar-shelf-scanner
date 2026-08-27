@@ -242,9 +242,12 @@ export default function HomePage() {
         const payload = await response.json().catch(() => null) as { code?: unknown } | null;
         const code = typeof payload?.code === "string" ? payload.code : null;
         if (code && PREFLIGHT_TRANSIENT_CODES.has(code) && preflightRetryStreak.current < PREFLIGHT_TRANSIENT_RETRY_LIMIT) {
+          // Not terminal: the session keeps running and the next scheduled
+          // tick retries on its own, so completeScanMetrics must not fire
+          // here — terminal() is one-shot per session and would otherwise
+          // swallow the real outcome that follows.
           preflightRetryStreak.current += 1;
           noteLiveHint("connection");
-          completeScanMetrics(id, "request_failure");
           return;
         }
         preflightRetryStreak.current = 0;
@@ -273,9 +276,10 @@ export default function HomePage() {
         const isUpload = source instanceof HTMLImageElement;
         if (isUpload) { setUploadBusy(false); setFailure("Couldn’t check this scene"); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); }
         else if (preflightRetryStreak.current < PREFLIGHT_TRANSIENT_RETRY_LIMIT) {
+          // Same non-terminal case as above, reached via a thrown network
+          // error instead of a non-ok response.
           preflightRetryStreak.current += 1;
           noteLiveHint("connection");
-          completeScanMetrics(id, "request_failure");
         } else {
           preflightRetryStreak.current = 0;
           setFailure("Couldn’t check this scene");
