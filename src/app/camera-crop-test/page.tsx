@@ -24,6 +24,14 @@ const PROBED_CONSTRAINTS = ["width", "height", "aspectRatio", "resizeMode", "fac
 type ProbedConstraint = (typeof PROBED_CONSTRAINTS)[number];
 type ConstraintProbe = { supported: Record<ProbedConstraint, boolean>; requested: string | null };
 type ConstraintInspectableTrack = { getConstraints?: () => MediaTrackConstraints };
+type LayoutProbe = {
+  box: string;
+  video: string;
+  viewport: string;
+  visualViewport: string;
+  rawEdges: string;
+  objectFit: string;
+};
 
 function readConstraintProbe(track?: MediaStreamTrack): ConstraintProbe {
   const supported = navigator.mediaDevices.getSupportedConstraints() as Record<string, boolean | undefined>;
@@ -38,8 +46,34 @@ function supportsExactPortrait(probe: ConstraintProbe, includeResizeMode: boolea
   return ["width", "height", "aspectRatio", ...(includeResizeMode ? ["resizeMode"] : [])].every((name) => probe.supported[name as ProbedConstraint]);
 }
 
+function rectSummary(rect: DOMRect) {
+  return `${Math.round(rect.width)}×${Math.round(rect.height)} @ ${Math.round(rect.left)},${Math.round(rect.top)}`;
+}
+
+function rawEdgeLuma(video: HTMLVideoElement): string {
+  if (!video.videoWidth || !video.videoHeight) return "waiting";
+  const canvas = document.createElement("canvas");
+  canvas.width = 48;
+  canvas.height = 36;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return "unavailable";
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  const averageRows = (from: number, to: number) => {
+    let total = 0, count = 0;
+    for (let y = from; y < to; y += 1) for (let x = 0; x < canvas.width; x += 1) {
+      const index = (y * canvas.width + x) * 4;
+      total += pixels[index] * 0.2126 + pixels[index + 1] * 0.7152 + pixels[index + 2] * 0.0722;
+      count += 1;
+    }
+    return Math.round(total / count);
+  };
+  return `top:${averageRows(0, 3)} bottom:${averageRows(canvas.height - 3, canvas.height)} / 255`;
+}
+
 export default function CameraCropTestPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +81,7 @@ export default function CameraCropTestPage() {
   const [exactResult, setExactResult] = useState<string | null>(null);
   const [constraintProbe, setConstraintProbe] = useState<ConstraintProbe | null>(null);
   const [presentation, setPresentation] = useState<"native" | "cw" | "ccw">("native");
+  const [layoutProbe, setLayoutProbe] = useState<LayoutProbe | null>(null);
   // Computed in JS (not via CSS aspect-ratio) so the exact box size in
   // device pixels is verifiable on-screen, not eyeballed from a screenshot.
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
@@ -72,6 +107,7 @@ export default function CameraCropTestPage() {
     setRunning(false);
     setDiagnostics(null);
     setConstraintProbe(null);
+    setLayoutProbe(null);
     setPresentation("native");
   }, []);
 
@@ -151,6 +187,27 @@ export default function CameraCropTestPage() {
         transform: `translate(-50%, -50%) rotate(${presentation === "cw" ? "90deg" : "-90deg"})`,
       };
 
+  useEffect(() => {
+    if (!running) return;
+    const sample = () => {
+      const video = videoRef.current;
+      const boxElement = boxRef.current;
+      if (!video || !boxElement) return;
+      const visualViewport = window.visualViewport;
+      setLayoutProbe({
+        box: rectSummary(boxElement.getBoundingClientRect()),
+        video: rectSummary(video.getBoundingClientRect()),
+        viewport: `${window.innerWidth}×${window.innerHeight} dpr:${window.devicePixelRatio}`,
+        visualViewport: visualViewport ? `${Math.round(visualViewport.width)}×${Math.round(visualViewport.height)} @ ${Math.round(visualViewport.offsetLeft)},${Math.round(visualViewport.offsetTop)} scale:${visualViewport.scale.toFixed(2)}` : "not exposed",
+        rawEdges: rawEdgeLuma(video),
+        objectFit: window.getComputedStyle(video).objectFit,
+      });
+    };
+    sample();
+    const timer = window.setInterval(sample, 500);
+    return () => window.clearInterval(timer);
+  }, [running, presentation]);
+
   useEffect(() => () => stop(), [stop]);
 
   return (
@@ -162,7 +219,7 @@ export default function CameraCropTestPage() {
       </div>
 
       <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{ position: "relative", width: box?.w ?? "100%", height: box?.h ?? "75%", background: "#0a0a0c", overflow: "hidden", visibility: running ? "visible" : "hidden" }}>
+        <div ref={boxRef} style={{ position: "relative", width: box?.w ?? "100%", height: box?.h ?? "75%", background: "#0a0a0c", overflow: "hidden", visibility: running ? "visible" : "hidden" }}>
           <video ref={videoRef} muted playsInline style={videoStyle} />
           {running && (
             <>
@@ -210,6 +267,11 @@ export default function CameraCropTestPage() {
                 <div>box {box ? `${box.w}×${box.h} (${(box.w / box.h).toFixed(3)})` : "?"} · viewport {typeof window !== "undefined" ? `${window.innerWidth}×${window.innerHeight}` : "?"}</div>
                 <div>supported {constraintProbe ? PROBED_CONSTRAINTS.map((name) => `${name}:${constraintProbe.supported[name] ? "yes" : "no"}`).join(" · ") : "reading…"}</div>
                 {constraintProbe?.requested && <div style={{ maxWidth: 270, overflowWrap: "anywhere" }}>requested {constraintProbe.requested}</div>}
+                {layoutProbe && <>
+                  <div>CSS box {layoutProbe.box} · video {layoutProbe.video} · fit:{layoutProbe.objectFit}</div>
+                  <div>layout viewport {layoutProbe.viewport} · visual {layoutProbe.visualViewport}</div>
+                  <div>raw frame edges {layoutProbe.rawEdges}</div>
+                </>}
               </>
             ) : "reading diagnostics…"}
           </div>
