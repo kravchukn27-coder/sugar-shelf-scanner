@@ -12,7 +12,7 @@ import { formatSugarPer100g } from "@/lib/scoring/format-sugar";
 import { createSugarScore } from "@/lib/scoring/sugar-score";
 import { calculateSugarFit } from "@/lib/scoring/sugar-fit";
 import { groupRepeatedDetections, type DetectionGroup } from "@/lib/scan/deduplicate-detections";
-import { getCenteredFrameCrop, mapAnalyzedBoxToPreview } from "@/lib/scan/frame-crop";
+import { getCenteredFrameCrop } from "@/lib/scan/frame-crop";
 import { getCameraDiagnosticSnapshot, type CameraDiagnosticSnapshot } from "@/lib/scan/camera-diagnostics";
 import { applyCameraView, getCameraControls, getCameraDeviceId, preferCameraCaptureQuality, rearCameraRequest, supportsTorch, type CameraControls } from "@/lib/scan/media-capabilities";
 import { shouldRunScannerScheduler, transitionScannerLifecycle, type ScannerLifecycleEvent, type ScannerLifecycleState } from "@/lib/scan/scanner-lifecycle";
@@ -126,7 +126,12 @@ export default function HomePage() {
     // optional 1× control keeps it un-cropped for a direct framing comparison.
     const encodeStartedAt = performance.now();
     const image = capture(source, 960, .7, trueOneXCapture ? 1 : 1.12); scannerMetrics.current.recordCaptureEncode(encodeStartedAt); if (!image || id !== session.current) return;
-    if (source instanceof HTMLVideoElement) { setFrozen(image); void turnTorchOffAfterCapture(); }
+    // Keep the exact JPEG sent to Gemini for both camera and gallery scans.
+    // Detection boxes and per-product thumbnails then share one coordinate
+    // system instead of being remapped onto the uncropped gallery original.
+    setFrozen(image);
+    if (source instanceof HTMLVideoElement) void turnTorchOffAfterCapture();
+    inFlight.current = true;
     dispatch("CAPTURED");
     const controller = new AbortController(); abortRef.current = controller;
     const requestStartedAt = scannerMetrics.current.startRequest("analyze");
@@ -139,14 +144,7 @@ export default function HomePage() {
       if (!response.ok) { setFailure("Couldn’t analyze this capture"); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); return; }
       const result = await response.json() as AnalyzeScanResponse;
       if (id !== session.current) return;
-      const preview = source instanceof HTMLImageElement ? uploadPreviewRef.current?.getBoundingClientRect() : null;
-      const sourceWidth = source instanceof HTMLImageElement ? source.naturalWidth : source.videoWidth;
-      const sourceHeight = source instanceof HTMLImageElement ? source.naturalHeight : source.videoHeight;
-      const analyzedCrop = preview ? getCenteredFrameCrop(sourceWidth, sourceHeight, preview.width, preview.height, 1.12) : null;
-      const displayResult = source instanceof HTMLImageElement && preview && analyzedCrop
-        ? { ...result, detections: result.detections.map((detection) => ({ ...detection, box: mapAnalyzedBoxToPreview(detection.box, analyzedCrop, { width: sourceWidth, height: sourceHeight }, { width: preview.width, height: preview.height }) ?? detection.box })) }
-        : result;
-      if (displayResult.detections.some(eligible)) { setScan(displayResult); dispatch("ANALYZE_SUCCESS"); } else { setFailure("No recognizable packaged products found"); dispatch("NO_SCENE"); }
+      if (result.detections.some(eligible)) { setScan(result); dispatch("ANALYZE_SUCCESS"); } else { setFailure("No recognizable packaged products found"); dispatch("NO_SCENE"); }
       completeScanMetrics(id, "analysis_completed");
     } catch (error) { finishRequestTiming(); if (id === session.current && !(error instanceof DOMException && error.name === "AbortError")) { setFailure("Couldn’t analyze this frame"); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); } }
     finally {
@@ -367,7 +365,10 @@ export default function HomePage() {
     if (!uploadUrl || !shouldRunScannerScheduler(state) || sheet) return;
     const image = new Image();
     let cancelled = false;
-    image.onload = () => { if (!cancelled) { scannerMetrics.current.markCaptureReady(); void preflight(image); } };
+    // A gallery selection is already an intentional still capture. Sending it
+    // through the live-camera preflight adds an unnecessary short timeout and
+    // can reject complex shelf photos before the full analysis even begins.
+    image.onload = () => { if (!cancelled) { scannerMetrics.current.markCaptureReady(); void analyze(image, session.current); } };
     image.onerror = () => {
       if (cancelled) return;
       setUploadBusy(false);
@@ -376,7 +377,7 @@ export default function HomePage() {
     };
     image.src = uploadUrl;
     return () => { cancelled = true; image.onload = null; image.onerror = null; };
-  }, [dispatch, preflight, sheet, state, uploadUrl]);
+  }, [analyze, dispatch, sheet, state, uploadUrl]);
   const failed = state === "no_scene" || state === "error";
   const showAnalysisSpinner = state === "captured_analyzing" || (uploadUrl !== null && uploadBusy && state === "live_searching");
   const recoveryActive = recoveryCamera !== null;
