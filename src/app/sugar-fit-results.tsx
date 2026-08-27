@@ -13,6 +13,7 @@ type SheetProps = {
   onSelect: (id: string | null) => void;
   onClose: () => void;
   onScanAgain: () => void;
+  onRecommendationOpen: () => void;
 };
 
 function displayIdentity(detection: Detection) {
@@ -98,7 +99,7 @@ function ScoreRing({ fit }: { fit: SugarFitResult }) {
   return <div className={`sugar-fit-ring ${fit.tone}`} style={style} role="img" aria-label={`Sugar Fit ${fit.score} out of 100`}><span><strong>{fit.score}</strong><small>SUGAR FIT</small></span></div>;
 }
 
-function ProductDetail({ detection, count, frozenImage, recoveryBanner, onBack, onClose, onScanAgain }: {
+function ProductDetail({ detection, count, frozenImage, recoveryBanner, onBack, onClose, onScanAgain, onRecommendationOpen }: {
   detection: Detection;
   count: number;
   frozenImage: string | null;
@@ -106,6 +107,7 @@ function ProductDetail({ detection, count, frozenImage, recoveryBanner, onBack, 
   onBack: (() => void) | null;
   onClose: () => void;
   onScanAgain: () => void;
+  onRecommendationOpen: () => void;
 }) {
   const fit = calculateSugarFit({
     sugarPer100g: detection.score.sugarPer100g,
@@ -136,7 +138,7 @@ function ProductDetail({ detection, count, frozenImage, recoveryBanner, onBack, 
     </> : <div className="sugar-fit-empty"><strong>No score yet</strong><span>We need verified sugar data to calculate your Sugar Fit.</span></div>}
     {count > 1 && <p className="sugar-fit-repeat">{count} matching products in this scan</p>}
     <button className="sugar-fit-scan-again" onClick={onScanAgain}>Scan another product</button>
-    <a className="sugar-fit-amazon" href={amazonUrl(detection)} target="_blank" rel="noreferrer">Find on Amazon ↗</a>
+    <a className="sugar-fit-amazon" href={amazonUrl(detection)} target="_blank" rel="noreferrer" onClick={onRecommendationOpen}>Find on Amazon ↗</a>
   </>;
 }
 
@@ -160,7 +162,7 @@ function ProductComparison({ groups, frozenImage, onSelect, onClose, onScanAgain
 export function SugarFitResultsSheet(props: SheetProps) {
   const selected = props.groups.find(({ detection }) => detection.id === props.selectedId) ?? (props.groups.length === 1 ? props.groups[0] : null);
   return <section className="result-sheet sugar-fit-sheet" aria-label="Sugar Fit results">
-    {selected ? <ProductDetail detection={selected.detection} count={selected.count} frozenImage={props.frozenImage} recoveryBanner={props.recoveryBanner} onBack={props.groups.length > 1 ? () => props.onSelect(null) : null} onClose={props.onClose} onScanAgain={props.onScanAgain} /> : <ProductComparison groups={props.groups} frozenImage={props.frozenImage} onSelect={props.onSelect} onClose={props.onClose} onScanAgain={props.onScanAgain} />}
+    {selected ? <ProductDetail detection={selected.detection} count={selected.count} frozenImage={props.frozenImage} recoveryBanner={props.recoveryBanner} onBack={props.groups.length > 1 ? () => props.onSelect(null) : null} onClose={props.onClose} onScanAgain={props.onScanAgain} onRecommendationOpen={props.onRecommendationOpen} /> : <ProductComparison groups={props.groups} frozenImage={props.frozenImage} onSelect={props.onSelect} onClose={props.onClose} onScanAgain={props.onScanAgain} />}
   </section>;
 }
 
