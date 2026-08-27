@@ -12,6 +12,7 @@ import { calculateSugarFit } from "@/lib/scoring/sugar-fit";
 import { groupRepeatedDetections, sortDetectionGroupsBySugarFit, type DetectionGroup } from "@/lib/scan/deduplicate-detections";
 import { getCenteredFrameCrop } from "@/lib/scan/frame-crop";
 import { createCanvasPreviewLoop } from "@/lib/scan/canvas-preview";
+import { captureCanvasBackdropSnapshot, releaseCanvasBackdropSnapshot } from "@/lib/scan/canvas-backdrop-snapshot";
 import { getCameraDiagnosticSnapshot, type CameraDiagnosticSnapshot } from "@/lib/scan/camera-diagnostics";
 import { applyCameraView, getCameraControls, getCameraDeviceId, preferCameraCaptureQuality, rearCameraRequest, supportsTorch } from "@/lib/scan/media-capabilities";
 import { shouldRunScannerScheduler, transitionScannerLifecycle, type ScannerLifecycleEvent, type ScannerLifecycleState } from "@/lib/scan/scanner-lifecycle";
@@ -114,6 +115,7 @@ export default function HomePage() {
   const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), livePreviewRef = useRef<HTMLDivElement>(null), liveCanvasRef = useRef<HTMLCanvasElement>(null), liveBackdropCanvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), resultMetrics = useRef({ source: null as "camera" | "upload" | null, started: false, resultShown: false, productOpened: false, recommendationOpened: false }), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), preflightRetryStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
   const [canvasPreviewActive, setCanvasPreviewActive] = useState(false);
+  const [frozenBackdrop, setFrozenBackdrop] = useState<string | null>(null);
   const [liveHint, setLiveHint] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [scan, setScan] = useState<AnalyzeScanResponse | null>(null);
@@ -203,7 +205,7 @@ export default function HomePage() {
     };
   }, []);
   const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); setCameraDiagnostics(null); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
-  const clearResult = useCallback(() => { setRecovery(null); setRecoveryCamera(null); setRecoveryBusy(false); setRecoveryMessage(null); setRecoverySubmissionBanner(null); setLabelDraft(null); setScan(null); setFrozen(null); setFailure(null); setSheet(false); setSelected(null); setUploadBusy(false); }, []);
+  const clearResult = useCallback(() => { setRecovery(null); setRecoveryCamera(null); setRecoveryBusy(false); setRecoveryMessage(null); setRecoverySubmissionBanner(null); setLabelDraft(null); setScan(null); setFrozen(null); setFrozenBackdrop(releaseCanvasBackdropSnapshot()); setFailure(null); setSheet(false); setSelected(null); setUploadBusy(false); }, []);
   const turnTorchOffAfterCapture = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; if (!torchOn || !track) return; try { await track.applyConstraints({ advanced: [{ torch: false } as unknown as MediaTrackConstraintSet] }); setTorchOn(false); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
   const noteLiveHint = useCallback((reason: LiveHintReason | null) => {
     if (reason && LIVE_HINT_IMMEDIATE_REASONS.has(reason)) { liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(LIVE_HINT_COPY[reason]); return; }
@@ -276,6 +278,9 @@ export default function HomePage() {
     // Keep the exact JPEG sent to Gemini for both camera and gallery scans.
     // Detection boxes and per-product thumbnails then share one coordinate
     // system instead of being remapped onto the uncropped gallery original.
+    // Keep the same already-painted backdrop pixels after capture. This is a
+    // local, ephemeral data URL only; it is never sent with the scan JPEG.
+    setFrozenBackdrop(source instanceof HTMLVideoElement ? captureCanvasBackdropSnapshot(liveBackdropCanvasRef.current)?.dataUrl ?? null : null);
     setFrozen(image);
     if (source instanceof HTMLVideoElement) void turnTorchOffAfterCapture();
     inFlight.current = true;
@@ -580,13 +585,18 @@ export default function HomePage() {
   const failed = state === "no_scene" || state === "error";
   const showAnalysisSpinner = state === "captured_analyzing" || (uploadUrl !== null && uploadBusy && state === "live_searching");
   const recoveryActive = recoveryCamera !== null;
+  const cameraStageActive = !uploadUrl && !recoveryActive && (state === "live_searching" || Boolean(frozen));
 
   return <main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""} ${recoveryActive ? "recovery-active" : ""}`} aria-label={recoveryActive ? "Recovery camera" : "Sugar product scanner"}>
     {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video key={cameraKey} ref={videoRef} className={`camera-preview ${!recoveryActive && canvasPreviewActive ? "technical-camera-source" : ""}`} muted playsInline />}
-    {state === "live_searching" && !uploadUrl && !recoveryActive && <><canvas ref={liveBackdropCanvasRef} className="camera-canvas-backdrop" aria-hidden="true" /><div ref={livePreviewRef} className={`camera-live-preview ${canvasPreviewActive ? "active" : ""}`}><canvas ref={liveCanvasRef} className="camera-canvas-foreground" aria-hidden="true" /><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p></div></>}
-    {frozen && !recoveryActive && <img className={`camera-preview frozen-preview ${!uploadUrl ? "camera-result-preview" : ""}`} src={frozen} alt="Captured products" />}{state !== "camera_off" && <div className="camera-vignette" />}
+    {state === "live_searching" && !uploadUrl && !recoveryActive && <canvas ref={liveBackdropCanvasRef} className="camera-canvas-backdrop" aria-hidden="true" />}
+    {frozen && !uploadUrl && !recoveryActive && <img className="camera-canvas-backdrop frozen-backdrop" src={frozenBackdrop ?? frozen} alt="" aria-hidden="true" />}
+    {cameraStageActive && <div ref={livePreviewRef} className={`camera-crop-stage ${canvasPreviewActive ? "active" : ""}`}>
+      {state === "live_searching" ? <><canvas ref={liveCanvasRef} className="camera-crop-stage-media" aria-hidden="true" /><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p></> : frozen ? <><img className="camera-crop-stage-media frozen-preview" src={frozen} alt="Captured products" /><div className="camera-stage-overlay">{groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}</div></> : null}
+    </div>}
+    {state !== "camera_off" && <div className={`camera-vignette ${cameraStageActive ? "camera-stage-vignette" : ""}`} />}
     {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && torchAvailable ? "" : "end"}`}><div>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
-    <div className={frozen && !uploadUrl && !recoveryActive ? "camera-result-overlay-stage" : "camera-overlay-stage"}>{groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}</div>
+    {!cameraStageActive && <div className="camera-overlay-stage">{groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}</div>}
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}
     {state === "camera_off" && <ScannerHome onStart={() => void start()} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action="Try again" onAction={retry} failure />}
     {state === "captured_analyzing" && <CameraCopy>{analysisPhase === "identifying" ? "Calculating Your Fit" : analysisPhase === "catalog" ? "Personalizing your result" : "Still working on your result"}</CameraCopy>}

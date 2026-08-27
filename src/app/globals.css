@@ -67,11 +67,7 @@
    pixels in a deterministic 3:4 foreground plus a clearly non-actionable
    blurred backdrop. Existing controls intentionally remain scene-relative. */
 .technical-camera-source{position:absolute!important;width:1px!important;height:1px!important;inset:auto!important;right:0!important;bottom:0!important;opacity:0!important;pointer-events:none!important}
-.camera-canvas-backdrop{position:absolute;z-index:0;inset:-24px;width:calc(100% + 48px);height:calc(100% + 48px);opacity:.72;filter:blur(22px) saturate(.88) brightness(.54);transform:scale(1.03);pointer-events:none}
-.camera-live-preview{position:absolute;z-index:2;left:0;right:0;top:50%;width:100%;aspect-ratio:3 / 4;max-height:100%;margin:auto;transform:translateY(-50%);overflow:hidden;background:transparent}.camera-live-preview.active{background:#08080a}
-.camera-canvas-foreground{position:absolute;inset:0;width:100%;height:100%;display:block}
-.camera-live-preview .viewfinder-guide{z-index:2;inset:18px;border:1.5px solid rgba(255,255,255,.7);border-radius:22px}
-.camera-live-preview .live-hint{z-index:3;inset:18px;margin:0;padding:0 24px;font-size:15px}
-.camera-result-preview{z-index:2;left:0;right:0;top:50%;width:100%;height:auto;aspect-ratio:3 / 4;max-height:100%;margin:auto;transform:translateY(-50%);object-fit:cover;opacity:1}
-.camera-result-overlay-stage{position:absolute;z-index:3;left:0;right:0;top:50%;width:100%;aspect-ratio:3 / 4;max-height:100%;margin:auto;transform:translateY(-50%);pointer-events:none}
-.camera-result-overlay-stage .product-overlay{pointer-events:auto}
+.camera-canvas-backdrop{position:absolute;z-index:0;inset:-42px;width:calc(100% + 84px);height:calc(100% + 84px);object-fit:cover;opacity:.9;filter:blur(26px) saturate(.96) brightness(.9);transform:scale(1.1);pointer-events:none}.frozen-backdrop{display:block}
+.camera-crop-stage{--camera-stage-offset-y:0px;position:absolute;z-index:2;left:50%;top:50%;width:min(100%,75svh);aspect-ratio:3 / 4;max-height:100%;transform:translate(-50%,calc(-50% + var(--camera-stage-offset-y)));overflow:hidden;background:transparent}.camera-crop-stage-media{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}.camera-crop-stage.active{background:#08080a}
+.camera-crop-stage .viewfinder-guide{z-index:2;inset:18px;border:1.5px solid rgba(255,255,255,.7);border-radius:22px}.camera-crop-stage .live-hint{z-index:3;inset:18px;margin:0;padding:0 24px;font-size:15px}.camera-stage-overlay{position:absolute;z-index:3;inset:0;pointer-events:none}.camera-stage-overlay .product-overlay{pointer-events:auto}
+.camera-stage-vignette{z-index:1;background:linear-gradient(180deg,rgba(8,8,10,.1),transparent 28%,transparent 72%,rgba(8,8,10,.14))}
