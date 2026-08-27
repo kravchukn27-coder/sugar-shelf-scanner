@@ -58,9 +58,9 @@ export default function CameraCropTestPage() {
         </span>
       </div>
 
+      <video ref={videoRef} muted playsInline style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", background: "#0a0a0c", visibility: running ? "visible" : "hidden" }} />
       {running && (
         <>
-          <video ref={videoRef} muted playsInline style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", background: "#0a0a0c" }} />
           <span className="viewfinder-guide" aria-hidden="true" />
           <p className="live-hint">Scan a product to see how it fits your day</p>
         </>
