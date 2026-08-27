@@ -21,7 +21,7 @@ export async function POST(request: Request) {
   });
   const rateLimit = checkScanRateLimit(request, {
     scope: "analyze",
-    limit: 12,
+    limit: 25,
     windowMs: 60_000,
     secret: process.env.RATE_LIMIT_SECRET,
   });

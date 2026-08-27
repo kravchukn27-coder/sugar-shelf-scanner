@@ -72,12 +72,29 @@ function TorchIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path 
 function BarcodeIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5v14M7 5v14M10 5v14M14 5v14M17 5v14M20 5v14M12 5v14" /></svg>; }
 type RecoveryInfo = { id: string; state: RecoveryState; labelSeen: boolean; barcode: string | null };
 
+function retryAfterSecondsFrom(response: Response): number | null {
+  const header = response.headers.get("Retry-After");
+  return header && /^\d+$/.test(header) ? Number(header) : null;
+}
+
+/** Shared between preflight and analyze failure handling so both routes'
+ *  rate_limited responses tell the user an actual wait time instead of a
+ *  generic "try again". `code` may be null for a thrown network error. */
+function failureMessageFor(code: string | null, retryAfterSeconds: number | null, fallback: string) {
+  if (code === "rate_limited") {
+    return retryAfterSeconds && retryAfterSeconds > 0
+      ? `Too many scans — wait ${retryAfterSeconds}s and try again`
+      : "Too many scans — wait a moment and try again";
+  }
+  if (code === "provider_timeout") return "This scan took too long — try a closer photo";
+  if (code === "bad_image") return "This photo couldn’t be processed — choose another one";
+  return fallback;
+}
+
 async function scanFailureMessage(response: Response) {
   const payload = await response.json().catch(() => null) as { code?: unknown } | null;
-  if (payload?.code === "rate_limited") return "Too many scans — wait a moment and try again";
-  if (payload?.code === "provider_timeout") return "This scan took too long — try a closer photo";
-  if (payload?.code === "bad_image") return "This photo couldn’t be processed — choose another one";
-  return "Couldn’t analyze this capture";
+  const code = typeof payload?.code === "string" ? payload.code : null;
+  return failureMessageFor(code, retryAfterSecondsFrom(response), "Couldn’t analyze this capture");
 }
 
 export default function HomePage() {
@@ -237,10 +254,16 @@ export default function HomePage() {
       finishRequestTiming(); noteMetricsCapability(response);
       if (id !== session.current) return;
       if (!response.ok) {
-        const isUpload = source instanceof HTMLImageElement;
-        if (isUpload) { setUploadBusy(false); setFailure("Couldn’t check this scene"); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); return; }
         const payload = await response.json().catch(() => null) as { code?: unknown } | null;
         const code = typeof payload?.code === "string" ? payload.code : null;
+        const isUpload = source instanceof HTMLImageElement;
+        if (isUpload) {
+          setUploadBusy(false);
+          setFailure(failureMessageFor(code, retryAfterSecondsFrom(response), "Couldn’t check this scene"));
+          dispatch("ANALYZE_FAILURE");
+          completeScanMetrics(id, "request_failure");
+          return;
+        }
         if (code && PREFLIGHT_TRANSIENT_CODES.has(code) && preflightRetryStreak.current < PREFLIGHT_TRANSIENT_RETRY_LIMIT) {
           // Not terminal: the session keeps running and the next scheduled
           // tick retries on its own, so completeScanMetrics must not fire
@@ -251,7 +274,7 @@ export default function HomePage() {
           return;
         }
         preflightRetryStreak.current = 0;
-        setFailure("Couldn’t check this scene");
+        setFailure(failureMessageFor(code, retryAfterSecondsFrom(response), "Couldn’t check this scene"));
         dispatch("ANALYZE_FAILURE");
         completeScanMetrics(id, "request_failure");
         return;

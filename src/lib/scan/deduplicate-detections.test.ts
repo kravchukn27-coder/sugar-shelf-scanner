@@ -55,7 +55,7 @@ test("does not group distinct confirmed products even when their visible names m
   assert.equal(groups.length, 2);
 });
 
-test("groups estimates only with equal normalized brand, name, and sugar score", () => {
+test("groups estimates with equal normalized brand/name and a close-enough sugar score", () => {
   const first = detection({
     id: "a", status: "estimate", visualCandidate: { brand: "  Corona ", name: "Extra", packSize: "330 ml", gtin: null },
     score: { band: "green", sugarPer100g: 1.2, source: "vision_estimate" },
@@ -76,6 +76,30 @@ test("groups estimates only with equal normalized brand, name, and sugar score",
   const groups = groupRepeatedDetections([first, same, variant, differentSugar]);
   assert.equal(groups.length, 3);
   assert.deepEqual(groups[0]?.memberIds, ["a", "b"]);
+});
+
+test("tolerates per-crop sugar-estimate noise within the same band (demo-priority tolerance)", () => {
+  const estimate = (id: string, sugarPer100g: number) => detection({
+    id, status: "estimate", visualCandidate: { brand: "Cal Vall", name: "Tomate Frito", packSize: "350 g", gtin: null },
+    score: { band: "yellow", sugarPer100g, source: "vision_estimate" },
+  });
+
+  // Same physical product, four independent per-crop AI reads landing within
+  // a few grams of each other (mirrors what a busy shelf actually returns).
+  const groups = groupRepeatedDetections([estimate("a", 82), estimate("b", 84), estimate("c", 85), estimate("d", 87)]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]?.count, 4);
+});
+
+test("still separates estimates whose sugar reads differ by more than the tolerance", () => {
+  const estimate = (id: string, sugarPer100g: number) => detection({
+    id, status: "estimate", visualCandidate: { brand: "Cal Vall", name: "Tomate Frito", packSize: "350 g", gtin: null },
+    score: { band: "yellow", sugarPer100g, source: "vision_estimate" },
+  });
+
+  // 7g apart, past the 5g tolerance — same band alone must not merge them.
+  const groups = groupRepeatedDetections([estimate("a", 80), estimate("b", 87)]);
+  assert.equal(groups.length, 2);
 });
 
 test("does not group otherwise-identical estimates with different pack sizes", () => {

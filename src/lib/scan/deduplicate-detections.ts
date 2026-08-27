@@ -49,21 +49,22 @@ function confirmedCatalogKey(detection: Detection): string | null {
   return productId ? `catalog:${productId}` : null;
 }
 
-function estimateKey(detection: Detection): string | null {
+// Per-crop vision estimates of the same physical product routinely wobble by
+// a few grams facing to facing (independent AI reads of the same package).
+// Tolerating that noise means matching against a range, not an exact value —
+// `band` still guards against merging two products with a materially
+// different score. Demo priority is a clean, grouped shelf view over precise
+// per-facing sugar figures.
+const ESTIMATE_SUGAR_TOLERANCE = 5;
+
+function estimatePrefixKey(detection: Detection): string | null {
   if (detection.status !== "estimate" || detection.score.source !== "vision_estimate") return null;
   const brand = normalizeText(detection.visualCandidate.brand);
   const name = normalizeText(detection.visualCandidate.name);
   const packSize = normalizeText(detection.visualCandidate.packSize);
   const sugar = detection.score.sugarPer100g;
   if (!brand || !name || !packSize || sugar === null || !Number.isFinite(sugar)) return null;
-
-  // Include both value and band: this intentionally avoids merging estimates
-  // that merely look alike but received a materially different score.
-  return `estimate:${brand}:${name}:${packSize}:${detection.score.band}:${sugar}`;
-}
-
-function groupKey(detection: Detection): string | null {
-  return confirmedCatalogKey(detection) ?? estimateKey(detection);
+  return `estimate:${brand}:${name}:${packSize}:${detection.score.band}`;
 }
 
 /**
@@ -72,27 +73,49 @@ function groupKey(detection: Detection): string | null {
  * The input detections and their nested values are never modified.
  */
 export function groupRepeatedDetections(detections: readonly Detection[]): DetectionGroup[] {
-  const groupsByKey = new Map<string, MutableDetectionGroup>();
+  const confirmedGroupsByKey = new Map<string, MutableDetectionGroup>();
+  // Several estimate groups can share one prefix (different sugar ranges), so
+  // this holds a small list per prefix rather than one group per key — the
+  // new detection joins whichever existing group's own sugar estimate is
+  // within tolerance, or starts a new one in that same list.
+  const estimateGroupsByPrefix = new Map<string, MutableDetectionGroup[]>();
   const orderedGroups: MutableDetectionGroup[] = [];
 
+  const addNewGroup = (detection: Detection): MutableDetectionGroup => {
+    const group: MutableDetectionGroup = { detection, count: 1, box: { ...detection.box }, memberIds: [detection.id] };
+    orderedGroups.push(group);
+    return group;
+  };
+  const mergeInto = (group: MutableDetectionGroup, detection: Detection) => {
+    group.count += 1;
+    group.box = unionNormalizedBoxes(group.box, detection.box);
+    group.memberIds.push(detection.id);
+  };
+
   for (const detection of detections) {
-    const key = groupKey(detection);
-    const existing = key ? groupsByKey.get(key) : undefined;
-    if (existing) {
-      existing.count += 1;
-      existing.box = unionNormalizedBoxes(existing.box, detection.box);
-      existing.memberIds.push(detection.id);
+    const confirmedKey = confirmedCatalogKey(detection);
+    if (confirmedKey) {
+      const existing = confirmedGroupsByKey.get(confirmedKey);
+      if (existing) mergeInto(existing, detection);
+      else confirmedGroupsByKey.set(confirmedKey, addNewGroup(detection));
       continue;
     }
 
-    const group: MutableDetectionGroup = {
-      detection,
-      count: 1,
-      box: { ...detection.box },
-      memberIds: [detection.id],
-    };
-    orderedGroups.push(group);
-    if (key) groupsByKey.set(key, group);
+    const prefixKey = estimatePrefixKey(detection);
+    if (prefixKey) {
+      const sugar = detection.score.sugarPer100g as number;
+      const candidates = estimateGroupsByPrefix.get(prefixKey) ?? [];
+      const match = candidates.find((group) => Math.abs((group.detection.score.sugarPer100g ?? Infinity) - sugar) <= ESTIMATE_SUGAR_TOLERANCE);
+      if (match) mergeInto(match, detection);
+      else {
+        const group = addNewGroup(detection);
+        candidates.push(group);
+        estimateGroupsByPrefix.set(prefixKey, candidates);
+      }
+      continue;
+    }
+
+    addNewGroup(detection);
   }
 
   return orderedGroups.map((group) => ({
