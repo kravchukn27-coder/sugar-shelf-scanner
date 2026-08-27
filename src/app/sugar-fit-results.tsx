@@ -146,7 +146,7 @@ function ProductDetail({ detection, count, frozenImage, recoveryBanner, onBack, 
     </> : <div className="sugar-fit-empty"><strong>No score yet</strong><span>We need more nutrition data to calculate Your Fit.</span></div>}
     {count > 1 && <p className="sugar-fit-repeat">{count} matching products in this scan</p>}
     <button className="sugar-fit-scan-again" onClick={onScanAgain}>Scan another product</button>
-    <a className="sugar-fit-amazon" href={amazonUrl(detection)} target="_blank" rel="noreferrer" onClick={onRecommendationOpen}>Find on Amazon ↗</a>
+    <a className="sugar-fit-amazon" href={amazonUrl(detection)} target="_blank" rel="noreferrer" onClick={onRecommendationOpen}>Buy for less on Amazon ↗</a>
   </>;
 }
 
