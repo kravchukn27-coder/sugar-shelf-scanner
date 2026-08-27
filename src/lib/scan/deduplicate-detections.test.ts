@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Detection } from "@/lib/contracts/scan";
-import { groupRepeatedDetections, unionNormalizedBoxes } from "./deduplicate-detections";
+import { groupRepeatedDetections, sortDetectionGroupsBySugarFit, unionNormalizedBoxes } from "./deduplicate-detections";
 
 function detection(overrides: Partial<Detection> = {}): Detection {
   return {
@@ -104,6 +104,20 @@ test("leaves unknown and incomplete estimates independent, preserves first appea
   const groups = groupRepeatedDetections([unknownA, incompleteA, unknownB]);
   assert.deepEqual(groups.map((group) => group.detection.id), ["unknown-a", "incomplete-a", "unknown-b"]);
   assert.deepEqual([unknownA, incompleteA, unknownB], snapshot);
+});
+
+test("ranks result groups from the highest Sugar Fit score to the lowest", () => {
+  const groups = groupRepeatedDetections([
+    detection({ id: "high-sugar", score: { band: "red", sugarPer100g: 62, source: "catalog" } }),
+    detection({ id: "unknown", score: { band: "unknown", sugarPer100g: null, source: "unavailable" } }),
+    detection({ id: "low-sugar", score: { band: "green", sugarPer100g: 3, source: "catalog" } }),
+    detection({ id: "same-sugar", score: { band: "green", sugarPer100g: 3, source: "catalog" } }),
+  ]);
+
+  const ranked = sortDetectionGroupsBySugarFit(groups);
+
+  assert.deepEqual(ranked.map((group) => group.detection.id), ["low-sugar", "same-sugar", "high-sugar", "unknown"]);
+  assert.deepEqual(groups.map((group) => group.detection.id), ["high-sugar", "unknown", "low-sugar", "same-sugar"]);
 });
 
 test("normalizes union boxes to the image bounds", () => {

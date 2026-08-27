@@ -102,3 +102,18 @@ export function groupRepeatedDetections(detections: readonly Detection[]): Detec
     memberIds: [...group.memberIds],
   }));
 }
+
+/**
+ * Ranks known products by their Sugar Fit score: 100 minus grams of sugar per
+ * 100g. Equal and unavailable scores retain their existing visual order.
+ */
+export function sortDetectionGroupsBySugarFit(groups: readonly DetectionGroup[]): DetectionGroup[] {
+  return groups
+    .map((group, index) => ({ group, index, sugar: group.detection.score.sugarPer100g }))
+    .sort((left, right) => {
+      const leftRank = left.sugar === null || !Number.isFinite(left.sugar) ? Number.NEGATIVE_INFINITY : Math.max(0, 100 - left.sugar);
+      const rightRank = right.sugar === null || !Number.isFinite(right.sugar) ? Number.NEGATIVE_INFINITY : Math.max(0, 100 - right.sugar);
+      return rightRank - leftRank || left.index - right.index;
+    })
+    .map(({ group }) => group);
+}
