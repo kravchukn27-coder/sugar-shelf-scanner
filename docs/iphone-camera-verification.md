@@ -19,6 +19,13 @@ Use this as a regression checklist after a camera-related deploy.
 
 The web API can request an `environment`-facing source and can reuse the `deviceId` reported by an existing track. It cannot request Apple’s physical “1× lens”: `facingMode` is a direction and `zoom` is a field-of-view capability, not a lens selector. The scanner therefore keeps the first request lens-neutral, applies a best-effort higher portrait quality preference to the selected track, applies `1×` only when the track advertises it, and reuses an exposed source ID on retries. It does not expose zoom as a user-facing control. This follows the [Media Capture and Streams specification](https://www.w3.org/TR/mediacapture-streams/) and its documented `deviceId` source-selection behavior.
 
+On the tested iPhone Safari session, a `1920×1440` landscape camera track is
+expected even when the app requests portrait constraints. A tall full-screen
+`object-fit: cover` preview will therefore look closer than the native Camera
+app. Treat that as the documented platform limitation, not a regression,
+unless the effective stream settings or visible FOV change from the recorded
+baseline in [camera.md](camera.md#closed-investigation-iphone-safari-portrait-viewfinder-2026-08-27).
+
 # Local camera diagnostics
 
 For the camera-selection investigation, the client can display the current

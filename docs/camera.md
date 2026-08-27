@@ -24,6 +24,70 @@ ID when possible; it falls back safely otherwise.
 - Do not resume `ImageCapture.takePhoto()` or physical-lens experiments unless
   the regression protocol proves a need.
 
+## Closed investigation: iPhone Safari portrait viewfinder (2026-08-27)
+
+### Decision
+
+Keep the production scanner unchanged. The isolated `/camera-crop-test` route
+remains available as a local, on-device diagnostic; it is not linked from the
+product and does not change `src/app/page.tsx`.
+
+On the tested iPhone Safari session, web constraints cannot produce a
+native-Camera-style portrait stream or wider live field of view. Do not repeat
+the CSS rotation, `exact` portrait, or `resizeMode` experiments unless a new
+iOS/WebKit version changes the observed capabilities.
+
+### Recorded evidence
+
+The diagnostics used a `402×714` viewport and reported an `environment`
+`1920×1440` (4:3 landscape) stream at zoom `1` with a `0.5–10` advertised
+zoom range. The perceived closeness is therefore not a default 2× zoom or a
+physical-lens selection bug.
+
+| Presentation | Visible source-frame width | Result |
+| --- | ---: | --- |
+| Production full-screen portrait box + `object-fit: cover` | ~42% | No empty space, but substantial horizontal crop. |
+| Test `402×536` (3:4) box + `cover` | ~56% | About one-third more horizontal FOV than production, with unavoidable top/bottom idle space. |
+| Test 4:3 frame + `contain` | 100% | Unacceptably large black bars. |
+
+For this browser stream, this is a trade-off rather than an unimplemented CSS
+setting: making the box taller reduces black space but crops more horizontal
+FOV; making it shorter shows more FOV but increases black space. Filling the
+current 3:4 box already uses all pixels available to that presentation.
+
+### Constraint results
+
+The isolated route records support, the requested constraints, and effective
+track settings locally. On the tested device:
+
+- `width`, `height`, `aspectRatio`, and `facingMode` reported as supported;
+  `resizeMode` reported unsupported.
+- A request with `aspectRatio: { exact: 3 / 4 }`, `width: { exact: 1440 }`,
+  and `height: { exact: 1920 }` resolved but the resulting stream remained
+  `1920×1440`. Safari did not reject it with `OverconstrainedError`.
+- The equivalent `crop-and-scale` request is not a valid test on this device:
+  `resizeMode` is unsupported and may be ignored by the browser.
+- Rotating the `<video>` element by either 90° direction rotated only the
+  already-delivered pixels. It changed neither the field of view nor the
+  stream format, so it is not a solution.
+
+The Media Capture and Streams model says supported required (`exact`)
+constraints should be satisfied or reject. The observed Safari behavior is a
+browser limitation/implementation issue, not a scanner request that can be
+made more forceful. See the [Media Capture and Streams
+specification](https://www.w3.org/TR/mediacapture-streams/).
+
+### What would change this decision
+
+Reopen the investigation only if one of these inputs changes:
+
+1. A target iOS/Safari release reports and honors `resizeMode`, or honors an
+   exact portrait track request.
+2. The product scope permits native iOS capture (AVFoundation), which has
+   direct control over output orientation and camera format.
+3. Product design explicitly accepts the 3:4 box's idle space in exchange for
+   its ~33% wider live field of view.
+
 ## Privacy-safe local diagnostics
 
 Open the scanner with `?cameraDebug=1`. The overlay shows only opaque
