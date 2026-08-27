@@ -26,6 +26,7 @@ export default function CameraCropTestPage() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<CameraDiagnosticSnapshot | null>(null);
+  const [exactResult, setExactResult] = useState<string | null>(null);
   // Computed in JS (not via CSS aspect-ratio) so the exact box size in
   // device pixels is verifiable on-screen, not eyeballed from a screenshot.
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
@@ -71,6 +72,38 @@ export default function CameraCropTestPage() {
     }
   }, []);
 
+  // Decisive test: `ideal` is a preference the browser may silently ignore
+  // (which is what preferCameraCaptureQuality's portrait request gets). An
+  // `exact` constraint must either be honored or the call rejects with a
+  // named OverconstrainedError — there is no third, silent outcome. That
+  // rejection (or the lack of one) is the actual answer to "is a portrait
+  // capture possible at all here", not something to assume from memory.
+  const startExactPortrait = useCallback(async () => {
+    setError(null);
+    setExactResult(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" }, aspectRatio: { exact: 3 / 4 }, width: { exact: 1440 }, height: { exact: 1920 } },
+        audio: false,
+      });
+      streamRef.current = stream;
+      const track = stream.getVideoTracks()[0];
+      if (!videoRef.current) { stream.getTracks().forEach((t) => t.stop()); return; }
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
+      const snapshot = getCameraDiagnosticSnapshot(track);
+      setDiagnostics(snapshot);
+      setExactResult(`SUCCEEDED — Safari honored exact portrait: ${snapshot.settings.width}×${snapshot.settings.height}`);
+      setRunning(true);
+    } catch (err) {
+      const name = err instanceof Error ? err.name : "UnknownError";
+      const message = err instanceof Error ? err.message : String(err);
+      const constraint = (err as { constraint?: string })?.constraint;
+      setExactResult(`REJECTED — ${name}${constraint ? ` on "${constraint}"` : ""}: ${message || "(no message)"}`);
+      setError(null);
+    }
+  }, []);
+
   useEffect(() => () => stop(), [stop]);
 
   return (
@@ -102,8 +135,16 @@ export default function CameraCropTestPage() {
               Same camera start code as the real scanner (rear camera, zoom forced to 1×). The video box is capped at a <code>3:4</code> aspect and uses <code>object-fit: cover</code> only within it, instead of full-bleed on the whole screen — nothing here touches the real scanner.
             </p>
             {error && <p style={{ margin: 0, color: "#ff8171", fontSize: 13 }}>{error}</p>}
+            {exactResult && (
+              <p style={{ margin: 0, fontFamily: "ui-monospace, monospace", fontSize: 11.5, lineHeight: 1.5, color: exactResult.startsWith("SUCCEEDED") ? "#52d18d" : "#ff8171", wordBreak: "break-word" }}>
+                {exactResult}
+              </p>
+            )}
             <button onClick={() => void start()} style={{ minHeight: 52, borderRadius: 26, border: 0, background: "linear-gradient(180deg,#5b9dff,#1f66e8)", color: "#fff", fontSize: 15, fontWeight: 850 }}>
-              Start test camera
+              Start test camera (Option 2)
+            </button>
+            <button onClick={() => void startExactPortrait()} style={{ minHeight: 52, borderRadius: 26, border: "1px solid rgba(255,255,255,.25)", background: "transparent", color: "#fff", fontSize: 14, fontWeight: 700 }}>
+              Force exact portrait (decisive test)
             </button>
           </div>
         </div>
