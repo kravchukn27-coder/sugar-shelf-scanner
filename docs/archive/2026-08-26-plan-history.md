@@ -1,8 +1,8 @@
 # Plan-history index — 26 August 2026
 
 This archive replaces a 400+ line mixed working plan. It is deliberately a
-summary rather than a second source of requirements; current decisions belong
-in the focused documents under `docs/` and active work in external `PLAN.md`.
+historical summary rather than a source of requirements; current decisions
+belong in the focused documents under `docs/` and the repository README.
 
 ## Completed foundations
 

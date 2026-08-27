@@ -18,24 +18,25 @@ single server intake endpoint.
 | Transport preference | `navigator.sendBeacon` accepts the payload. | One request to the telemetry endpoint; JSON body contains only the allowlist. No fetch fallback. |
 | Transport fallback | `sendBeacon` is unavailable or returns `false`. | A `POST` `fetch` with JSON content type and `keepalive: true` is issued. |
 | Transport isolation | `sendBeacon` throws, JSON/blob construction throws, or fallback fetch rejects. | The reporting function does not throw and scan/result UI state is unchanged. |
-| Client idempotence | The same result presentation is rendered repeatedly, React effects replay, or a selected product is opened/closed repeatedly. | At most one event for each explicitly designed once-per-presentation action. Repeat user actions that are intentionally counted must remain explicitly documented and tested. |
+| Client idempotence | The same active scan is started repeatedly, the same result presentation is rendered repeatedly, React effects replay, or a product/recommendation is opened repeatedly. | At most one event for each currently emitted action per active scan: `scan_started`, `result_shown`, `product_opened`, and `recommendation_opened`. |
 | Stale work isolation | A result callback fires after retry, close, recovery, unmount, or scan session replacement. | No event is emitted for the stale result. |
 | Quality classification | Empty detections, all unknown, mixed/only estimate, and at least one confirmed result are classified. | Exactly one mutually exclusive outcome bucket is recorded for the displayed result. |
 | Quality count bucket | Eligible unique product groups total `0`, `1`, `2–5`, and `6+`. | The corresponding bounded bucket is sent; no exact unbounded count or detection identifiers are sent. |
 | Funnel ordering | A scan reaches a displayed result and the user opens a product or recommendation. | `result_shown` precedes the interaction event; interaction must not be emitted when no result was shown. |
-| Abort/no-result | Request failure, preflight terminal, explicit close, and an abandoned live view. | No `result_shown`, `product_opened`, or `recommendation_opened` event. `scan_started`/`scan_retried` are emitted only if the contract intentionally counts them. |
+| Reserved-action schema | `scan_retried` and `scan_abandoned` payloads are posted directly to the endpoint. | The endpoint accepts only the documented strict shape; `scan_abandoned` permits only `camera`, `preflight`, `analysis`, or `result`. The current browser does not emit either action. |
+| Abort/no-result | Request failure, preflight terminal, explicit close, and an abandoned live view. | No `result_shown`, `product_opened`, or `recommendation_opened` event unless a result was actually shown. |
 
 ## Suggested test placement
 
 Keep the unit tests close to the existing privacy telemetry tests:
 
-- `src/lib/observability/<new-module>.test.ts`: strict schema, enum/bucket
+- `src/lib/observability/result-metrics.test.ts`: strict schema, enum/bucket
   bounds, logger allowlist, and forbidden-field regression table.
-- `src/app/api/scan/<new-route>/route.test.ts`: disabled silent no-op,
+- `src/app/api/scan/result-metrics/route.test.ts`: disabled silent no-op,
   malformed/oversized/unknown request rejection, and enabled logging.
-- `src/lib/scan/<new-client-reporter>.test.ts`: public/capability gating,
+- `src/lib/scan/result-metrics.test.ts`: public/capability gating,
   beacon preference, fetch fallback, and failure isolation.
-- `src/lib/scan/<new-result-classifier>.test.ts`: classification and count
+- `src/lib/scan/result-analytics.test.ts`: classification and count
   buckets independently of React UI code.
 
 The existing `node:test` tests demonstrate the intended style. Stub

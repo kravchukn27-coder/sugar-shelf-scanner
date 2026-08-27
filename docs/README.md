@@ -1,20 +1,24 @@
 # Documentation map
 
-Read only the document relevant to the task. This keeps implementation context
-small and prevents historical notes from being treated as requirements.
+Read the document relevant to the task. This keeps implementation context small
+and prevents historical notes from being treated as current requirements.
+For a local demo quickstart, current scope, and privacy caveats, start at the
+[repository README](../README.md).
 
 | Need | Document |
 | --- | --- |
-| Current priorities and release gates | [Active plan](/Users/nikitakravchuk/.codex/plans/01a03826-b566-7ed3-82e8-fc4a03168af9/01a0383b-9131-7492-9688-9c6c42542a7b/PLAN.md) |
 | Scanner states, UI rules and recovery | [product-ux.md](product-ux.md) |
 | iPhone/Safari camera decisions and regression checks | [camera.md](camera.md) |
 | Reviewed SKU data, matching, PostgreSQL and contribution policy | [catalog-data.md](catalog-data.md) |
+| Review-pending catalog proposal handling | [catalog-proposals.md](catalog-proposals.md) |
 | Railway activation, deploy and observability operations | [operations.md](operations.md) |
-| Temporary Gemini token measurement | [gemini-usage-observability.md](gemini-usage-observability.md) |
+| Scanner timings, Gemini request logs, token measurement, and telemetry privacy boundary | [gemini-usage-observability.md](gemini-usage-observability.md) |
+| P0 result-funnel and result-quality telemetry verification | [p0-funnel-quality-telemetry-verification.md](p0-funnel-quality-telemetry-verification.md) |
 | Gemini speed/quality/token-efficiency research (closed) | [appendix/gemini-speed-token-efficiency-research.md](appendix/gemini-speed-token-efficiency-research.md) |
-| Gemini speed/token research — visual HTML copy | [../.lavish/gemini-speed-token-efficiency.html](../.lavish/gemini-speed-token-efficiency.html) |
 | Superseded working-plan context | [archive/2026-08-26-plan-history.md](archive/2026-08-26-plan-history.md) |
 
 `CATALOG_REVIEW_SPAIN.md` is the human review table. The executable reviewed
 seed is `src/lib/catalog/approved-spain.ts`; do not derive runtime nutrition
-from prose or from Gemini.
+from prose or from Gemini. The repository also includes deterministic mock scan
+fixtures for local development and demo presentation; they are not catalog
+evidence.

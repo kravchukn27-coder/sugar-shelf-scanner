@@ -11,13 +11,13 @@ Use this as a regression checklist after a camera-related deploy.
 1. Open the scanner, grant camera permission, and tap **Start scanning**.
 2. Confirm the preview starts live and stays in the guide state until a product is captured. Record whether the initial field of view feels like the normal 1× view.
 3. If the device exposes a torch capability, verify the flashlight control toggles on and off. If not, confirm it is absent.
-4. If the browser exposes a zoom range reaching 2×, verify the magnifier control switches from `1×` to `2×` and back. It is digital track zoom, not a physical-camera guarantee.
+4. Confirm that the scanner does not show a zoom or magnifier control. Browser-reported zoom capability may appear in local diagnostics, but it is not a physical-camera guarantee and is not a user control.
 5. Capture a product and confirm the preview freezes; only full analysis shows a spinner; Details, retry, close, and torch retain their expected behavior.
 6. From a successful result and from a no-scene/error state, tap **Try again** at least three times. The restarted preview should retain the same field of view as the immediately preceding stream. If it does not, record iPhone model, iOS/Safari version, and whether the source exposed a `deviceId` in the remote inspector.
 
 ## Implementation boundary
 
-The web API can request an `environment`-facing source and can reuse the `deviceId` reported by an existing track. It cannot request Apple’s physical “1× lens”: `facingMode` is a direction and `zoom` is a field-of-view capability, not a lens selector. The scanner therefore keeps the first request lens-neutral, applies a best-effort higher portrait quality preference to the selected track, applies `1×` only when the track advertises it, and reuses an exposed source ID on retries. This follows the [Media Capture and Streams specification](https://www.w3.org/TR/mediacapture-streams/) and its documented `deviceId` source-selection behavior.
+The web API can request an `environment`-facing source and can reuse the `deviceId` reported by an existing track. It cannot request Apple’s physical “1× lens”: `facingMode` is a direction and `zoom` is a field-of-view capability, not a lens selector. The scanner therefore keeps the first request lens-neutral, applies a best-effort higher portrait quality preference to the selected track, applies `1×` only when the track advertises it, and reuses an exposed source ID on retries. It does not expose zoom as a user-facing control. This follows the [Media Capture and Streams specification](https://www.w3.org/TR/mediacapture-streams/) and its documented `deviceId` source-selection behavior.
 
 # Local camera diagnostics
 

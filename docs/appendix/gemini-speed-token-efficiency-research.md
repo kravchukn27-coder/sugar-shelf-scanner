@@ -1,5 +1,9 @@
 # Gemini speed, recognition quality and token-efficiency research
 
+> Historical, closed research. It records decisions and evidence from August
+> 2026; it is not an operational runbook. Use `docs/operations.md` and
+> `docs/gemini-usage-observability.md` for current guidance.
+
 **Status: closed.** Research phase for the corresponding `PLAN.md` item is done;
 implementation of individual hypotheses (H-A1 … H-D4) is tracked separately,
 outside this document.

@@ -62,8 +62,10 @@ for a new environment or a restored database.
 Recovery is contextual, not a default scanner mode. The browser decodes an
 EAN/UPC locally where supported and sends only a validated 8/12–14 digit GTIN
 to the recovery endpoint. That endpoint resolves it through the same catalog
-chain and does not call Gemini. Nutrition-label text is a local best-effort
-signal; it is neither saved nor sent today.
+chain and does not call Gemini. When local barcode recovery is insufficient,
+the user may explicitly consent to one nutrition-label image request to Gemini
+to create a provisional, editable draft. The application does not retain the
+image or raw extracted text.
 
 ## User-assisted additions: implemented review-pending intake
 
@@ -104,12 +106,11 @@ It is a companion runbook, not a new runtime source of truth.
 
 ### Demo presentation versus verified catalog data
 
-For the planned recovery demo, a user who presses **OK** after barcode or
-nutrition-label capture may see the submitted draft accepted in their current
-demo result. That temporary experience is not the production confirmation
-rule. A real `confirmed` catalog row requires manual curator review of the
-package/source and a provenance-backed import. The application must preserve
-that distinction in the data model and UI before public release.
+In the current demo, a user who presses **OK — submit for review** after a
+nutrition-label draft sees a provisional estimate in the current result. It is
+explicitly marked as pending curator review and does not alter the confirmed
+catalog or future scans. A real `confirmed` catalog row still requires manual
+curator review of the package/source and a provenance-backed import.
 
 ### Demo exception: durable exact Open Food Facts barcode records
 

@@ -48,21 +48,45 @@ safe fallback.
   redeployed after a future credential rotation; never paste a connection URL
   into the app's Variables.
 
-## Usage metadata measurement
+## Privacy-safe scanner telemetry
 
-Scanner-stage measurement is implemented but disabled. Enable it only for an
-approved 14-day window with both `SCANNER_METRICS_ENABLED=true` in Railway and
-`NEXT_PUBLIC_SCANNER_METRICS_ENABLED=true` in the deployed browser build. The
-browser still requires a server capability header, so either flag can stop
-intake. Before enabling, verify Railway log retention/access controls and run
-the iPhone disabled/enabled network checks in
-[gemini-usage-observability.md](gemini-usage-observability.md).
+Scanner telemetry is implemented but disabled by default. It includes
+scanner-stage summaries and P0 product-funnel/result-quality events. Enable it
+only when `SCANNER_METRICS_ENABLED=true` is set in Railway **and**
+`NEXT_PUBLIC_SCANNER_METRICS_ENABLED=true` is present in the deployed browser
+build. The latter is a build-time variable, so redeploy after changing it.
+The browser also requires the `X-Scanner-Metrics: enabled` capability header
+on an active scan response; either flag or the missing header prevents browser
+event intake.
 
-Gemini usage metadata remains separately controlled by the server-only
-`VISION_USAGE_METRICS_ENABLED=true`. It logs only operation, model, status,
-duration and provider token counters; `vision_request` timing/outcome events
-are separate. Aggregate both streams daily by UTC day, then turn all three
-measurement flags off and remove `vision_usage` logging unless it receives an
-owner and retention policy.
+Before enabling, confirm Railway log retention and access controls, designate
+an observation owner, and perform the disabled/enabled browser network checks
+in [gemini-usage-observability.md](gemini-usage-observability.md). The intake
+endpoints write no PostgreSQL rows. Validated events are emitted only as
+structured stdout logs: `scanner_completed` for stage summaries and
+`scan_result_metric` for funnel/quality events. The result intake endpoint is
+`POST /api/scan/result-metrics`; it accepts only a fixed allowlist and sends
+`Cache-Control: no-store` responses.
+
+The current browser emits `scan_started`, `result_shown`, `product_opened`,
+and `recommendation_opened`. The endpoint schema also reserves
+`scan_retried` and `scan_abandoned` for a future explicitly implemented
+workflow; their presence in the schema does not mean the browser currently
+reports them. Only `result_shown` carries coarse result quality (`no_detection`, `unknown_only`,
+`estimate_only`, `confirmed_only`, or `mixed`) and a bounded unique displayed
+group-count bucket (`0`, `1`, `2_5`, or `6_plus`). Do not add identifiers,
+product data, image data, timestamps, or free-form values to this contract.
+
+## Temporary Gemini token-usage diagnostic
+
+Gemini usage metadata is separate from scanner telemetry and is controlled
+only by the server-side `VISION_USAGE_METRICS_ENABLED=true` flag. It logs
+operation, model, status, duration, and provider token counters after a
+completed Gemini response. It does not enable any browser telemetry.
+`vision_request` timing/outcome events remain independent.
+
+Use this flag only for a defined diagnostic period. Aggregate the necessary
+logs by UTC day, then disable it. Keep `vision_usage` logging only when it has
+a documented operational owner and retention policy.
 
 Full implementation and privacy boundary: [gemini-usage-observability.md](gemini-usage-observability.md).

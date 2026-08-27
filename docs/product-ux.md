@@ -23,7 +23,7 @@ frames are not retained by the application.
 | State | Gallery | Barcode action | Notes |
 | --- | --- | --- | --- |
 | `camera_off` | hidden | hidden | Start is the entry point. |
-| `live_searching` | available | hidden | Torch/optional 2× only if feature-detected. |
+| `live_searching` | available | hidden | Torch is shown only when the selected track reports support. |
 | `captured_analyzing` | hidden | hidden | Spinner is visible only during full Gemini analysis. |
 | `results` | hidden | hidden | Details opens from the centred result handle. |
 | `no_scene` / error | as applicable | top-bar recovery only | Barcode is not a camera-switch control. |
@@ -54,10 +54,19 @@ preview.
 ## Contextual recovery
 
 For `estimate` or `unknown`, Details can ask the user to turn the pack around.
-The device looks locally for EAN/UPC and nutrition-label text. A valid GTIN may
-be sent to `/api/scan/recover`; recovery frames and OCR text are not sent.
-Barcode failure is an availability/readability failure, not evidence that a
-product does not exist.
+The browser reads EAN/UPC locally from a single recovery photo. A valid GTIN
+may be sent to `/api/scan/recover`; the recovery image itself is not sent for
+barcode lookup. If the barcode is not recognised or is absent from the
+confirmed catalog, the user can consent to send that captured image to Gemini
+or choose a dedicated nutrition-label capture.
+
+Nutrition-label extraction is a separate, one-shot Gemini request. Before that
+photo is sent, the app asks for explicit consent and sends it only when the
+user agrees. The application does not persist recovery photos, video frames,
+or extracted label text. A returned draft remains provisional until the user
+reviews it and submits it for curator review; it does not alter the confirmed
+catalog or the original confirmed result. Barcode failure is an
+availability/readability failure, not evidence that a product does not exist.
 
 User contribution is an explicit, review-pending action after an unresolved
 locally decoded barcode. It never changes the current scan or confirmed catalog.

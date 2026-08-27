@@ -51,13 +51,14 @@ GTINs, prompts, Gemini output, IP address, user ID, `deviceId`, camera label,
 or precise timestamps associated with a person. Existing operation/model/status
 telemetry may remain, but this event must not add a correlatable scan ID.
 
-## Scanner-stage measurement (A1/A2)
+## Scanner telemetry and P0 result funnel
 
 The implementation is present but disabled by default. It requires **both**
 `NEXT_PUBLIC_SCANNER_METRICS_ENABLED=true` in the browser build and
 `SCANNER_METRICS_ENABLED=true` on the server. The server only advertises the
 capability on normal preflight/analyze responses; without that header the
-browser sends no `/api/scan/metrics` request.
+browser sends neither scanner-stage nor result-funnel events. The public flag
+is build-time, so changing it requires a redeploy.
 
 At most one no-store, terminal summary is sent for a non-aborted run. Its
 strict allowlist is a completion class, capped preflight-attempt/motion/quality
@@ -70,13 +71,35 @@ send nothing. Server `Server-Timing` additionally exposes independent
 `db_probe` and `catalog_resolution` durations; both may overlap Gemini vision
 and must not be summed as total request time.
 
+The same two gates and capability header protect P0 result-funnel and
+result-quality telemetry. The browser sends best-effort `POST` requests to
+`/api/scan/result-metrics`, preferring `sendBeacon` and falling back to a
+`keepalive` fetch. The endpoint has a strict schema, returns `Cache-Control:
+no-store`, writes no database rows, and logs only a validated stdout record:
+
+```ts
+{ event: "scan_result_metric", action: "scan_started" }
+```
+
+The schema accepts `scan_started`, `result_shown`, `product_opened`,
+`recommendation_opened`, `scan_retried`, and `scan_abandoned`. The current
+browser emits the first four only; retry and abandonment reporting are not
+implemented browser behavior. A
+`result_shown` event additionally carries only one result-quality class
+(`no_detection`, `unknown_only`, `estimate_only`, `confirmed_only`, or
+`mixed`) and one bounded count of unique displayed groups (`0`, `1`, `2_5`,
+or `6_plus`). A `scan_abandoned` event carries only its coarse stage:
+`camera`, `preflight`, `analysis`, or `result`. No event includes scan,
+session, request, product, detection, user, device, image, barcode, OCR,
+timestamp, or error-text data.
+
 ## Operating procedure
 
-1. Confirm Railway log retention/access controls, name an observation owner,
-   fix a UTC start/end date and enable the relevant Railway flags for exactly
-   14 days. Deploy `NEXT_PUBLIC_SCANNER_METRICS_ENABLED=true` only for that
-   window; it is a build-time browser gate, while
-   `SCANNER_METRICS_ENABLED=true` remains the server capability/intake gate.
+1. Confirm Railway log retention/access controls and name an observation owner
+   before enabling scanner telemetry. Set both scanner flags; deploy after
+   changing `NEXT_PUBLIC_SCANNER_METRICS_ENABLED=true`, because it is a
+   build-time browser gate. `SCANNER_METRICS_ENABLED=true` remains the server
+   capability/intake gate.
 2. Review aggregate daily totals only: count of `preflight` and `analyze`,
    p50/p95 duration, average/p95 input tokens, output/thinking tokens, and
    full-analysis-to-preflight ratio.
@@ -89,9 +112,15 @@ and must not be summed as total request time.
    of each timing stage, p50/p95 preflight attempts, and daily motion/quality
    skip counts. Browser summaries are a lower bound because a backgrounded
    browser may drop a beacon.
-5. After 14 days, export only the aggregate table into a decision note, turn
-   all three measurement flags off, and remove the temporary per-request logging in a
-   follow-up change unless it has a clear operational owner and retention policy.
+5. Review `scan_result_metric` logs as aggregate counts by action, result
+   quality, and group-count bucket. An abandonment-stage dimension is relevant
+   only if the reserved abandonment event is implemented. Do not try to join
+   events into per-user or per-scan funnels: the contract deliberately has no
+   correlatable identifier, and dropped beacons mean counts are best-effort.
+6. For a temporary Gemini-token diagnostic, export only the needed aggregate
+   table into a decision note and disable `VISION_USAGE_METRICS_ENABLED` at
+   the end of the window. Scanner telemetry can remain independently enabled
+   only with an owner and approved retention approach.
 
 ## Decision thresholds
 
@@ -104,5 +133,5 @@ and must not be summed as total request time.
 
 ## Current status
 
-Code is ready but all measurement flags are off by default. No user image or
-scan content is retained by this proposal.
+Code is ready but all telemetry flags are off by default. No user image or
+scan content is retained by this telemetry.

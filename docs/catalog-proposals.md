@@ -71,13 +71,13 @@ Use `rejected` with a concise reason for wrong GTIN, duplicate, insufficient
 evidence, or impossible nutrition. Do not copy user-entered nutrition into the
 trusted catalog without the independent review step.
 
-## Demo-mode exception — planned, not the production policy
+## Demo-mode behaviour — implemented, not the production policy
 
-The planned recovery demonstration may show a user-confirmed barcode or
-nutrition-label draft as immediately accepted in that user's current demo
-session after they press **OK**. This is presentation behaviour for the demo;
-it is not evidence that the package data is verified and it must not redefine
-the permanent catalog governance rule.
+The current recovery demo shows a nutrition-label draft as a provisional
+estimate in the current result after the user presses **OK — submit for
+review**. This is presentation behaviour only: it is not evidence that the
+package data is verified and it does not redefine the permanent catalog
+governance rule.
 
 Before a production catalog row can be marked `confirmed`, a curator must
 manually verify the product identity, GTIN (when present), pack size and all
