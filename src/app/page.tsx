@@ -65,6 +65,13 @@ export default function HomePage() {
   const [uploadBusy, setUploadBusy] = useState(false);
   const [cameraDiagnostics, setCameraDiagnostics] = useState<CameraDiagnosticSnapshot | null>(null);
   const [showCameraDiagnostics, setShowCameraDiagnostics] = useState(false);
+  // Forces React to unmount and recreate the <video> DOM node on every new
+  // camera session. Confirmed on-device: reusing the same node across a
+  // getUserMedia retry left WebKit painting a stale decoder surface (visible
+  // as black bars) even though the stream's own settings were unchanged; a
+  // full page reload — which recreates the node — cleared it. Bumped instead
+  // of just swapping srcObject on the existing element.
+  const [cameraKey, setCameraKey] = useState(0);
   // Temporary: layout-only probe for the black-bars-after-retry investigation.
   // Confirms whether the <video> box itself has shrunk vs. its container,
   // rather than the camera stream's pixel content changing. Remove once the
@@ -214,7 +221,7 @@ export default function HomePage() {
   }, [analyze, capture, completeScanMetrics, dispatch, noteMetricsCapability, sheet, state]);
 
   const start = useCallback(async () => {
-    const id = ++session.current; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; stopStream(); clearResult(); resetScanMetrics(); setUploadUrl(null); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
+    const id = ++session.current; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; stopStream(); clearResult(); resetScanMetrics(); setUploadUrl(null); setCameraKey((key) => key + 1); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
     try {
       // A device ID is a best-effort way to keep the same browser-selected rear
       // source across retry. If iOS no longer exposes it, fall back to rear.
@@ -252,6 +259,7 @@ export default function HomePage() {
     const recoveryToken = ++recoveryAttempt.current;
     scannerMetricsEnabled.current = false; scannerMetrics.current.discard();
     stopStream();
+    setCameraKey((key) => key + 1);
     setSheet(false); setRecoverySubmissionBanner(null); setRecovery({ id, state: "searching", labelSeen: false, barcode: null });
     setRecoveryMessage(null); setLabelDraft(null); setRecoveryCameraReady(false); setRecoveryCamera({ id, mode });
     void (async () => {
@@ -400,7 +408,7 @@ export default function HomePage() {
   const recoveryActive = recoveryCamera !== null;
 
   return <main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""} ${recoveryActive ? "recovery-active" : ""}`} aria-label={recoveryActive ? "Recovery camera" : "Sugar product scanner"}>
-    {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video ref={videoRef} className="camera-preview" muted playsInline />}{frozen && !recoveryActive && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}{state !== "camera_off" && <div className="camera-vignette" />}
+    {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video key={cameraKey} ref={videoRef} className="camera-preview" muted playsInline />}{frozen && !recoveryActive && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}{state !== "camera_off" && <div className="camera-vignette" />}
     {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && torchAvailable ? "" : "end"}`}><div>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
     {groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { setSelected(group.detection.id); setSheet(true); }} />)}
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}
