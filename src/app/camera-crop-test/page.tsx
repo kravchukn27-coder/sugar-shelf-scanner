@@ -73,6 +73,7 @@ function rawEdgeLuma(video: HTMLVideoElement): string {
 
 export default function CameraCropTestPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [running, setRunning] = useState(false);
@@ -81,6 +82,7 @@ export default function CameraCropTestPage() {
   const [exactResult, setExactResult] = useState<string | null>(null);
   const [constraintProbe, setConstraintProbe] = useState<ConstraintProbe | null>(null);
   const [presentation, setPresentation] = useState<"native" | "cw" | "ccw">("native");
+  const [previewSurface, setPreviewSurface] = useState<"video" | "canvas">("video");
   const [layoutProbe, setLayoutProbe] = useState<LayoutProbe | null>(null);
   // Computed in JS (not via CSS aspect-ratio) so the exact box size in
   // device pixels is verifiable on-screen, not eyeballed from a screenshot.
@@ -109,6 +111,7 @@ export default function CameraCropTestPage() {
     setConstraintProbe(null);
     setLayoutProbe(null);
     setPresentation("native");
+    setPreviewSurface("video");
   }, []);
 
   const start = useCallback(async () => {
@@ -208,6 +211,34 @@ export default function CameraCropTestPage() {
     return () => window.clearInterval(timer);
   }, [running, presentation]);
 
+  // Safari's decoded frame is healthy when sampled through drawImage(), while
+  // its hardware <video> compositor can intermittently add visual bars. This
+  // A/B path keeps the very same stream alive but presents it through canvas.
+  useEffect(() => {
+    if (!running || previewSurface !== "canvas") return;
+    let frame: number | null = null;
+    const draw = () => {
+      const video = videoRef.current;
+      const canvas = previewCanvasRef.current;
+      const targetBox = boxRef.current;
+      if (video && canvas && targetBox && video.videoWidth && video.videoHeight) {
+        const rect = targetBox.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        const targetWidth = Math.max(1, Math.round(rect.width * dpr));
+        const targetHeight = Math.max(1, Math.round(rect.height * dpr));
+        if (canvas.width !== targetWidth || canvas.height !== targetHeight) { canvas.width = targetWidth; canvas.height = targetHeight; }
+        const targetAspect = targetWidth / targetHeight;
+        const sourceHeight = video.videoHeight;
+        const sourceWidth = Math.min(video.videoWidth, Math.round(sourceHeight * targetAspect));
+        const sourceX = Math.max(0, Math.round((video.videoWidth - sourceWidth) / 2));
+        canvas.getContext("2d")?.drawImage(video, sourceX, 0, sourceWidth, sourceHeight, 0, 0, targetWidth, targetHeight);
+      }
+      frame = window.requestAnimationFrame(draw);
+    };
+    draw();
+    return () => { if (frame !== null) window.cancelAnimationFrame(frame); };
+  }, [running, previewSurface]);
+
   useEffect(() => () => stop(), [stop]);
 
   return (
@@ -220,7 +251,8 @@ export default function CameraCropTestPage() {
 
       <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div ref={boxRef} style={{ position: "relative", width: box?.w ?? "100%", height: box?.h ?? "75%", background: "#0a0a0c", overflow: "hidden", visibility: running ? "visible" : "hidden" }}>
-          <video ref={videoRef} muted playsInline style={videoStyle} />
+          <video ref={videoRef} muted playsInline style={{ ...videoStyle, opacity: previewSurface === "video" ? 1 : 0 }} />
+          <canvas ref={previewCanvasRef} aria-hidden="true" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: previewSurface === "canvas" ? 1 : 0 }} />
           {running && (
             <>
               <span aria-hidden="true" style={{ position: "absolute", inset: "12% 5%", border: "1.5px solid rgba(255,255,255,.7)", borderRadius: 16, boxShadow: "0 0 0 1px rgba(0,0,0,.16) inset", pointerEvents: "none" }} />
@@ -276,6 +308,10 @@ export default function CameraCropTestPage() {
             ) : "reading diagnostics…"}
           </div>
           <div style={{ display: "grid", gap: 7, justifyItems: "end" }}>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => setPreviewSurface("video")} style={{ minHeight: 32, borderRadius: 16, border: 0, padding: "0 10px", background: previewSurface === "video" ? "#fff" : "rgba(20,18,24,.72)", color: previewSurface === "video" ? "#17141d" : "#fff", fontSize: 11, fontWeight: 750 }}>Video</button>
+              <button onClick={() => setPreviewSurface("canvas")} style={{ minHeight: 32, borderRadius: 16, border: 0, padding: "0 10px", background: previewSurface === "canvas" ? "#fff" : "rgba(20,18,24,.72)", color: previewSurface === "canvas" ? "#17141d" : "#fff", fontSize: 11, fontWeight: 750 }}>Canvas</button>
+            </div>
             <div style={{ display: "flex", gap: 6 }}>
               <button onClick={() => setPresentation("native")} style={{ minHeight: 32, borderRadius: 16, border: 0, padding: "0 10px", background: presentation === "native" ? "#fff" : "rgba(20,18,24,.72)", color: presentation === "native" ? "#17141d" : "#fff", fontSize: 11, fontWeight: 750 }}>Native</button>
               <button onClick={() => setPresentation("cw")} style={{ minHeight: 32, borderRadius: 16, border: 0, padding: "0 10px", background: presentation === "cw" ? "#fff" : "rgba(20,18,24,.72)", color: presentation === "cw" ? "#17141d" : "#fff", fontSize: 11, fontWeight: 750 }}>↻ 90°</button>
