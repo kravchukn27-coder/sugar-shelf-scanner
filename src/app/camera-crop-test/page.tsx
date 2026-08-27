@@ -19,6 +19,24 @@ import { getCameraDiagnosticSnapshot, type CameraDiagnosticSnapshot } from "@/li
  * Not linked from anywhere in the app; reach it directly at /camera-crop-test.
  */
 const BOX_ASPECT = 3 / 4; // width:height
+const PROBED_CONSTRAINTS = ["width", "height", "aspectRatio", "resizeMode", "facingMode"] as const;
+
+type ProbedConstraint = (typeof PROBED_CONSTRAINTS)[number];
+type ConstraintProbe = { supported: Record<ProbedConstraint, boolean>; requested: string | null };
+type ConstraintInspectableTrack = { getConstraints?: () => MediaTrackConstraints };
+
+function readConstraintProbe(track?: MediaStreamTrack): ConstraintProbe {
+  const supported = navigator.mediaDevices.getSupportedConstraints() as Record<string, boolean | undefined>;
+  const requested = (track as ConstraintInspectableTrack | undefined)?.getConstraints?.();
+  return {
+    supported: Object.fromEntries(PROBED_CONSTRAINTS.map((name) => [name, supported[name] === true])) as Record<ProbedConstraint, boolean>,
+    requested: requested ? JSON.stringify(requested) : null,
+  };
+}
+
+function supportsExactPortrait(probe: ConstraintProbe, includeResizeMode: boolean) {
+  return ["width", "height", "aspectRatio", ...(includeResizeMode ? ["resizeMode"] : [])].every((name) => probe.supported[name as ProbedConstraint]);
+}
 
 export default function CameraCropTestPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -27,6 +45,8 @@ export default function CameraCropTestPage() {
   const [error, setError] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<CameraDiagnosticSnapshot | null>(null);
   const [exactResult, setExactResult] = useState<string | null>(null);
+  const [constraintProbe, setConstraintProbe] = useState<ConstraintProbe | null>(null);
+  const [presentation, setPresentation] = useState<"native" | "cw" | "ccw">("native");
   // Computed in JS (not via CSS aspect-ratio) so the exact box size in
   // device pixels is verifiable on-screen, not eyeballed from a screenshot.
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
@@ -51,6 +71,8 @@ export default function CameraCropTestPage() {
     if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; }
     setRunning(false);
     setDiagnostics(null);
+    setConstraintProbe(null);
+    setPresentation("native");
   }, []);
 
   const start = useCallback(async () => {
@@ -66,24 +88,33 @@ export default function CameraCropTestPage() {
       videoRef.current.srcObject = stream;
       await videoRef.current.play();
       setDiagnostics(getCameraDiagnosticSnapshot(track));
+      setConstraintProbe(readConstraintProbe(track));
       setRunning(true);
     } catch {
       setError("Camera unavailable. Check permission and try again.");
     }
   }, []);
 
-  // Decisive test: `ideal` is a preference the browser may silently ignore
-  // (which is what preferCameraCaptureQuality's portrait request gets). An
-  // `exact` constraint must either be honored or the call rejects with a
-  // named OverconstrainedError — there is no third, silent outcome. That
-  // rejection (or the lack of one) is the actual answer to "is a portrait
-  // capture possible at all here", not something to assume from memory.
-  const startExactPortrait = useCallback(async () => {
+  const startExactPortrait = useCallback(async (withCropAndScale = false) => {
     setError(null);
     setExactResult(null);
+    const preflightProbe = readConstraintProbe();
+    setConstraintProbe(preflightProbe);
+    if (!supportsExactPortrait(preflightProbe, withCropAndScale)) {
+      const required = ["width", "height", "aspectRatio", ...(withCropAndScale ? ["resizeMode"] : [])] as ProbedConstraint[];
+      const missing = required.filter((name) => !preflightProbe.supported[name]).join(", ");
+      setExactResult(`NOT TESTABLE — Safari reports unsupported required constraints: ${missing}. Unsupported constraints may be ignored, so this exact request would not be conclusive.`);
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" }, aspectRatio: { exact: 3 / 4 }, width: { exact: 1440 }, height: { exact: 1920 } },
+        video: {
+          facingMode: { ideal: "environment" },
+          aspectRatio: { exact: 3 / 4 },
+          width: { exact: 1440 },
+          height: { exact: 1920 },
+          ...(withCropAndScale ? { resizeMode: { exact: "crop-and-scale" } } : {}),
+        },
         audio: false,
       });
       streamRef.current = stream;
@@ -93,7 +124,9 @@ export default function CameraCropTestPage() {
       await videoRef.current.play();
       const snapshot = getCameraDiagnosticSnapshot(track);
       setDiagnostics(snapshot);
-      setExactResult(`SUCCEEDED — Safari honored exact portrait: ${snapshot.settings.width}×${snapshot.settings.height}`);
+      setConstraintProbe(readConstraintProbe(track));
+      const honored = snapshot.settings.width === 1440 && snapshot.settings.height === 1920 && snapshot.settings.aspectRatio !== null && Math.abs(snapshot.settings.aspectRatio - 3 / 4) < 0.002;
+      setExactResult(`${honored ? "HONORED" : "NOT HONORED"} — exact ${withCropAndScale ? "portrait + crop-and-scale" : "portrait"} resolved with ${snapshot.settings.width ?? "?"}×${snapshot.settings.height ?? "?"} (ratio ${snapshot.settings.aspectRatio?.toFixed(3) ?? "?"}).`);
       setRunning(true);
     } catch (err) {
       const name = err instanceof Error ? err.name : "UnknownError";
@@ -103,6 +136,20 @@ export default function CameraCropTestPage() {
       setError(null);
     }
   }, []);
+
+  const videoStyle = presentation === "native"
+    ? { position: "absolute" as const, inset: 0, width: "100%", height: "100%", objectFit: "cover" as const }
+    : {
+        position: "absolute" as const,
+        left: "50%",
+        top: "50%",
+        // A 4:3 landscape track should exactly fill this 3:4 box after a
+        // 90° rotation. `contain` makes any mismatch visible as bars.
+        width: box ? `${box.h}px` : "100svh",
+        height: box ? `${box.w}px` : "100vw",
+        objectFit: "contain" as const,
+        transform: `translate(-50%, -50%) rotate(${presentation === "cw" ? "90deg" : "-90deg"})`,
+      };
 
   useEffect(() => () => stop(), [stop]);
 
@@ -116,7 +163,7 @@ export default function CameraCropTestPage() {
 
       <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div style={{ position: "relative", width: box?.w ?? "100%", height: box?.h ?? "75%", background: "#0a0a0c", overflow: "hidden", visibility: running ? "visible" : "hidden" }}>
-          <video ref={videoRef} muted playsInline style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+          <video ref={videoRef} muted playsInline style={videoStyle} />
           {running && (
             <>
               <span aria-hidden="true" style={{ position: "absolute", inset: "12% 5%", border: "1.5px solid rgba(255,255,255,.7)", borderRadius: 16, boxShadow: "0 0 0 1px rgba(0,0,0,.16) inset", pointerEvents: "none" }} />
@@ -136,15 +183,18 @@ export default function CameraCropTestPage() {
             </p>
             {error && <p style={{ margin: 0, color: "#ff8171", fontSize: 13 }}>{error}</p>}
             {exactResult && (
-              <p style={{ margin: 0, fontFamily: "ui-monospace, monospace", fontSize: 11.5, lineHeight: 1.5, color: exactResult.startsWith("SUCCEEDED") ? "#52d18d" : "#ff8171", wordBreak: "break-word" }}>
+              <p style={{ margin: 0, fontFamily: "ui-monospace, monospace", fontSize: 11.5, lineHeight: 1.5, color: exactResult.startsWith("HONORED") ? "#52d18d" : "#ff8171", wordBreak: "break-word" }}>
                 {exactResult}
               </p>
             )}
             <button onClick={() => void start()} style={{ minHeight: 52, borderRadius: 26, border: 0, background: "linear-gradient(180deg,#5b9dff,#1f66e8)", color: "#fff", fontSize: 15, fontWeight: 850 }}>
-              Start test camera (Option 2)
+              Start test camera (native presentation)
             </button>
             <button onClick={() => void startExactPortrait()} style={{ minHeight: 52, borderRadius: 26, border: "1px solid rgba(255,255,255,.25)", background: "transparent", color: "#fff", fontSize: 14, fontWeight: 700 }}>
-              Force exact portrait (decisive test)
+              Test exact portrait request
+            </button>
+            <button onClick={() => void startExactPortrait(true)} style={{ minHeight: 52, borderRadius: 26, border: "1px solid rgba(255,255,255,.25)", background: "transparent", color: "#fff", fontSize: 14, fontWeight: 700 }}>
+              Test exact portrait + crop-and-scale
             </button>
           </div>
         </div>
@@ -158,10 +208,19 @@ export default function CameraCropTestPage() {
                 <div>stream {diagnostics.settings.width ?? "?"}×{diagnostics.settings.height ?? "?"} · {diagnostics.settings.facingMode ?? "?"}</div>
                 <div>zoom {diagnostics.settings.zoom ?? "n/a"}{diagnostics.capabilities.zoom ? ` (${diagnostics.capabilities.zoom.min ?? "?"}–${diagnostics.capabilities.zoom.max ?? "?"})` : ""}</div>
                 <div>box {box ? `${box.w}×${box.h} (${(box.w / box.h).toFixed(3)})` : "?"} · viewport {typeof window !== "undefined" ? `${window.innerWidth}×${window.innerHeight}` : "?"}</div>
+                <div>supported {constraintProbe ? PROBED_CONSTRAINTS.map((name) => `${name}:${constraintProbe.supported[name] ? "yes" : "no"}`).join(" · ") : "reading…"}</div>
+                {constraintProbe?.requested && <div style={{ maxWidth: 270, overflowWrap: "anywhere" }}>requested {constraintProbe.requested}</div>}
               </>
             ) : "reading diagnostics…"}
           </div>
-          <button onClick={stop} style={{ width: 42, height: 42, borderRadius: "50%", border: 0, background: "rgba(20,18,24,.72)", color: "#fff", fontSize: 18 }} aria-label="Stop">×</button>
+          <div style={{ display: "grid", gap: 7, justifyItems: "end" }}>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => setPresentation("native")} style={{ minHeight: 32, borderRadius: 16, border: 0, padding: "0 10px", background: presentation === "native" ? "#fff" : "rgba(20,18,24,.72)", color: presentation === "native" ? "#17141d" : "#fff", fontSize: 11, fontWeight: 750 }}>Native</button>
+              <button onClick={() => setPresentation("cw")} style={{ minHeight: 32, borderRadius: 16, border: 0, padding: "0 10px", background: presentation === "cw" ? "#fff" : "rgba(20,18,24,.72)", color: presentation === "cw" ? "#17141d" : "#fff", fontSize: 11, fontWeight: 750 }}>↻ 90°</button>
+              <button onClick={() => setPresentation("ccw")} style={{ minHeight: 32, borderRadius: 16, border: 0, padding: "0 10px", background: presentation === "ccw" ? "#fff" : "rgba(20,18,24,.72)", color: presentation === "ccw" ? "#17141d" : "#fff", fontSize: 11, fontWeight: 750 }}>↺ 90°</button>
+            </div>
+            <button onClick={stop} style={{ width: 42, height: 42, borderRadius: "50%", border: 0, background: "rgba(20,18,24,.72)", color: "#fff", fontSize: 18 }} aria-label="Stop">×</button>
+          </div>
         </div>
       )}
     </main>
