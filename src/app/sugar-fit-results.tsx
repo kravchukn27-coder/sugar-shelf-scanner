@@ -38,6 +38,19 @@ function amazonUrl(detection: Detection) {
   return `https://www.amazon.com/s?k=${encodeURIComponent(query)}`;
 }
 
+function fitForDetection(detection: Detection) {
+  return calculateSugarFit({
+    sugarPer100g: detection.score.sugarPer100g,
+    packSize: detection.product?.packSize ?? detection.visualCandidate.packSize,
+    brand: detection.product?.brand ?? detection.visualCandidate.brand,
+    name: detection.visualCandidate.name ?? detection.product?.name,
+    energyKcalPer100g: detection.product?.energyKcalPer100g,
+    proteinPer100g: detection.product?.proteinPer100g,
+    fatPer100g: detection.product?.fatPer100g,
+    carbohydratesPer100g: detection.product?.carbohydratesPer100g,
+  });
+}
+
 function ScannedProductPhoto({ detection, frozenImage, compact, title }: { detection: Detection; frozenImage: string; compact: boolean; title: string }) {
   const [crop, setCrop] = useState<{ id: string; url: string } | null>(null);
   const { box } = detection;
@@ -96,7 +109,7 @@ function BackIcon() {
 
 function ScoreRing({ fit }: { fit: SugarFitResult }) {
   const style = { "--sugar-fit-progress": `${fit.score}%` } as React.CSSProperties;
-  return <div className={`sugar-fit-ring ${fit.tone}`} style={style} role="img" aria-label={`Sugar Fit ${fit.score} out of 100`}><span><strong>{fit.score}</strong><small>SUGAR FIT</small></span></div>;
+  return <div className={`sugar-fit-ring ${fit.tone}`} style={style} role="img" aria-label={`Your Fit ${fit.score} out of 100`}><span><strong>{fit.score}</strong><small>YOUR FIT</small></span></div>;
 }
 
 function ProductDetail({ detection, count, frozenImage, recoveryBanner, onBack, onClose, onScanAgain, onRecommendationOpen }: {
@@ -109,12 +122,7 @@ function ProductDetail({ detection, count, frozenImage, recoveryBanner, onBack, 
   onScanAgain: () => void;
   onRecommendationOpen: () => void;
 }) {
-  const fit = calculateSugarFit({
-    sugarPer100g: detection.score.sugarPer100g,
-    packSize: detection.product?.packSize ?? detection.visualCandidate.packSize,
-    brand: detection.product?.brand ?? detection.visualCandidate.brand,
-    name: detection.visualCandidate.name ?? detection.product?.name,
-  });
+  const fit = fitForDetection(detection);
   const dataLabel = detection.status === "confirmed" ? "Verified" : detection.status === "estimate" ? "Estimated" : "Needs verification";
 
   return <>
@@ -134,8 +142,8 @@ function ProductDetail({ detection, count, frozenImage, recoveryBanner, onBack, 
         <ScoreRing fit={fit} />
         <div className="sugar-fit-hero-copy"><strong>{fit.label}</strong><span>{fit.summary}</span></div>
       </div>
-      <div className="sugar-fit-why"><strong>Why this Sugar Fit</strong>{fit.reasons.map((reason) => <span className={fit.tone} key={reason}><i aria-hidden="true">{fit.tone === "green" ? "✓" : "!"}</i>{reason}</span>)}</div>
-    </> : <div className="sugar-fit-empty"><strong>No score yet</strong><span>We need verified sugar data to calculate your Sugar Fit.</span></div>}
+      <div className="sugar-fit-why"><strong>Why this score</strong>{fit.reasons.map((reason) => <span className={reason.tone} key={reason.label}><i aria-hidden="true">{reason.tone === "good" ? "✓" : reason.tone === "neutral" ? "i" : "!"}</i>{reason.label}</span>)}</div>
+    </> : <div className="sugar-fit-empty"><strong>No score yet</strong><span>We need more nutrition data to calculate Your Fit.</span></div>}
     {count > 1 && <p className="sugar-fit-repeat">{count} matching products in this scan</p>}
     <button className="sugar-fit-scan-again" onClick={onScanAgain}>Scan another product</button>
     <a className="sugar-fit-amazon" href={amazonUrl(detection)} target="_blank" rel="noreferrer" onClick={onRecommendationOpen}>Find on Amazon ↗</a>
@@ -145,9 +153,9 @@ function ProductDetail({ detection, count, frozenImage, recoveryBanner, onBack, 
 function ProductComparison({ groups, frozenImage, onSelect, onClose, onScanAgain }: Pick<SheetProps, "groups" | "frozenImage" | "onSelect" | "onClose" | "onScanAgain">) {
   return <>
     <div className="sugar-fit-sheet-top"><span /><span className="sugar-fit-grabber" aria-hidden="true" /><button className="sugar-fit-icon-button" onClick={onClose} aria-label="Collapse product comparison"><CollapseIcon /></button></div>
-    <header className="sugar-fit-compare-heading"><strong>Compare your Sugar Fits</strong><span>See what fits your day best.</span></header>
+    <header className="sugar-fit-compare-heading"><strong>Compare your options</strong><span>See what fits your day best.</span></header>
     <div className="sugar-fit-list">{groups.map(({ detection, count }) => {
-      const fit = calculateSugarFit({ sugarPer100g: detection.score.sugarPer100g, packSize: detection.product?.packSize ?? detection.visualCandidate.packSize, brand: detection.product?.brand ?? detection.visualCandidate.brand, name: detection.visualCandidate.name ?? detection.product?.name });
+      const fit = fitForDetection(detection);
       return <button key={detection.id} className="sugar-fit-row" onClick={() => onSelect(detection.id)}>
         <ProductPhoto detection={detection} frozenImage={frozenImage} compact />
         <span className="sugar-fit-row-copy"><strong>{displayIdentity(detection)}</strong><span>{productMeta(detection)}{count > 1 ? ` · ×${count}` : ""}</span></span>
@@ -161,7 +169,7 @@ function ProductComparison({ groups, frozenImage, onSelect, onClose, onScanAgain
 
 export function SugarFitResultsSheet(props: SheetProps) {
   const selected = props.groups.find(({ detection }) => detection.id === props.selectedId) ?? (props.groups.length === 1 ? props.groups[0] : null);
-  return <section className="result-sheet sugar-fit-sheet" aria-label="Sugar Fit results">
+  return <section className="result-sheet sugar-fit-sheet" aria-label="Your Fit results">
     {selected ? <ProductDetail detection={selected.detection} count={selected.count} frozenImage={props.frozenImage} recoveryBanner={props.recoveryBanner} onBack={props.groups.length > 1 ? () => props.onSelect(null) : null} onClose={props.onClose} onScanAgain={props.onScanAgain} onRecommendationOpen={props.onRecommendationOpen} /> : <ProductComparison groups={props.groups} frozenImage={props.frozenImage} onSelect={props.onSelect} onClose={props.onClose} onScanAgain={props.onScanAgain} />}
   </section>;
 }
@@ -169,7 +177,7 @@ export function SugarFitResultsSheet(props: SheetProps) {
 export function SugarFitResultHandle({ groups, frozenImage, onOpen }: { groups: DetectionGroup[]; frozenImage: string | null; onOpen: () => void }) {
   const first = groups[0]?.detection;
   if (!first) return null;
-  if (groups.length > 1) return <button className="result-handle sugar-fit-result-handle multi" onClick={onOpen}><span className="sugar-fit-handle-icon" aria-hidden="true"><i /><i /><i /></span><span><strong>{groups.length} products ready</strong><small>Compare Sugar Fits</small></span><span className="sugar-fit-handle-arrow"><RightIcon /></span></button>;
-  const fit = calculateSugarFit({ sugarPer100g: first.score.sugarPer100g, packSize: first.product?.packSize ?? first.visualCandidate.packSize, brand: first.product?.brand ?? first.visualCandidate.brand, name: first.visualCandidate.name ?? first.product?.name });
-  return <button className="result-handle sugar-fit-result-handle" onClick={onOpen}><ProductPhoto detection={first} frozenImage={frozenImage} compact /><span><strong>{displayIdentity(first)}</strong><small>{fit?.label ?? "No score yet"}</small></span><b className={fit?.tone ?? "unknown"}>{fit?.score ?? "—"}<small>Sugar Fit</small></b><span className="sugar-fit-handle-arrow"><RightIcon /></span></button>;
+  if (groups.length > 1) return <button className="result-handle sugar-fit-result-handle multi" onClick={onOpen}><span className="sugar-fit-handle-icon" aria-hidden="true"><i /><i /><i /></span><span><strong>{groups.length} products ready</strong><small>Compare your options</small></span><span className="sugar-fit-handle-arrow"><RightIcon /></span></button>;
+  const fit = fitForDetection(first);
+  return <button className="result-handle sugar-fit-result-handle" onClick={onOpen}><ProductPhoto detection={first} frozenImage={frozenImage} compact /><span><strong>{displayIdentity(first)}</strong><small>{fit?.label ?? "No score yet"}</small></span><b className={fit?.tone ?? "unknown"}>{fit?.score ?? "—"}<small>Your Fit</small></b><span className="sugar-fit-handle-arrow"><RightIcon /></span></button>;
 }
