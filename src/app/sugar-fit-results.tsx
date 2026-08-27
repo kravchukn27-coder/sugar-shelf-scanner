@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { Detection } from "@/lib/contracts/scan";
 import type { DetectionGroup } from "@/lib/scan/deduplicate-detections";
 import { calculateSugarFit, inferProductCategory, type SugarFitResult } from "@/lib/scoring/sugar-fit";
@@ -36,17 +37,47 @@ function amazonUrl(detection: Detection) {
   return `https://www.amazon.com/s?k=${encodeURIComponent(query)}`;
 }
 
+function ScannedProductPhoto({ detection, frozenImage, compact, title }: { detection: Detection; frozenImage: string; compact: boolean; title: string }) {
+  const [crop, setCrop] = useState<{ id: string; url: string } | null>(null);
+  const { box } = detection;
+
+  useEffect(() => {
+    let cancelled = false;
+    const source = new Image();
+    source.onload = () => {
+      if (cancelled || source.naturalWidth < 1 || source.naturalHeight < 1) return;
+      const paddingX = box.width * .06;
+      const paddingY = box.height * .06;
+      const left = Math.max(0, box.x - paddingX);
+      const top = Math.max(0, box.y - paddingY);
+      const right = Math.min(1, box.x + box.width + paddingX);
+      const bottom = Math.min(1, box.y + box.height + paddingY);
+      const sourceWidth = Math.max(1, (right - left) * source.naturalWidth);
+      const sourceHeight = Math.max(1, (bottom - top) * source.naturalHeight);
+      const scale = Math.min(1, 320 / Math.max(sourceWidth, sourceHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+      canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.drawImage(source, left * source.naturalWidth, top * source.naturalHeight, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+      if (!cancelled) setCrop({ id: detection.id, url: canvas.toDataURL("image/jpeg", .86) });
+    };
+    source.src = frozenImage;
+    return () => { cancelled = true; };
+  }, [box.height, box.width, box.x, box.y, detection.id, frozenImage]);
+
+  const croppedUrl = crop?.id === detection.id ? crop.url : null;
+  return <span className={`sugar-fit-photo crop ${compact ? "compact" : ""}`}>
+    {croppedUrl ? <img src={croppedUrl} alt={`${title} from this scan`} /> : <span className="sugar-fit-photo-placeholder" aria-hidden="true">{title.slice(0, 1).toUpperCase()}</span>}
+  </span>;
+}
+
 function ProductPhoto({ detection, frozenImage, compact = false }: { detection: Detection; frozenImage: string | null; compact?: boolean }) {
   const title = displayIdentity(detection);
   const imageUrl = detection.product?.imageUrl;
   if (imageUrl) return <span className={`sugar-fit-photo ${compact ? "compact" : ""}`}><img src={imageUrl} alt={title} /></span>;
-  if (frozenImage) {
-    const { box } = detection;
-    const cropStyle = {
-      objectPosition: `${(box.x + (box.width / 2)) * 100}% ${(box.y + (box.height / 2)) * 100}%`,
-    };
-    return <span className={`sugar-fit-photo crop ${compact ? "compact" : ""}`}><img src={frozenImage} alt={`${title} from this scan`} style={cropStyle} /></span>;
-  }
+  if (frozenImage) return <ScannedProductPhoto detection={detection} frozenImage={frozenImage} compact={compact} title={title} />;
   return <span className={`sugar-fit-photo fallback ${compact ? "compact" : ""}`} aria-label={title}>{title.slice(0, 1).toUpperCase()}</span>;
 }
 
