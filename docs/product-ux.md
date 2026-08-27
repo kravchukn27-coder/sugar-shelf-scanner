@@ -6,10 +6,14 @@
 2. A small preflight decides whether a packaged food/drink is a candidate.
    `none` and `uncertain` remain live; only a candidate can trigger capture.
 3. One full-analysis frame freezes while Gemini identifies visible packaging.
-   Results show product outlines and a centred bottom handle.
-4. **Details** exposes source, sugar/protein and the clear distinction between
+   The analysis state uses a compact branded glass status with a persistent
+   privacy note.
+4. A completed scan opens results immediately: multiple products open the
+   comparison list, while one product opens its Sugar Fit card. If the user
+   collapses results, a centred branded handle remains available to reopen it.
+5. **Details** exposes source, sugar/protein and the clear distinction between
    `Confirmed`, `AI estimate` and unknown.
-5. Retry or close returns to a stable live scanner.
+6. Retry or close returns to a stable live scanner.
 
 The frozen image is the full-analysis capture, not a second camera view. Raw
 frames are not retained by the application.

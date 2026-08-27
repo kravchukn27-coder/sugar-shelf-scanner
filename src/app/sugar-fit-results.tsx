@@ -139,7 +139,7 @@ export function SugarFitResultsSheet(props: SheetProps) {
 export function SugarFitResultHandle({ groups, frozenImage, onOpen }: { groups: DetectionGroup[]; frozenImage: string | null; onOpen: () => void }) {
   const first = groups[0]?.detection;
   if (!first) return null;
-  if (groups.length > 1) return <button className="result-handle sugar-fit-result-handle multi" onClick={onOpen}><span><strong>{groups.length} products</strong><small>Compare your Sugar Fits</small></span><RightIcon /></button>;
+  if (groups.length > 1) return <button className="result-handle sugar-fit-result-handle multi" onClick={onOpen}><span className="sugar-fit-handle-icon" aria-hidden="true"><i /><i /><i /></span><span><strong>{groups.length} products ready</strong><small>Compare Sugar Fits</small></span><span className="sugar-fit-handle-arrow"><RightIcon /></span></button>;
   const fit = calculateSugarFit({ sugarPer100g: first.score.sugarPer100g, packSize: first.product?.packSize ?? first.visualCandidate.packSize, brand: first.product?.brand ?? first.visualCandidate.brand, name: first.visualCandidate.name ?? first.product?.name });
-  return <button className="result-handle sugar-fit-result-handle" onClick={onOpen}><ProductPhoto detection={first} frozenImage={frozenImage} compact /><span><strong>{displayIdentity(first)}</strong><small>{fit?.label ?? "No score yet"}</small></span><b className={fit?.tone ?? "unknown"}>{fit?.score ?? "—"}<small>Sugar Fit</small></b><RightIcon /></button>;
+  return <button className="result-handle sugar-fit-result-handle" onClick={onOpen}><ProductPhoto detection={first} frozenImage={frozenImage} compact /><span><strong>{displayIdentity(first)}</strong><small>{fit?.label ?? "No score yet"}</small></span><b className={fit?.tone ?? "unknown"}>{fit?.score ?? "—"}<small>Sugar Fit</small></b><span className="sugar-fit-handle-arrow"><RightIcon /></span></button>;
 }
