@@ -9,12 +9,15 @@
 export const FRAME_QUALITY_DEFAULTS = {
   minMeanLuma: 28,
   maxMeanLuma: 238,
-  maxClippedPixelRatio: 0.72,
+  // Raised from 0.72: a reflective can/label routinely blows a chunk of its
+  // 16x12 preview sample to near-white without the full-resolution capture
+  // Gemini actually sees being unreadable.
+  maxClippedPixelRatio: 0.78,
   minSharpness: 3,
 } as const;
 
 /** Bounded escape hatch for dark or low-texture products that are still valid. */
-export const QUALITY_SKIP_FALLBACK_AFTER = 3;
+export const QUALITY_SKIP_FALLBACK_AFTER = 2;
 
 export type FrameQualityOptions = Partial<{
   minMeanLuma: number;

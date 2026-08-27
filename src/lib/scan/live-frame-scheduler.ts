@@ -1,12 +1,39 @@
 import { shouldBypassQualityAfterSkips, shouldSkipPreflight, type FrameQuality } from "./frame-quality";
 import { isFrameMoving } from "./frame-stillness";
 
+/** Bounded escape hatch mirroring the quality gate's: unlike quality, motion
+ *  had no fallback at all, so a persistently unsteady hand could block every
+ *  tick indefinitely with zero feedback. */
+export const MOTION_SKIP_FALLBACK_AFTER = 3;
+
 export type LiveFrameSchedulerDecision = {
   baseline: Uint8ClampedArray;
   qualitySkipStreak: number;
+  motionSkipStreak: number;
   action: "dispatch" | "motion_skip" | "quality_skip";
   qualitySkipped: boolean;
 };
+
+export function shouldBypassMotionAfterSkips(consecutiveSkips: number): boolean {
+  return consecutiveSkips >= MOTION_SKIP_FALLBACK_AFTER;
+}
+
+function decideQualityStage(quality: FrameQuality | null, qualityEnabled: boolean, qualitySkipStreak: number) {
+  // An unavailable quality sample retains the prior scheduler fallback: do not
+  // block a potentially valid scan merely because a browser cannot read pixels.
+  if (!qualityEnabled || !quality) {
+    return { qualitySkipStreak: 0, action: "dispatch" as const, qualitySkipped: false };
+  }
+
+  if (shouldSkipPreflight(quality)) {
+    const nextQualitySkipStreak = qualitySkipStreak + 1;
+    if (!shouldBypassQualityAfterSkips(nextQualitySkipStreak)) {
+      return { qualitySkipStreak: nextQualitySkipStreak, action: "quality_skip" as const, qualitySkipped: true };
+    }
+  }
+
+  return { qualitySkipStreak: 0, action: "dispatch" as const, qualitySkipped: shouldSkipPreflight(quality) };
+}
 
 /**
  * The rollout flag only changes when the first stillness reference is taken.
@@ -30,29 +57,24 @@ export function decideLiveFrameSchedulerTick({
   quality,
   qualityEnabled,
   qualitySkipStreak,
+  motionSkipStreak,
 }: {
   previous: Uint8ClampedArray | null;
   current: Uint8ClampedArray;
   quality: FrameQuality | null;
   qualityEnabled: boolean;
   qualitySkipStreak: number;
+  motionSkipStreak: number;
 }): LiveFrameSchedulerDecision {
   if (previous && isFrameMoving(previous, current)) {
-    return { baseline: current, qualitySkipStreak: 0, action: "motion_skip", qualitySkipped: false };
-  }
-
-  // An unavailable quality sample retains the prior scheduler fallback: do not
-  // block a potentially valid scan merely because a browser cannot read pixels.
-  if (!qualityEnabled || !quality) {
-    return { baseline: current, qualitySkipStreak: 0, action: "dispatch", qualitySkipped: false };
-  }
-
-  if (shouldSkipPreflight(quality)) {
-    const nextQualitySkipStreak = qualitySkipStreak + 1;
-    if (!shouldBypassQualityAfterSkips(nextQualitySkipStreak)) {
-      return { baseline: current, qualitySkipStreak: nextQualitySkipStreak, action: "quality_skip", qualitySkipped: true };
+    const nextMotionSkipStreak = motionSkipStreak + 1;
+    if (!shouldBypassMotionAfterSkips(nextMotionSkipStreak)) {
+      return { baseline: current, qualitySkipStreak: 0, motionSkipStreak: nextMotionSkipStreak, action: "motion_skip", qualitySkipped: false };
     }
+    // Persistent shake bypassed after MOTION_SKIP_FALLBACK_AFTER ticks: fall
+    // through to the quality gate below rather than forcing a frame through
+    // unconditionally, so an actually unusable capture still gets one more check.
   }
 
-  return { baseline: current, qualitySkipStreak: 0, action: "dispatch", qualitySkipped: shouldSkipPreflight(quality) };
+  return { baseline: current, motionSkipStreak: 0, ...decideQualityStage(quality, qualityEnabled, qualitySkipStreak) };
 }

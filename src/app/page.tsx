@@ -67,7 +67,7 @@ async function scanFailureMessage(response: Response) {
 }
 
 export default function HomePage() {
-  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
+  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
   const [liveHint, setLiveHint] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -249,7 +249,7 @@ export default function HomePage() {
   }, [analyze, capture, completeScanMetrics, dispatch, noteLiveHint, noteMetricsCapability, sheet, state]);
 
   const start = useCallback(async () => {
-    const id = ++session.current; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); stopStream(); clearResult(); resetScanMetrics(); setUploadUrl(null); setCameraKey((key) => key + 1); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
+    const id = ++session.current; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); stopStream(); clearResult(); resetScanMetrics(); setUploadUrl(null); setCameraKey((key) => key + 1); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
     try {
       // A device ID is a best-effort way to keep the same browser-selected rear
       // source across retry. If iOS no longer exposes it, fall back to rear.
@@ -276,13 +276,13 @@ export default function HomePage() {
     }
     catch { if (id === session.current) { setFailure("Camera unavailable. Check permission and try again."); setState((current) => transitionScannerLifecycle(current, "ANALYZE_FAILURE")); } }
   }, [clearResult, resetScanMetrics, sampleLiveFrame, stopStream]);
-  const close = useCallback(() => { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
+  const close = useCallback(() => { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
   const toggleTorch = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !torchOn; if (!track || !supportsTorch(track)) return setTorchAvailable(false); try { await track.applyConstraints({ advanced: [{ torch: next } as unknown as MediaTrackConstraintSet] }); setTorchOn(next); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
-  const retry = useCallback(() => { if (!uploadUrl) void start(); else { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); clearResult(); resetScanMetrics(); setUploadBusy(true); dispatch("RETRY"); } }, [clearResult, dispatch, resetScanMetrics, start, uploadUrl]);
+  const retry = useCallback(() => { if (!uploadUrl) void start(); else { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); clearResult(); resetScanMetrics(); setUploadBusy(true); dispatch("RETRY"); } }, [clearResult, dispatch, resetScanMetrics, start, uploadUrl]);
   const startRecovery = useCallback((id: string, mode: "package" | "label" = "package") => {
     session.current += 1;
     stillnessFingerprint.current = null;
-    qualitySkipStreak.current = 0;
+    qualitySkipStreak.current = 0; motionSkipStreak.current = 0;
     liveHintStreak.current = { reason: null, count: 0 };
     setLiveHint(null);
     const recoverySession = session.current;
@@ -362,7 +362,7 @@ export default function HomePage() {
     if (!file || uploadBusy) return;
     session.current += 1;
     stillnessFingerprint.current = null;
-    qualitySkipStreak.current = 0;
+    qualitySkipStreak.current = 0; motionSkipStreak.current = 0;
     liveHintStreak.current = { reason: null, count: 0 };
     setLiveHint(null);
     stopStream();
@@ -403,7 +403,7 @@ export default function HomePage() {
     const video = videoRef.current;
     if (!video?.readyState || inFlight.current) return;
     const sample = sampleLiveFrame(video);
-    if (!sample) { qualitySkipStreak.current = 0; noteLiveHint(null); void preflight(video); return; }
+    if (!sample) { qualitySkipStreak.current = 0; motionSkipStreak.current = 0; noteLiveHint(null); void preflight(video); return; }
     const quality = clientFrameQualityEnabled ? sampleFrameQuality(sample.data, 16, 12) : null;
     const decision = decideLiveFrameSchedulerTick({
       previous: stillnessFingerprint.current,
@@ -411,9 +411,11 @@ export default function HomePage() {
       quality,
       qualityEnabled: clientFrameQualityEnabled,
       qualitySkipStreak: qualitySkipStreak.current,
+      motionSkipStreak: motionSkipStreak.current,
     });
     stillnessFingerprint.current = decision.baseline;
     qualitySkipStreak.current = decision.qualitySkipStreak;
+    motionSkipStreak.current = decision.motionSkipStreak;
     if (decision.action === "motion_skip") { scannerMetrics.current.recordMotionSkip(); noteLiveHint("motion"); return; }
     if (decision.qualitySkipped) scannerMetrics.current.recordQualitySkip();
     if (decision.action === "quality_skip") { noteLiveHint(quality?.tooBlurry ? "blur" : quality?.tooDark ? "dark" : "glare"); return; }

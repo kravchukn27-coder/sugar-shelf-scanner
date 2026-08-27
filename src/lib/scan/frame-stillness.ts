@@ -1,6 +1,9 @@
-// Mean-abs-diff on a 0-255 luma scale; 10 tolerates sensor noise/compression
-// dither on a static scene while still catching a hand or product moving.
-export const STILLNESS_THRESHOLD = 10;
+// Mean-abs-diff on a 0-255 luma scale; 14 tolerates sensor noise/compression
+// dither plus ordinary handheld tremor on a static scene while still catching
+// a hand or product actually moving. Raised from 10 once the threshold
+// benchmark showed Gemini handles mild motion blur fine, so blocking on it
+// locally was mostly costing responsiveness rather than saving bad requests.
+export const STILLNESS_THRESHOLD = 14;
 
 export function frameDiff(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
   if (a.length !== b.length || a.length === 0) return Infinity;
