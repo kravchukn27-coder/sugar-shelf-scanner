@@ -18,12 +18,31 @@ import { getCameraDiagnosticSnapshot, type CameraDiagnosticSnapshot } from "@/li
  *
  * Not linked from anywhere in the app; reach it directly at /camera-crop-test.
  */
+const BOX_ASPECT = 3 / 4; // width:height
+
 export default function CameraCropTestPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<CameraDiagnosticSnapshot | null>(null);
+  // Computed in JS (not via CSS aspect-ratio) so the exact box size in
+  // device pixels is verifiable on-screen, not eyeballed from a screenshot.
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    const measure = () => {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      let w = vw;
+      let h = Math.round(w / BOX_ASPECT);
+      if (h > vh) { h = vh; w = Math.round(h * BOX_ASPECT); }
+      setBox({ w, h });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
 
   const stop = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -62,8 +81,8 @@ export default function CameraCropTestPage() {
         </span>
       </div>
 
-      <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 0" }}>
-        <div style={{ position: "relative", width: "100%", aspectRatio: "3 / 4", background: "#0a0a0c", overflow: "hidden", visibility: running ? "visible" : "hidden" }}>
+      <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ position: "relative", width: box?.w ?? "100%", height: box?.h ?? "75%", background: "#0a0a0c", overflow: "hidden", visibility: running ? "visible" : "hidden" }}>
           <video ref={videoRef} muted playsInline style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
           {running && (
             <>
@@ -95,8 +114,9 @@ export default function CameraCropTestPage() {
           <div style={{ background: "rgba(20,18,24,.72)", backdropFilter: "blur(10px)", borderRadius: 14, padding: "8px 12px", fontSize: 11, lineHeight: 1.5, fontFamily: "ui-monospace, monospace", color: "rgba(255,255,255,.75)" }}>
             {diagnostics ? (
               <>
-                <div>{diagnostics.settings.width ?? "?"}×{diagnostics.settings.height ?? "?"} · {diagnostics.settings.facingMode ?? "?"}</div>
+                <div>stream {diagnostics.settings.width ?? "?"}×{diagnostics.settings.height ?? "?"} · {diagnostics.settings.facingMode ?? "?"}</div>
                 <div>zoom {diagnostics.settings.zoom ?? "n/a"}{diagnostics.capabilities.zoom ? ` (${diagnostics.capabilities.zoom.min ?? "?"}–${diagnostics.capabilities.zoom.max ?? "?"})` : ""}</div>
+                <div>box {box ? `${box.w}×${box.h} (${(box.w / box.h).toFixed(3)})` : "?"} · viewport {typeof window !== "undefined" ? `${window.innerWidth}×${window.innerHeight}` : "?"}</div>
               </>
             ) : "reading diagnostics…"}
           </div>
