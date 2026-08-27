@@ -206,7 +206,6 @@ export default function HomePage() {
   }, []);
   const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); setCameraDiagnostics(null); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
   const clearResult = useCallback(() => { setRecovery(null); setRecoveryCamera(null); setRecoveryBusy(false); setRecoveryMessage(null); setRecoverySubmissionBanner(null); setLabelDraft(null); setScan(null); setFrozen(null); setFrozenBackdrop(releaseCanvasBackdropSnapshot()); setFailure(null); setSheet(false); setSelected(null); setUploadBusy(false); }, []);
-  const turnTorchOffAfterCapture = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; if (!torchOn || !track) return; try { await track.applyConstraints({ advanced: [{ torch: false } as unknown as MediaTrackConstraintSet] }); setTorchOn(false); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
   const noteLiveHint = useCallback((reason: LiveHintReason | null) => {
     if (reason && LIVE_HINT_IMMEDIATE_REASONS.has(reason)) { liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(LIVE_HINT_COPY[reason]); return; }
     if (!reason) { liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); return; }
@@ -282,7 +281,10 @@ export default function HomePage() {
     // local, ephemeral data URL only; it is never sent with the scan JPEG.
     setFrozenBackdrop(source instanceof HTMLVideoElement ? captureCanvasBackdropSnapshot(liveBackdropCanvasRef.current)?.dataUrl ?? null : null);
     setFrozen(image);
-    if (source instanceof HTMLVideoElement) void turnTorchOffAfterCapture();
+    // The analysis request has its own encoded JPEG now. Stop the physical
+    // camera at the capture boundary so no WebKit compositor layer can keep
+    // moving behind the frozen foreground/backdrop snapshot.
+    if (source instanceof HTMLVideoElement) stopStream();
     inFlight.current = true;
     noteLiveHint(null);
     dispatch("CAPTURED");
@@ -304,7 +306,7 @@ export default function HomePage() {
       if (id === session.current && source instanceof HTMLImageElement) setUploadBusy(false);
       if (id === session.current && abortRef.current === controller) { inFlight.current = false; abortRef.current = null; }
     }
-  }, [capture, completeScanMetrics, dispatch, noteLiveHint, noteMetricsCapability, reportNoDetectionResult, turnTorchOffAfterCapture]);
+  }, [capture, completeScanMetrics, dispatch, noteLiveHint, noteMetricsCapability, reportNoDetectionResult, stopStream]);
 
   const preflight = useCallback(async (source: HTMLVideoElement | HTMLImageElement) => {
     if (inFlight.current || sheet || !shouldRunScannerScheduler(state)) return;
