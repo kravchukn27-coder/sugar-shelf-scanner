@@ -27,11 +27,13 @@ import { getMockShelfScan, getSugarFitDemoScan, SUGAR_FIT_DEMO_IMAGE } from "@/l
 
 const FRAME_INTERVAL = 650;
 const PREFLIGHT_CANDIDATE_CONFIDENCE_THRESHOLD = 0.65;
-// Transient, non-blocking hints for the live viewfinder. Shown only after two
-// consecutive same-reason skips so a flickering cause (e.g. blur one tick,
-// glare the next) does not spam the copy. Deliberately text-only: the framed
-// .viewfinder-guide this once paired with was removed for always showing a
-// clean fullscreen preview (see camera-frame-regression-plan).
+// Live-viewfinder hint copy. The default (idle) text is always visible
+// alongside the .viewfinder-guide frame; a skip/uncertain reason below
+// temporarily replaces it. A local skip reason only surfaces after two
+// consecutive same-reason ticks so a flickering cause (e.g. blur one tick,
+// glare the next) doesn't spam the copy; `uncertain` already cost a real
+// Gemini round trip, so it replaces the default text immediately.
+const LIVE_HINT_DEFAULT = "Scan a product to see how it fits your day";
 const LIVE_HINT_COPY = {
   motion: "Hold still for a second",
   blur: "Hold still for a second",
@@ -446,7 +448,7 @@ export default function HomePage() {
   return <main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""} ${recoveryActive ? "recovery-active" : ""}`} aria-label={recoveryActive ? "Recovery camera" : "Sugar product scanner"}>
     {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video key={cameraKey} ref={videoRef} className="camera-preview" muted playsInline />}{frozen && !recoveryActive && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}{state !== "camera_off" && <div className="camera-vignette" />}
     {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && torchAvailable ? "" : "end"}`}><div>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
-    {state === "live_searching" && liveHint && <p className="live-hint" aria-live="polite">{liveHint}</p>}
+    {state === "live_searching" && !uploadUrl && <><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p></>}
     {groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { setSelected(group.detection.id); setSheet(true); }} />)}
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}
     {state === "camera_off" && <ScannerHome onStart={() => void start()} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action="Try again" onAction={retry} failure />}
