@@ -9,6 +9,13 @@ export const analyzeScanRequestSchema = z.object({
   mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]),
   context: scanContextSchema.default("shelf"),
   clientFrameId: z.string().min(1).max(128),
+  // Carried over from the preflight gate's packagedProductCount when this
+  // analyze call followed one. Lets the vision layer decide whether a slow
+  // response is more likely a random stall (worth a speculative hedge) or
+  // structurally expected (a crowded shelf, where a duplicate call would
+  // just cost tokens without saving time). Omitted for gallery uploads,
+  // which skip preflight and never populate this.
+  expectedProductCount: z.number().int().min(0).max(20).optional(),
 });
 export type AnalyzeScanRequest = z.infer<typeof analyzeScanRequestSchema>;
 

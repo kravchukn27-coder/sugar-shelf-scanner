@@ -19,6 +19,17 @@ const GEMINI_PREFLIGHT_TIMEOUT_MS = 5_000;
 // a parsed-but-invalid or low-confidence response. Deliberately shorter than
 // the first attempt so a repeat failure does not double the user's wait.
 const GEMINI_ANALYZE_RETRY_TIMEOUT_MS = 8_000;
+// Speculative hedge: on a shelf preflight already estimated as small
+// (expectedProductCount below this), a slow analyze response is more likely
+// a random per-request stall than a genuinely long generation, since output
+// length scales with detected products. Fire one parallel duplicate call
+// after GEMINI_HEDGE_DELAY_MS if the first attempt hasn't answered yet, and
+// take whichever settles first. Skipped entirely for crowded shelves (or
+// gallery uploads, which never populate expectedProductCount) where the
+// slowness is structural and a duplicate call would only double token spend
+// without shortening the wait.
+const GEMINI_HEDGE_DELAY_MS = 7_000;
+const GEMINI_HEDGE_MAX_EXPECTED_PRODUCTS = 10;
 const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 const MAX_PREFLIGHT_IMAGE_BYTES = 2 * 1024 * 1024;
 const MAX_DETECTIONS = 20;
@@ -130,6 +141,7 @@ function logAttempt(
   startedAt: number,
   timeoutMs: number,
   error?: unknown,
+  hedge?: "primary_won" | "hedge_won",
 ) {
   logVisionTelemetry({
     operation,
@@ -139,6 +151,7 @@ function logAttempt(
     timeoutMs,
     outcome: error ? telemetryOutcome(error) : "success",
     status: error ? telemetryStatus(error) : 200,
+    ...(hedge ? { hedge } : {}),
   });
 }
 
@@ -352,6 +365,59 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, timeout
   }
 }
 
+/**
+ * Races the primary attempt against one duplicate call fired after
+ * GEMINI_HEDGE_DELAY_MS if the primary is still pending at that point.
+ * Whichever settles successfully first wins; the loser's eventual result is
+ * discarded (its own AttemptAbort still tears down independently once its
+ * own timeout elapses). Only a genuine failure of *both* attempts rejects,
+ * and it reports the primary's error since that is the one the existing
+ * sequential-retry logic in analyzeWithGemini already knows how to classify.
+ */
+function attemptAnalyzeWithHedge(
+  input: AnalyzeScanRequest,
+  env: ServerEnv,
+  timeoutMs: number,
+  requestSignal: AbortSignal | undefined,
+): Promise<{ result: AnalyzeScanResponse; hedge: "primary_won" | "hedge_won" }> {
+  return new Promise((resolve, reject) => {
+    let primarySettled = false;
+    let outcomeSent = false;
+    let pending = 1;
+    let firstError: unknown;
+
+    const fail = (error: unknown) => {
+      if (outcomeSent) return;
+      firstError ??= error;
+      pending -= 1;
+      if (pending === 0) { outcomeSent = true; reject(firstError); }
+    };
+    const succeed = (result: AnalyzeScanResponse, hedge: "primary_won" | "hedge_won") => {
+      if (outcomeSent) return;
+      outcomeSent = true;
+      clearTimeout(hedgeTimer);
+      resolve({ result, hedge });
+    };
+
+    const hedgeTimer = setTimeout(() => {
+      if (primarySettled || outcomeSent) return;
+      pending += 1;
+      // Give the hedge the remaining budget, not a fresh full window — it
+      // must not outlive the primary's own deadline.
+      const hedgeTimeoutMs = Math.max(3_000, timeoutMs - GEMINI_HEDGE_DELAY_MS);
+      attemptAnalyze(input, env, hedgeTimeoutMs, requestSignal).then(
+        (result) => succeed(result, "hedge_won"),
+        (error: unknown) => fail(error),
+      );
+    }, GEMINI_HEDGE_DELAY_MS);
+
+    attemptAnalyze(input, env, timeoutMs, requestSignal).then(
+      (result) => { primarySettled = true; succeed(result, "primary_won"); },
+      (error: unknown) => { primarySettled = true; fail(error); },
+    );
+  });
+}
+
 /** Only a transient transport failure is worth one quick retry; a parsed
  *  response (even a bad one) or a client-side config problem will not
  *  change on a second attempt. */
@@ -369,7 +435,13 @@ export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEn
       throw new VisionRequestError("Image must be a valid base64 image smaller than 6 MB.", 413, "bad_image");
     }
 
+    const eligibleForHedge = input.expectedProductCount !== undefined && input.expectedProductCount < GEMINI_HEDGE_MAX_EXPECTED_PRODUCTS;
     try {
+      if (eligibleForHedge) {
+        const { result, hedge } = await attemptAnalyzeWithHedge(input, env, GEMINI_TIMEOUT_MS, requestSignal);
+        logAttempt("analyze", env.GEMINI_VISION_MODEL, receivedAt, startedAt, GEMINI_TIMEOUT_MS, undefined, hedge);
+        return result;
+      }
       const result = await attemptAnalyze(input, env, GEMINI_TIMEOUT_MS, requestSignal);
       logAttempt("analyze", env.GEMINI_VISION_MODEL, receivedAt, startedAt, GEMINI_TIMEOUT_MS);
       return result;

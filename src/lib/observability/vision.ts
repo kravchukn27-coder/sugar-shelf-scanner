@@ -20,6 +20,12 @@ type VisionTelemetry = {
   timeoutMs: number;
   outcome: VisionOutcome;
   status: number;
+  // Present only for analyze calls eligible for the speculative hedge (a
+  // small expectedProductCount): "primary_won" when the first attempt
+  // answered before the hedge fired or finished first anyway, "hedge_won"
+  // when the duplicate parallel call came back first. Absent entirely when
+  // the call was not eligible for a hedge.
+  hedge?: "primary_won" | "hedge_won";
 };
 
 export type VisionUsageTelemetry = {

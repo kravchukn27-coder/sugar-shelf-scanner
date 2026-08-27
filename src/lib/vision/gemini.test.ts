@@ -146,6 +146,66 @@ test("a retryable provider failure still gets one analyze retry", async () => {
   }
 });
 
+test("a small expectedProductCount does not hedge when the primary answers before the delay", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return providerJson({ detections: [] });
+  };
+  try {
+    const result = await analyzeWithGemini({ ...analyzeInput, expectedProductCount: 3 }, env, performance.now());
+    assert.equal(calls, 1);
+    assert.deepEqual(result.detections, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a small expectedProductCount fires a hedge after the delay and takes whichever answers first", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  const primaryGate = Promise.withResolvers<void>();
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      // Primary never returns within the test; only the hedge (call 2) does.
+      await primaryGate.promise;
+      return providerJson({ detections: [] });
+    }
+    return providerJson({ detections: [detection(0)] });
+  };
+  try {
+    const pending = analyzeWithGemini({ ...analyzeInput, expectedProductCount: 3 }, env, performance.now());
+    // Let the primary's fetch() call register before advancing the clock.
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(7_000);
+    const result = await pending;
+    assert.equal(calls, 2);
+    assert.deepEqual(result.detections.map((item) => item.visualCandidate.name), ["Product 0"]);
+    primaryGate.resolve();
+  } finally {
+    t.mock.timers.reset();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("expectedProductCount at or above the crowded-shelf threshold never hedges", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return providerJson({ detections: [] });
+  };
+  try {
+    await analyzeWithGemini({ ...analyzeInput, expectedProductCount: 10 }, env, performance.now());
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("a client cancellation between analyze attempts prevents the retry", async () => {
   const originalFetch = globalThis.fetch;
   const client = new AbortController();
