@@ -5,12 +5,16 @@ import { applyCameraView, getCameraControls, preferCameraCaptureQuality, rearCam
 import { getCameraDiagnosticSnapshot, type CameraDiagnosticSnapshot } from "@/lib/scan/camera-diagnostics";
 
 /**
- * Standalone test route for the zero-crop viewfinder treatment ("Option 1"),
- * isolated from the real scanner so it never risks page.tsx. Reuses the same
+ * Standalone test route for the "Option 2" viewfinder treatment: cap the
+ * video box at a 3:4 aspect ratio (matching what preferCameraCaptureQuality
+ * already asks the camera for, applied as a CSS box instead of a hardware
+ * constraint Safari ignores) and object-fit: cover within just that box,
+ * instead of full-bleed cover on the whole screen. Recovers to ~56% of the
+ * frame's horizontal width visible, vs ~42% today.
+ *
+ * Isolated from the real scanner so it never risks page.tsx. Reuses the same
  * getUserMedia + zoom-constraint code the real scanner uses (rearCameraRequest,
- * preferCameraCaptureQuality, applyCameraView) — only the display CSS differs:
- * object-fit: contain instead of cover, so the full sensor frame is visible
- * with letterboxing rather than cropped to fill the screen.
+ * preferCameraCaptureQuality, applyCameraView) — only the display CSS differs.
  *
  * Not linked from anywhere in the app; reach it directly at /camera-crop-test.
  */
@@ -54,23 +58,29 @@ export default function CameraCropTestPage() {
     <main style={{ minHeight: "100svh", background: "#070708", color: "#fff", position: "relative", overflow: "hidden" }}>
       <div style={{ position: "absolute", top: "max(14px,env(safe-area-inset-top))", left: 0, right: 0, zIndex: 5, display: "flex", justifyContent: "center" }}>
         <span style={{ background: "rgba(20,18,24,.72)", backdropFilter: "blur(10px)", borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700, letterSpacing: ".01em" }}>
-          TEST — zero-crop viewfinder (object-fit: contain)
+          TEST — Option 2: 3:4 box, ~56% of frame visible
         </span>
       </div>
 
-      <video ref={videoRef} muted playsInline style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", background: "#0a0a0c", visibility: running ? "visible" : "hidden" }} />
-      {running && (
-        <>
-          <span className="viewfinder-guide" aria-hidden="true" />
-          <p className="live-hint">Scan a product to see how it fits your day</p>
-        </>
-      )}
+      <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 0" }}>
+        <div style={{ position: "relative", width: "100%", aspectRatio: "3 / 4", background: "#0a0a0c", overflow: "hidden", visibility: running ? "visible" : "hidden" }}>
+          <video ref={videoRef} muted playsInline style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+          {running && (
+            <>
+              <span aria-hidden="true" style={{ position: "absolute", inset: "12% 5%", border: "1.5px solid rgba(255,255,255,.7)", borderRadius: 16, boxShadow: "0 0 0 1px rgba(0,0,0,.16) inset", pointerEvents: "none" }} />
+              <p style={{ position: "absolute", inset: "12% 5%", margin: 0, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", color: "rgba(255,255,255,.6)", fontSize: 15, fontWeight: 700, letterSpacing: ".005em", textShadow: "0 1px 3px rgba(0,0,0,.5)", padding: "0 24px", pointerEvents: "none" }}>
+                Scan a product to see how it fits your day
+              </p>
+            </>
+          )}
+        </div>
+      </div>
 
       {!running && (
         <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", padding: 24, textAlign: "center" }}>
           <div style={{ display: "grid", gap: 16, maxWidth: 320 }}>
             <p style={{ margin: 0, color: "rgba(255,255,255,.7)", fontSize: 14, lineHeight: 1.5 }}>
-              Same camera start code as the real scanner (rear camera, zoom forced to 1×), just rendered with <code>object-fit: contain</code> instead of <code>cover</code> — nothing here touches the real scanner.
+              Same camera start code as the real scanner (rear camera, zoom forced to 1×). The video box is capped at a <code>3:4</code> aspect and uses <code>object-fit: cover</code> only within it, instead of full-bleed on the whole screen — nothing here touches the real scanner.
             </p>
             {error && <p style={{ margin: 0, color: "#ff8171", fontSize: 13 }}>{error}</p>}
             <button onClick={() => void start()} style={{ minHeight: 52, borderRadius: 26, border: 0, background: "linear-gradient(180deg,#5b9dff,#1f66e8)", color: "#fff", fontSize: 15, fontWeight: 850 }}>
