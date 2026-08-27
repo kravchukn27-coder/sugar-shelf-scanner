@@ -4,17 +4,15 @@ import "./barcode-recovery.css";
 import "./sugar-fit-results.css";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import OnboardingStory from "./onboarding-story";
 import { SugarFitResultHandle, SugarFitResultsSheet } from "./sugar-fit-results";
-import cameraControlsStyles from "./camera-lens.module.css";
 import type { AnalyzeScanResponse, Detection, PreflightScanResponse } from "@/lib/contracts/scan";
 import { formatSugarPer100g } from "@/lib/scoring/format-sugar";
 import { createSugarScore } from "@/lib/scoring/sugar-score";
 import { calculateSugarFit } from "@/lib/scoring/sugar-fit";
-import { groupRepeatedDetections, type DetectionGroup } from "@/lib/scan/deduplicate-detections";
+import { groupRepeatedDetections, sortDetectionGroupsBySugarFit, type DetectionGroup } from "@/lib/scan/deduplicate-detections";
 import { getCenteredFrameCrop } from "@/lib/scan/frame-crop";
 import { getCameraDiagnosticSnapshot, type CameraDiagnosticSnapshot } from "@/lib/scan/camera-diagnostics";
-import { applyCameraView, getCameraControls, getCameraDeviceId, preferCameraCaptureQuality, rearCameraRequest, supportsTorch, type CameraControls } from "@/lib/scan/media-capabilities";
+import { applyCameraView, getCameraControls, getCameraDeviceId, preferCameraCaptureQuality, rearCameraRequest, supportsTorch } from "@/lib/scan/media-capabilities";
 import { shouldRunScannerScheduler, transitionScannerLifecycle, type ScannerLifecycleEvent, type ScannerLifecycleState } from "@/lib/scan/scanner-lifecycle";
 import { createScannerMetrics, type ScannerMetricsCompletion } from "@/lib/scan/scanner-metrics";
 import { sampleLuma } from "@/lib/scan/frame-stillness";
@@ -28,7 +26,6 @@ import { catalogProposalErrorMessage, catalogProposalSubmissionOutcome, GENERIC_
 import { getMockShelfScan, getSugarFitDemoScan, SUGAR_FIT_DEMO_IMAGE } from "@/lib/mock/scan-fixtures";
 
 const FRAME_INTERVAL = 650;
-const ONBOARDING_SEEN_KEY = "sugar:onboarding-seen:v1";
 const PREFLIGHT_CANDIDATE_CONFIDENCE_THRESHOLD = 0.65;
 const clientScannerMetricsEnabled = process.env.NEXT_PUBLIC_SCANNER_METRICS_ENABLED === "true";
 // Default-on for live camera; set NEXT_PUBLIC_FRAME_QUALITY_ENABLED=false for fast rollback.
@@ -70,8 +67,6 @@ export default function HomePage() {
   const [showCameraDiagnostics, setShowCameraDiagnostics] = useState(false);
   const [sheet, setSheet] = useState(false), [selected, setSelected] = useState<string | null>(null);
   const [torchAvailable, setTorchAvailable] = useState(false), [torchOn, setTorchOn] = useState(false);
-  const [cameraControls, setCameraControls] = useState<CameraControls>({ torchAvailable: false, standardZoom: null, closerZoom: null });
-  const [trueOneXCapture, setTrueOneXCapture] = useState(false);
   const [recovery, setRecovery] = useState<RecoveryInfo | null>(null);
   const [recoveryCamera, setRecoveryCamera] = useState<{ id: string; mode: "package" | "label" } | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
@@ -79,12 +74,10 @@ export default function HomePage() {
   const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
   const [recoverySubmissionBanner, setRecoverySubmissionBanner] = useState<string | null>(null);
   const [labelDraft, setLabelDraft] = useState<NutritionLabelDraft | null>(null);
-  const [showIntro, setShowIntro] = useState(false);
-  const [introResolved, setIntroResolved] = useState(false);
   const [analysisPhase, setAnalysisPhase] = useState<"identifying" | "catalog" | "slow">("identifying");
-  const [liveHint, setLiveHint] = useState<string | null>(null);
   const [deferAutoResults, setDeferAutoResults] = useState(false);
   const groups = groupRepeatedDetections((scan?.detections ?? []).filter(eligible));
+  const rankedGroups = sortDetectionGroupsBySugarFit(groups);
   const dispatch = useCallback((event: ScannerLifecycleEvent) => setState((current) => transitionScannerLifecycle(current, event)), []);
   const resetScanMetrics = useCallback(() => { scannerMetricsEnabled.current = false; scannerMetrics.current.reset(); }, []);
   const noteMetricsCapability = useCallback((response: Response) => { if (clientScannerMetricsEnabled && response.headers.get("X-Scanner-Metrics") === "enabled") scannerMetricsEnabled.current = true; }, []);
@@ -102,26 +95,9 @@ export default function HomePage() {
     });
   }, []);
   useEffect(() => {
-    try {
-      setShowIntro(window.localStorage.getItem(ONBOARDING_SEEN_KEY) !== "1");
-    } catch {
-      setShowIntro(true);
-    }
-    setIntroResolved(true);
-  }, []);
-  const finishIntro = useCallback(() => {
-    try {
-      window.localStorage.setItem(ONBOARDING_SEEN_KEY, "1");
-    } catch {
-      // The experience still closes when browser storage is unavailable.
-    }
-    setShowIntro(false);
-  }, []);
-  useEffect(() => {
     const demo = new URLSearchParams(window.location.search).get("demo");
     if (demo !== "sugar-fit" && demo !== "sugar-fit-multi") return;
     const demoScan = demo === "sugar-fit-multi" ? getMockShelfScan("demo-multi") : getSugarFitDemoScan();
-    setShowIntro(false);
     setFrozen(SUGAR_FIT_DEMO_IMAGE);
     setDeferAutoResults(true);
     setState("captured_analyzing");
@@ -135,8 +111,8 @@ export default function HomePage() {
       window.clearTimeout(openProduct);
     };
   }, []);
-  const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); setCameraDiagnostics(null); setCameraControls({ torchAvailable: false, standardZoom: null, closerZoom: null }); setTrueOneXCapture(false); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
-  const clearResult = useCallback(() => { setRecovery(null); setRecoveryCamera(null); setRecoveryBusy(false); setRecoveryMessage(null); setRecoverySubmissionBanner(null); setLabelDraft(null); setScan(null); setFrozen(null); setFailure(null); setSheet(false); setSelected(null); setUploadBusy(false); setLiveHint(null); }, []);
+  const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); setCameraDiagnostics(null); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
+  const clearResult = useCallback(() => { setRecovery(null); setRecoveryCamera(null); setRecoveryBusy(false); setRecoveryMessage(null); setRecoverySubmissionBanner(null); setLabelDraft(null); setScan(null); setFrozen(null); setFailure(null); setSheet(false); setSelected(null); setUploadBusy(false); }, []);
   const turnTorchOffAfterCapture = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; if (!torchOn || !track) return; try { await track.applyConstraints({ advanced: [{ torch: false } as unknown as MediaTrackConstraintSet] }); setTorchOn(false); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
 
   const capture = useCallback((source: HTMLVideoElement | HTMLImageElement, width: number, quality: number, zoom = 1) => {
@@ -168,10 +144,9 @@ export default function HomePage() {
   }, []);
 
   const analyze = useCallback(async (source: HTMLVideoElement | HTMLImageElement, id: number) => {
-    // The default final frame uses a modest centred crop after preflight. The
-    // optional 1× control keeps it un-cropped for a direct framing comparison.
+    // The final frame uses a modest centred crop after preflight.
     const encodeStartedAt = performance.now();
-    const image = capture(source, 960, .7, trueOneXCapture ? 1 : 1.12); scannerMetrics.current.recordCaptureEncode(encodeStartedAt); if (!image || id !== session.current) return;
+    const image = capture(source, 960, .7, 1.12); scannerMetrics.current.recordCaptureEncode(encodeStartedAt); if (!image || id !== session.current) return;
     // Keep the exact JPEG sent to Gemini for both camera and gallery scans.
     // Detection boxes and per-product thumbnails then share one coordinate
     // system instead of being remapped onto the uncropped gallery original.
@@ -197,7 +172,7 @@ export default function HomePage() {
       if (id === session.current && source instanceof HTMLImageElement) setUploadBusy(false);
       if (id === session.current && abortRef.current === controller) { inFlight.current = false; abortRef.current = null; }
     }
-  }, [capture, completeScanMetrics, dispatch, noteMetricsCapability, trueOneXCapture, turnTorchOffAfterCapture]);
+  }, [capture, completeScanMetrics, dispatch, noteMetricsCapability, turnTorchOffAfterCapture]);
 
   const preflight = useCallback(async (source: HTMLVideoElement | HTMLImageElement) => {
     if (inFlight.current || sheet || !shouldRunScannerScheduler(state)) return;
@@ -217,14 +192,12 @@ export default function HomePage() {
       if (result.decision !== "candidate" || result.packagedProductCount < 1 || result.confidence < PREFLIGHT_CANDIDATE_CONFIDENCE_THRESHOLD) {
         const isUpload = source instanceof HTMLImageElement;
         if (isUpload) setUploadBusy(false);
-        if (!isUpload && result.decision === "uncertain") { setLiveHint("Move a little closer, or hold steady for a moment…"); return; }
-        setLiveHint(null);
+        if (!isUpload && result.decision === "uncertain") return;
         setFailure(result.decision === "uncertain" ? "Move closer to a packaged product" : "No packaged products detected\nMove your camera closer");
         dispatch("NO_SCENE");
         completeScanMetrics(id, "preflight_terminal");
         return;
       }
-      setLiveHint(null);
       await analyze(source, id);
     } catch (error) { finishRequestTiming(); if (id === session.current && !(error instanceof DOMException && error.name === "AbortError")) { if (source instanceof HTMLImageElement) setUploadBusy(false); setFailure("Couldn’t check this scene"); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); } }
     finally {
@@ -254,7 +227,7 @@ export default function HomePage() {
       try { await preferCameraCaptureQuality(track); } catch { /* Retain Safari's selected mode if its quality preference is unsupported. */ }
       let controls = getCameraControls(track);
       if (controls.standardZoom !== null) { try { await applyCameraView(track, controls, "standard"); } catch { controls = { ...controls, standardZoom: null, closerZoom: null }; } }
-      setCameraControls(controls); setTorchAvailable(controls.torchAvailable); setCameraDiagnostics(getCameraDiagnosticSnapshot(track)); videoRef.current.srcObject = stream; await videoRef.current.play();
+      setTorchAvailable(controls.torchAvailable); setCameraDiagnostics(getCameraDiagnosticSnapshot(track)); videoRef.current.srcObject = stream; await videoRef.current.play();
       if (id === session.current) {
         scannerMetrics.current.markCaptureReady();
         stillnessFingerprint.current = createInitialLiveFrameBaseline(immediateBaselineEnabled, sampleLiveFrame(videoRef.current)?.luma ?? null);
@@ -265,18 +238,6 @@ export default function HomePage() {
   }, [clearResult, resetScanMetrics, sampleLiveFrame, stopStream]);
   const close = useCallback(() => { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
   const toggleTorch = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !torchOn; if (!track || !supportsTorch(track)) return setTorchAvailable(false); try { await track.applyConstraints({ advanced: [{ torch: next } as unknown as MediaTrackConstraintSet] }); setTorchOn(next); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
-  const toggleTrueOneXCapture = useCallback(async () => {
-    const next = !trueOneXCapture;
-    if (next) {
-      const track = streamRef.current?.getVideoTracks()[0];
-      try {
-        const applied = await applyCameraView(track, cameraControls, "standard");
-        if (!applied) { setCameraControls((current) => ({ ...current, standardZoom: null })); return; }
-        setCameraDiagnostics(getCameraDiagnosticSnapshot(track));
-      } catch { setCameraControls((current) => ({ ...current, standardZoom: null })); return; }
-    }
-    setTrueOneXCapture(next);
-  }, [cameraControls, trueOneXCapture]);
   const retry = useCallback(() => { if (!uploadUrl) void start(); else { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; clearResult(); resetScanMetrics(); setUploadBusy(true); dispatch("RETRY"); } }, [clearResult, dispatch, resetScanMetrics, start, uploadUrl]);
   const startRecovery = useCallback((id: string, mode: "package" | "label" = "package") => {
     session.current += 1;
@@ -420,18 +381,17 @@ export default function HomePage() {
   const showAnalysisSpinner = state === "captured_analyzing" || (uploadUrl !== null && uploadBusy && state === "live_searching");
   const recoveryActive = recoveryCamera !== null;
 
-  return <>{introResolved && showIntro && !recoveryActive && <OnboardingStory onFinish={finishIntro} />}<main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""} ${recoveryActive ? "recovery-active" : ""}`} aria-label={recoveryActive ? "Recovery camera" : "Sugar product scanner"}>
+  return <main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""} ${recoveryActive ? "recovery-active" : ""}`} aria-label={recoveryActive ? "Recovery camera" : "Sugar product scanner"}>
     {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video ref={videoRef} className="camera-preview" muted playsInline />}{frozen && !recoveryActive && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}{state !== "camera_off" && <div className="camera-vignette" />}
-    {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && (torchAvailable || cameraControls.standardZoom !== null) ? "" : "end"}`}><div className={cameraControlsStyles.controls}>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}{state === "live_searching" && cameraControls.standardZoom !== null ? <button className={`round-control ${trueOneXCapture ? cameraControlsStyles.active : ""}`} onClick={() => void toggleTrueOneXCapture()} aria-label={trueOneXCapture ? "Use default cropped capture" : "Use true 1× capture"} aria-pressed={trueOneXCapture}>1×</button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
+    {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && torchAvailable ? "" : "end"}`}><div>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
     {groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { setSelected(group.detection.id); setSheet(true); }} />)}
-    {state === "live_searching" && !uploadUrl && <><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint">{liveHint ?? "Scan a product to see how it fits your day"}</p></>}
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}
-    {state === "camera_off" && <ScannerHome onStart={() => void start()} onReplayIntro={() => setShowIntro(true)} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action="Try again" onAction={retry} failure />}
+    {state === "camera_off" && <ScannerHome onStart={() => void start()} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action="Try again" onAction={retry} failure />}
     {state === "captured_analyzing" && <CameraCopy>{analysisPhase === "identifying" ? "Calculating your Sugar Fit" : analysisPhase === "catalog" ? "Personalizing your result" : "Still working on your result"}</CameraCopy>}
     {state !== "camera_off" && state !== "captured_analyzing" && state !== "results" ? <label className={`gallery-button ${uploadBusy ? "busy" : ""}`} aria-label="Choose a product photo" aria-disabled={uploadBusy}><input type="file" accept="image/*" disabled={uploadBusy} onChange={(e) => { upload(e.target.files?.[0]); e.currentTarget.value = ""; }} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label> : null}
     {showCameraDiagnostics && cameraDiagnostics ? <CameraDiagnostics snapshot={cameraDiagnostics} /> : null}</>}
     {recoveryCamera && <RecoveryCamera key={`${recoveryCamera.id}-${recoveryCamera.mode}`} mode={recoveryCamera.mode} gtin={recovery?.barcode ?? null} allowLabel={recovery?.id === recoveryCamera.id && recovery.state === "barcode_not_found"} busy={recoveryBusy} cameraReady={recoveryCameraReady} message={recoveryMessage} draft={labelDraft} onCapture={() => void captureRecovery()} onModeChange={(mode) => { recoveryAttempt.current += 1; setRecoveryBusy(false); setRecoveryCamera((current) => current ? { ...current, mode } : current); setLabelDraft(null); setRecoveryMessage(null); }} onRetake={() => { recoveryAttempt.current += 1; setRecoveryBusy(false); setLabelDraft(null); setRecoveryMessage(null); }} onRestartCamera={() => startRecovery(recoveryCamera.id, recoveryCamera.mode)} onClose={() => { recoveryAttempt.current += 1; setRecoveryBusy(false); setRecoveryCameraReady(false); setRecoveryCamera(null); stopStream(); setRecoveryMessage(null); }} onSubmitted={(draft) => { const score = createSugarScore(draft.sugarPer100g, "nutrition_label"); setScan((current) => current ? { ...current, detections: current.detections.map((detection) => detection.id === recoveryCamera.id ? { ...detection, status: "estimate", visualCandidate: { brand: draft.brand ?? detection.visualCandidate.brand, name: draft.name ?? detection.visualCandidate.name, packSize: draft.packSize ?? detection.visualCandidate.packSize, gtin: recovery?.barcode ?? detection.visualCandidate.gtin }, product: { id: detection.product?.id ?? `demo-label-${detection.id}`, gtin: recovery?.barcode ?? null, brand: draft.brand ?? detection.visualCandidate.brand, name: draft.name ?? detection.visualCandidate.name ?? "Unidentified product", packSize: draft.packSize, imageUrl: null, energyKcalPer100g: draft.energyKcal, proteinPer100g: draft.proteinPer100g, fatPer100g: draft.fatPer100g, carbohydratesPer100g: draft.carbohydratesPer100g, score }, score, estimateReason: "Provisional nutrition-label draft — pending curator review." } : detection) } : current); recoveryAttempt.current += 1; setRecoveryBusy(false); setRecoveryCameraReady(false); setRecoveryCamera(null); stopStream(); setRecoveryMessage(null); setRecoverySubmissionBanner("Submitted for curator review. This demo result is provisional and has not changed the confirmed catalog."); setSheet(true); setSelected(recoveryCamera.id); }} onDraftChange={setLabelDraft} />}
-  </section>{state === "results" && !sheet && !recoveryActive && <SugarFitResultHandle groups={groups} frozenImage={frozen} onOpen={() => { setSelected(groups.length === 1 ? groups[0]?.detection.id ?? null : null); setSheet(true); }} />}{sheet && !recoveryActive && <SugarFitResultsSheet groups={groups} frozenImage={frozen} selectedId={selected} recoveryBanner={recoverySubmissionBanner} onSelect={setSelected} onClose={() => { setSheet(false); setSelected(null); }} onScanAgain={() => void start()} />}<canvas ref={canvasRef} className="hidden-canvas" /></main></>;
+  </section>{state === "results" && !sheet && !recoveryActive && <SugarFitResultHandle groups={rankedGroups} frozenImage={frozen} onOpen={() => { setSelected(rankedGroups.length === 1 ? rankedGroups[0]?.detection.id ?? null : null); setSheet(true); }} />}{sheet && !recoveryActive && <SugarFitResultsSheet groups={rankedGroups} frozenImage={frozen} selectedId={selected} recoveryBanner={recoverySubmissionBanner} onSelect={setSelected} onClose={() => { setSheet(false); setSelected(null); }} onScanAgain={() => void start()} />}<canvas ref={canvasRef} className="hidden-canvas" /></main>;
 }
 
 function RecoveryCamera({ mode, gtin, allowLabel, busy, cameraReady, message, draft, onCapture, onModeChange, onRetake, onRestartCamera, onClose, onSubmitted, onDraftChange }: { mode: "package" | "label"; gtin: string | null; allowLabel: boolean; busy: boolean; cameraReady: boolean; message: string | null; draft: NutritionLabelDraft | null; onCapture: () => void; onModeChange: (mode: "package" | "label") => void; onRetake: () => void; onRestartCamera: () => void; onClose: () => void; onSubmitted: (draft: NutritionLabelDraft) => void; onDraftChange: (draft: NutritionLabelDraft | null) => void }) {
@@ -469,7 +429,7 @@ function SugarNoWordmark() {
   </svg>;
 }
 
-function ScannerHome({ onStart, onReplayIntro }: { onStart: () => void; onReplayIntro: () => void }) {
+function ScannerHome({ onStart }: { onStart: () => void }) {
   return <div className="scanner-home">
     <div className="scanner-home-visual">
       <div className="scanner-home-orbit">
@@ -483,7 +443,6 @@ function ScannerHome({ onStart, onReplayIntro }: { onStart: () => void; onReplay
       <h1>See the shelf differently.</h1>
       <p>Point. Scan. Know what fits.</p>
       <button className="scanner-home-primary" type="button" onClick={onStart}>Start scanning</button>
-      <button className="scanner-home-replay" type="button" onClick={onReplayIntro}>Replay intro</button>
     </div>
   </div>;
 }
