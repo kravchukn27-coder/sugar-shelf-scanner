@@ -94,8 +94,10 @@
    frame's rounded corner. Rather than fabricate corner detail that doesn't
    exist, bleed the sharp foreground past the visible border by
    --camera-frame-bleed so its real (already-feathered) content physically
-   covers that seam instead. */
-.camera-canvas-transition,.camera-canvas-foreground{position:absolute;inset:calc(-1 * var(--camera-frame-bleed));display:block}
+   covers that seam instead. Both are replaced elements (canvas): inset alone
+   does not stretch a replaced element's used size, so width/height must be
+   set explicitly or the canvas collapses to its own backing-store size. */
+.camera-canvas-transition,.camera-canvas-foreground{position:absolute;inset:calc(-1 * var(--camera-frame-bleed));width:calc(100% + 2 * var(--camera-frame-bleed));height:calc(100% + 2 * var(--camera-frame-bleed));display:block}
 .camera-canvas-transition{z-index:1;opacity:.96;filter:blur(10px) brightness(.94)}
 .camera-canvas-foreground{z-index:2}
 .camera-capture-frame{position:absolute;z-index:3;inset:0;border-radius:var(--camera-frame-radius);pointer-events:none}
@@ -103,7 +105,7 @@
 .camera-capture-frame .live-hint{z-index:3;inset:0;margin:0;padding:0 24px;font-size:15px}
 .camera-result-backdrop{position:absolute;display:block;z-index:0;inset:-18px;width:calc(100% + 36px);height:calc(100% + 36px);opacity:1;filter:blur(14px) saturate(.96) brightness(.78);transform:none;pointer-events:none}
 .camera-result-preview{position:absolute;z-index:2;left:50%;top:50%;width:var(--camera-frame-width);height:auto;max-height:none;aspect-ratio:3 / 4;transform:translate(-50%,-50%);border-radius:var(--camera-frame-radius);opacity:1;pointer-events:none}
-.camera-result-transition,.camera-result-image{position:absolute;inset:calc(-1 * var(--camera-frame-bleed));display:block;object-fit:cover}
+.camera-result-transition,.camera-result-image{position:absolute;inset:0;width:100%;height:100%;display:block;border-radius:var(--camera-frame-radius);object-fit:cover}
 .camera-result-transition{z-index:1;filter:blur(10px) brightness(.94)}
 .camera-result-image{z-index:2;-webkit-mask-image:linear-gradient(to right,transparent,#000 var(--camera-edge-feather),#000 calc(100% - var(--camera-edge-feather)),transparent),linear-gradient(to bottom,transparent,#000 var(--camera-edge-feather),#000 calc(100% - var(--camera-edge-feather)),transparent);-webkit-mask-composite:source-in;mask-image:linear-gradient(to right,transparent,#000 var(--camera-edge-feather),#000 calc(100% - var(--camera-edge-feather)),transparent),linear-gradient(to bottom,transparent,#000 var(--camera-edge-feather),#000 calc(100% - var(--camera-edge-feather)),transparent);mask-composite:intersect}
 .camera-result-preview .viewfinder-guide{z-index:3;inset:0;border:1.35px solid rgba(255,255,255,.9);border-radius:var(--camera-frame-radius);box-shadow:0 0 12px rgba(255,255,255,.16),0 1px 2px rgba(0,0,0,.2),inset 0 0 0 .5px rgba(255,255,255,.2)}
