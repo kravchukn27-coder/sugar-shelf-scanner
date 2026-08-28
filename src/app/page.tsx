@@ -34,7 +34,10 @@ const PREFLIGHT_CANDIDATE_CONFIDENCE_THRESHOLD = 0.65;
 // consecutive same-reason ticks so a flickering cause (e.g. blur one tick,
 // glare the next) doesn't spam the copy; `uncertain` already cost a real
 // Gemini round trip, so it replaces the default text immediately.
-const LIVE_HINT_DEFAULT = "Scan a product to see how it fits your day";
+const LIVE_HINT_DEFAULT = "Point your camera at the product you want to analyze, then hold still.";
+const LIVE_HINT_CLOSER = "Move closer to the product.";
+const LIVE_HINT_DELAY_MS = 5_000;
+const PREFLIGHT_NO_CANDIDATE_COOLDOWN_MS = 2_500;
 const LIVE_HINT_COPY = {
   motion: "Hold still for a second",
   blur: "Hold still for a second",
@@ -51,9 +54,8 @@ const LIVE_HINT_STREAK_THRESHOLD = 2;
 const LIVE_HINT_IMMEDIATE_REASONS = new Set<LiveHintReason>(["uncertain", "connection"]);
 // A preflight failure only means "Gemini never answered" (timeout/5xx) for
 // these codes. It is retried silently up to this many times before giving up
-// with the blocking Try again prompt — that prompt is a deliberate token
-// guard for a genuine empty scene, and must stay reachable, but a transient
-// network blip on a live tick shouldn't cost the user a manual retry.
+// with the blocking Try again prompt. A valid no-candidate response remains
+// in the live camera with a short cooldown and a useful proximity hint.
 const PREFLIGHT_TRANSIENT_CODES = new Set(["provider_timeout", "provider_error"]);
 const PREFLIGHT_TRANSIENT_RETRY_LIMIT = 2;
 const clientScannerMetricsEnabled = process.env.NEXT_PUBLIC_SCANNER_METRICS_ENABLED === "true";
@@ -109,9 +111,11 @@ async function scanFailureMessage(response: Response) {
 }
 
 export default function HomePage() {
-  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), resultMetrics = useRef({ source: null as "camera" | "upload" | null, started: false, resultShown: false, productOpened: false, recommendationOpened: false }), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), preflightRetryStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
+  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), activeRequestKind = useRef<"preflight" | "analyze" | null>(null), nextPreflightAt = useRef(0), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), resultMetrics = useRef({ source: null as "camera" | "upload" | null, started: false, resultShown: false, productOpened: false, recommendationOpened: false }), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), preflightRetryStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
   const [liveHint, setLiveHint] = useState<string | null>(null);
+  const [longWaitHint, setLongWaitHint] = useState<string | null>(null);
+  const [cameraPreviewReady, setCameraPreviewReady] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [scan, setScan] = useState<AnalyzeScanResponse | null>(null);
   const [frozen, setFrozen] = useState<string | null>(null);
@@ -199,8 +203,8 @@ export default function HomePage() {
       window.clearTimeout(openProduct);
     };
   }, []);
-  const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); setCameraDiagnostics(null); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
-  const clearResult = useCallback(() => { setRecovery(null); setRecoveryCamera(null); setRecoveryBusy(false); setRecoveryMessage(null); setRecoverySubmissionBanner(null); setLabelDraft(null); setScan(null); setFrozen(null); setFailure(null); setSheet(false); setSelected(null); setUploadBusy(false); }, []);
+  const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; activeRequestKind.current = null; nextPreflightAt.current = 0; setCameraPreviewReady(false); streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); setCameraDiagnostics(null); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
+  const clearResult = useCallback(() => { setRecovery(null); setRecoveryCamera(null); setRecoveryBusy(false); setRecoveryMessage(null); setRecoverySubmissionBanner(null); setLabelDraft(null); setScan(null); setFrozen(null); setFailure(null); setLongWaitHint(null); setSheet(false); setSelected(null); setUploadBusy(false); }, []);
   const noteLiveHint = useCallback((reason: LiveHintReason | null) => {
     if (reason && LIVE_HINT_IMMEDIATE_REASONS.has(reason)) { liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(LIVE_HINT_COPY[reason]); return; }
     if (!reason) { liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); return; }
@@ -251,6 +255,7 @@ export default function HomePage() {
     // moving behind the frozen foreground/backdrop snapshot.
     if (source instanceof HTMLVideoElement) stopStream();
     inFlight.current = true;
+    activeRequestKind.current = "analyze";
     noteLiveHint(null);
     dispatch("CAPTURED");
     const controller = new AbortController(); abortRef.current = controller;
@@ -269,15 +274,16 @@ export default function HomePage() {
     } catch (error) { finishRequestTiming(); if (id === session.current && !(error instanceof DOMException && error.name === "AbortError")) { setFailure("Couldn’t analyze this frame"); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); } }
     finally {
       if (id === session.current && source instanceof HTMLImageElement) setUploadBusy(false);
-      if (id === session.current && abortRef.current === controller) { inFlight.current = false; abortRef.current = null; }
+      if (id === session.current && abortRef.current === controller) { inFlight.current = false; activeRequestKind.current = null; abortRef.current = null; }
     }
   }, [capture, completeScanMetrics, dispatch, noteLiveHint, noteMetricsCapability, reportNoDetectionResult, stopStream]);
 
   const preflight = useCallback(async (source: HTMLVideoElement | HTMLImageElement) => {
     if (inFlight.current || sheet || !shouldRunScannerScheduler(state)) return;
+    if (source instanceof HTMLVideoElement && performance.now() < nextPreflightAt.current) return;
     const encodeStartedAt = performance.now();
     const image = capture(source, 448, .55); scannerMetrics.current.recordCaptureEncode(encodeStartedAt); if (!image) return;
-    const id = session.current; inFlight.current = true; const controller = new AbortController(); abortRef.current = controller;
+    const id = session.current; inFlight.current = true; activeRequestKind.current = "preflight"; const controller = new AbortController(); abortRef.current = controller;
     const requestStartedAt = scannerMetrics.current.startRequest("preflight");
     let requestTimingFinished = false;
     const finishRequestTiming = () => { if (!requestTimingFinished) { scannerMetrics.current.finishRequest("preflight", requestStartedAt); requestTimingFinished = true; } };
@@ -316,8 +322,13 @@ export default function HomePage() {
       if (id !== session.current) return;
       if (result.decision !== "candidate" || result.packagedProductCount < 1 || result.confidence < PREFLIGHT_CANDIDATE_CONFIDENCE_THRESHOLD) {
         const isUpload = source instanceof HTMLImageElement;
-        if (isUpload) setUploadBusy(false);
-        if (!isUpload && result.decision === "uncertain") { noteLiveHint("uncertain"); return; }
+        if (!isUpload) {
+          nextPreflightAt.current = performance.now() + PREFLIGHT_NO_CANDIDATE_COOLDOWN_MS;
+          if (result.decision === "uncertain") noteLiveHint("uncertain");
+          else noteLiveHint(null);
+          return;
+        }
+        setUploadBusy(false);
         noteLiveHint(null);
         setFailure(result.decision === "uncertain" ? "Move closer to a packaged product" : "No packaged products detected\nMove your camera closer");
         reportNoDetectionResult();
@@ -325,6 +336,8 @@ export default function HomePage() {
         completeScanMetrics(id, "preflight_terminal");
         return;
       }
+      nextPreflightAt.current = 0;
+      setLongWaitHint(null);
       await analyze(source, id);
     } catch (error) {
       finishRequestTiming();
@@ -348,9 +361,25 @@ export default function HomePage() {
       // Full analysis owns its own controller. Do not clear inFlight here once
       // it has begun: that would let an upload/live scheduler start another
       // request or make Close unable to abort the full Gemini request.
-      if (id === session.current && abortRef.current === controller) { inFlight.current = false; abortRef.current = null; }
+      if (id === session.current && abortRef.current === controller) { inFlight.current = false; activeRequestKind.current = null; abortRef.current = null; }
     }
   }, [analyze, capture, completeScanMetrics, dispatch, noteLiveHint, noteMetricsCapability, reportNoDetectionResult, sheet, state]);
+
+  const analyzeNow = useCallback(() => {
+    const video = videoRef.current;
+    if (state !== "live_searching" || uploadUrl || recoveryCamera || !cameraPreviewReady
+      || !video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth || !video.videoHeight) return;
+    if (activeRequestKind.current === "analyze") return;
+    if (activeRequestKind.current === "preflight") {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      activeRequestKind.current = null;
+      inFlight.current = false;
+    }
+    nextPreflightAt.current = 0;
+    setLongWaitHint(null);
+    void analyze(video, session.current);
+  }, [analyze, cameraPreviewReady, recoveryCamera, state, uploadUrl]);
 
   const start = useCallback(async () => {
     const id = ++session.current; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); stopStream(); clearResult(); resetScanMetrics("camera"); setUploadUrl(null); setCameraKey((key) => key + 1); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
@@ -380,6 +409,7 @@ export default function HomePage() {
         refreshTorch();
         window.requestAnimationFrame(refreshTorch);
         window.setTimeout(refreshTorch, 300);
+        setCameraPreviewReady(true);
         scannerMetrics.current.markCaptureReady();
         stillnessFingerprint.current = createInitialLiveFrameBaseline(immediateBaselineEnabled, sampleLiveFrame(videoRef.current)?.luma ?? null);
       }
@@ -516,6 +546,14 @@ export default function HomePage() {
     return () => window.clearInterval(timer);
   }, [showCameraDiagnostics]);
   useEffect(() => { if (state !== "captured_analyzing") { setAnalysisPhase("identifying"); return; } setAnalysisPhase("identifying"); const toCatalog = window.setTimeout(() => setAnalysisPhase("catalog"), 1500); const toSlow = window.setTimeout(() => setAnalysisPhase("slow"), 7000); return () => { window.clearTimeout(toCatalog); window.clearTimeout(toSlow); }; }, [state]);
+  useEffect(() => {
+    if (state !== "live_searching" || uploadUrl || recoveryCamera || !cameraPreviewReady) {
+      setLongWaitHint(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setLongWaitHint((current) => current ?? LIVE_HINT_CLOSER), LIVE_HINT_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [cameraPreviewReady, recoveryCamera, state, uploadUrl]);
   useEffect(() => { if (!shouldRunScannerScheduler(state) || sheet || uploadUrl || recoveryCamera) return; const timer = window.setInterval(() => {
     const video = videoRef.current;
     if (!video?.readyState || inFlight.current) return;
@@ -565,12 +603,13 @@ export default function HomePage() {
     {frozen && !recoveryActive && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}
     {state !== "camera_off" && <div className="camera-vignette" />}
     {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && !uploadUrl ? "" : "end"}`}><div>{state === "live_searching" && !uploadUrl ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} disabled={!torchAvailable} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
-    {state === "live_searching" && !uploadUrl && <p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p>}
+    {state === "live_searching" && !uploadUrl && <p className="live-hint" aria-live="polite">{liveHint ?? longWaitHint ?? LIVE_HINT_DEFAULT}</p>}
     {groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}
     {state === "camera_off" && <ScannerHome onStart={() => void start()} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action="Try again" onAction={retry} failure />}
     {state === "captured_analyzing" && <CameraCopy>{analysisPhase === "identifying" ? "Calculating Your Fit" : analysisPhase === "catalog" ? "Personalizing your result" : "Still working on your result"}</CameraCopy>}
     {state !== "camera_off" && state !== "captured_analyzing" && state !== "results" ? <label className={`gallery-button ${uploadBusy ? "busy" : ""}`} aria-label="Choose a product photo" aria-disabled={uploadBusy}><input type="file" accept="image/*" disabled={uploadBusy} onChange={(e) => { upload(e.target.files?.[0]); e.currentTarget.value = ""; }} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label> : null}
+    {state === "live_searching" && !uploadUrl && <button className="analyze-now-button" type="button" disabled={!cameraPreviewReady} onClick={analyzeNow} aria-label="Analyze now"><span className="analyze-shutter" aria-hidden="true"><i /></span><span className="analyze-now-label">Analyze now</span></button>}
     {showCameraDiagnostics && cameraDiagnostics ? <CameraDiagnostics snapshot={cameraDiagnostics} layoutProbe={videoLayoutProbe} /> : null}</>}
     {recoveryCamera && <RecoveryCamera key={`${recoveryCamera.id}-${recoveryCamera.mode}`} mode={recoveryCamera.mode} gtin={recovery?.barcode ?? null} allowLabel={recovery?.id === recoveryCamera.id && recovery.state === "barcode_not_found"} busy={recoveryBusy} cameraReady={recoveryCameraReady} message={recoveryMessage} draft={labelDraft} onCapture={() => void captureRecovery()} onModeChange={(mode) => { recoveryAttempt.current += 1; setRecoveryBusy(false); setRecoveryCamera((current) => current ? { ...current, mode } : current); setLabelDraft(null); setRecoveryMessage(null); }} onRetake={() => { recoveryAttempt.current += 1; setRecoveryBusy(false); setLabelDraft(null); setRecoveryMessage(null); }} onRestartCamera={() => startRecovery(recoveryCamera.id, recoveryCamera.mode)} onClose={() => { recoveryAttempt.current += 1; setRecoveryBusy(false); setRecoveryCameraReady(false); setRecoveryCamera(null); stopStream(); setRecoveryMessage(null); }} onSubmitted={(draft) => { const score = createSugarScore(draft.sugarPer100g, "nutrition_label"); setScan((current) => current ? { ...current, detections: current.detections.map((detection) => detection.id === recoveryCamera.id ? { ...detection, status: "estimate", visualCandidate: { brand: draft.brand ?? detection.visualCandidate.brand, name: draft.name ?? detection.visualCandidate.name, packSize: draft.packSize ?? detection.visualCandidate.packSize, gtin: recovery?.barcode ?? detection.visualCandidate.gtin }, product: { id: detection.product?.id ?? `demo-label-${detection.id}`, gtin: recovery?.barcode ?? null, brand: draft.brand ?? detection.visualCandidate.brand, name: draft.name ?? detection.visualCandidate.name ?? "Unidentified product", packSize: draft.packSize, imageUrl: null, energyKcalPer100g: draft.energyKcal, proteinPer100g: draft.proteinPer100g, fatPer100g: draft.fatPer100g, carbohydratesPer100g: draft.carbohydratesPer100g, score }, score, estimateReason: "Provisional nutrition-label draft — pending curator review." } : detection) } : current); recoveryAttempt.current += 1; setRecoveryBusy(false); setRecoveryCameraReady(false); setRecoveryCamera(null); stopStream(); setRecoveryMessage(null); setRecoverySubmissionBanner("Submitted for curator review. This demo result is provisional and has not changed the confirmed catalog."); setSheet(true); setSelected(recoveryCamera.id); }} onDraftChange={setLabelDraft} />}
   </section>{state === "results" && !sheet && !recoveryActive && <SugarFitResultHandle groups={rankedGroups} frozenImage={frozen} onOpen={() => { reportResultInteraction("product_opened"); setSelected(rankedGroups.length === 1 ? rankedGroups[0]?.detection.id ?? null : null); setSheet(true); }} />}{sheet && !recoveryActive && <SugarFitResultsSheet groups={rankedGroups} frozenImage={frozen} selectedId={selected} recoveryBanner={recoverySubmissionBanner} onSelect={(id) => { if (id) reportResultInteraction("product_opened"); setSelected(id); }} onClose={() => { setSheet(false); setSelected(null); }} onScanAgain={() => void start()} onRecommendationOpen={() => reportResultInteraction("recommendation_opened")} />}<canvas ref={canvasRef} className="hidden-canvas" /></main>;
