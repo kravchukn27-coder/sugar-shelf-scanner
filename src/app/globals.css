@@ -60,3 +60,42 @@
 @keyframes scanner-home-wave{from{opacity:.35;transform:scaleX(.25)}to{opacity:.9;transform:scaleX(1)}}
 @media(max-height:720px){.scanner-home{grid-template-rows:55% 45%}.scanner-home-visual{padding-top:max(54px,calc(env(safe-area-inset-top) + 28px))}.scanner-home-orbit{width:min(62vw,260px)}.scanner-home-brand-card{min-height:110px;border-radius:32px}.scanner-home-copy{padding-top:20px}.scanner-home-copy p{margin-top:10px}.scanner-home-primary{min-height:54px;margin-top:20px}.scanner-home-replay{margin-top:8px}}
 @media(prefers-reduced-motion:reduce){.scanner-home-orbit,.scanner-home-brand-card,.scanner-home-copy h1,.scanner-home-copy p,.scanner-home-primary,.scanner-home-replay,.scanner-home-wave{animation:none}}
+
+/* Live iPhone viewfinder: WebKit's visible video compositor can retain stale
+   letterboxing across camera sessions. The video remains the technical media
+   source (capture, torch and scheduler), while canvases paint its decoded
+   pixels in a deterministic 3:4 foreground plus a clearly non-actionable
+   blurred backdrop. Existing controls intentionally remain scene-relative. */
+.technical-camera-source{position:absolute!important;width:1px!important;height:1px!important;inset:auto!important;right:0!important;bottom:0!important;opacity:0!important;pointer-events:none!important}
+.camera-canvas-backdrop{position:absolute;z-index:0;inset:-24px;width:calc(100% + 48px);height:calc(100% + 48px);opacity:.66;filter:blur(22px) saturate(.82) brightness(.46);transform:scale(1.03);pointer-events:none}
+.camera-live-preview{position:absolute;z-index:2;left:50%;top:50%;width:min(calc(100% - 36px),394px);aspect-ratio:3 / 4;max-height:calc(100% - 132px);transform:translate(-50%,-50%);overflow:hidden;border-radius:22px;background:transparent;box-shadow:0 18px 44px rgba(0,0,0,.24)}.camera-live-preview.active{background:#08080a}
+.camera-canvas-foreground{position:absolute;inset:0;width:100%;height:100%;display:block}
+.camera-live-preview .viewfinder-guide{z-index:2;inset:0;border:1.5px solid rgba(255,255,255,.74);border-radius:22px}
+.camera-live-preview .live-hint{z-index:3;inset:0;margin:0;padding:0 24px;font-size:15px}
+.camera-result-preview{z-index:2;left:50%;top:50%;width:min(calc(100% - 36px),394px);height:auto;aspect-ratio:3 / 4;max-height:calc(100% - 132px);transform:translate(-50%,-50%);border-radius:22px;object-fit:cover;opacity:1}
+.camera-result-overlay-stage{position:absolute;z-index:3;left:50%;top:50%;width:min(calc(100% - 36px),394px);aspect-ratio:3 / 4;max-height:calc(100% - 132px);transform:translate(-50%,-50%);pointer-events:none}
+.camera-result-overlay-stage .product-overlay{pointer-events:auto}
+@media(max-height:660px){.camera-live-preview,.camera-result-preview,.camera-result-overlay-stage{width:min(calc(100% - 36px),366px)}}
+
+/* Concept camera treatment. The 3:4 capture rectangle, its visible guide and
+   result overlays share one responsive width. The sharp canvas fades into an
+   aligned 3:4 transition canvas; the full-scene canvas only supplies context. */
+.camera-scene{--camera-frame-width:min(81%,438px,calc(75svh - 144px));--camera-frame-radius:22px;--camera-edge-feather:28px}
+.camera-vignette.camera-vignette-soft{background:linear-gradient(180deg,rgba(5,5,8,.18),transparent 27%,transparent 70%,rgba(5,5,8,.24))}
+.camera-canvas-backdrop{inset:-18px;width:calc(100% + 36px);height:calc(100% + 36px);opacity:1;filter:blur(14px) saturate(.96) brightness(.78);transform:scale(1.025)}
+.camera-live-preview{left:50%;top:50%;width:var(--camera-frame-width);max-height:none;aspect-ratio:3 / 4;transform:translate(-50%,-50%);overflow:visible;border-radius:0;background:transparent;box-shadow:none;pointer-events:none}
+.camera-live-preview.active{background:transparent}
+.camera-canvas-transition,.camera-canvas-foreground{position:absolute;inset:0;width:100%;height:100%;display:block;border-radius:var(--camera-frame-radius)}
+.camera-canvas-transition{z-index:1;opacity:.96;filter:blur(10px) brightness(.94)}
+.camera-canvas-foreground{z-index:2}
+.camera-capture-frame{position:absolute;z-index:3;inset:0;border-radius:var(--camera-frame-radius);pointer-events:none}
+.camera-capture-frame .viewfinder-guide{z-index:2;inset:0;border:1.35px solid rgba(255,255,255,.9);border-radius:var(--camera-frame-radius);box-shadow:0 0 12px rgba(255,255,255,.16),0 1px 2px rgba(0,0,0,.2),inset 0 0 0 .5px rgba(255,255,255,.2)}
+.camera-capture-frame .live-hint{z-index:3;inset:0;margin:0;padding:0 24px;font-size:15px}
+.camera-result-backdrop{z-index:0;inset:-18px;width:calc(100% + 36px);height:calc(100% + 36px);opacity:1;filter:blur(14px) saturate(.96) brightness(.78);transform:scale(1.025)}
+.camera-result-preview{position:absolute;z-index:2;left:50%;top:50%;width:var(--camera-frame-width);height:auto;max-height:none;aspect-ratio:3 / 4;transform:translate(-50%,-50%);border-radius:var(--camera-frame-radius);opacity:1;pointer-events:none}
+.camera-result-transition,.camera-result-image{position:absolute;inset:0;width:100%;height:100%;display:block;border-radius:var(--camera-frame-radius);object-fit:cover}
+.camera-result-transition{z-index:1;filter:blur(10px) brightness(.94)}
+.camera-result-image{z-index:2;-webkit-mask-image:linear-gradient(to right,transparent,#000 var(--camera-edge-feather),#000 calc(100% - var(--camera-edge-feather)),transparent),linear-gradient(to bottom,transparent,#000 var(--camera-edge-feather),#000 calc(100% - var(--camera-edge-feather)),transparent);-webkit-mask-composite:source-in;mask-image:linear-gradient(to right,transparent,#000 var(--camera-edge-feather),#000 calc(100% - var(--camera-edge-feather)),transparent),linear-gradient(to bottom,transparent,#000 var(--camera-edge-feather),#000 calc(100% - var(--camera-edge-feather)),transparent);mask-composite:intersect}
+.camera-result-preview .viewfinder-guide{z-index:3;inset:0;border:1.35px solid rgba(255,255,255,.9);border-radius:var(--camera-frame-radius);box-shadow:0 0 12px rgba(255,255,255,.16),0 1px 2px rgba(0,0,0,.2),inset 0 0 0 .5px rgba(255,255,255,.2)}
+.camera-result-overlay-stage{left:50%;top:50%;width:var(--camera-frame-width);max-height:none;aspect-ratio:3 / 4;transform:translate(-50%,-50%)}
+@media(max-height:660px){.camera-scene{--camera-frame-width:min(81%,366px,calc(75svh - 144px))}}

@@ -19,9 +19,6 @@ interface MutableDetectionGroup {
   count: number;
   box: NormalizedBox;
   memberIds: string[];
-  // Only set for estimate groups; used to enforce packSizesConflict once a
-  // group has multiple members that disagree on whether a size was legible.
-  packSize?: string | null;
 }
 
 function clamp(value: number): number {
@@ -60,33 +57,14 @@ function confirmedCatalogKey(detection: Detection): string | null {
 // per-facing sugar figures.
 const ESTIMATE_SUGAR_TOLERANCE = 5;
 
-interface EstimateIdentity {
-  brand: string;
-  name: string;
-  // Small-print pack size routinely fails to OCR on some facings of a dense
-  // shelf (angle, glare, distance) even when brand/name/sugar read fine.
-  // Treated as optional here rather than required: a facing with no legible
-  // pack size can still join a group, but two facings that both read a pack
-  // size still can't merge if those sizes actually differ (see packSizesConflict).
-  packSize: string | null;
-  sugar: number;
-}
-
-function estimateIdentity(detection: Detection): EstimateIdentity | null {
+function estimatePrefixKey(detection: Detection): string | null {
   if (detection.status !== "estimate" || detection.score.source !== "vision_estimate") return null;
   const brand = normalizeText(detection.visualCandidate.brand);
   const name = normalizeText(detection.visualCandidate.name);
+  const packSize = normalizeText(detection.visualCandidate.packSize);
   const sugar = detection.score.sugarPer100g;
-  if (!brand || !name || sugar === null || !Number.isFinite(sugar)) return null;
-  return { brand, name, packSize: normalizeText(detection.visualCandidate.packSize) || null, sugar };
-}
-
-function estimatePrefixKey(identity: EstimateIdentity, band: Detection["score"]["band"]): string {
-  return `estimate:${identity.brand}:${identity.name}:${band}`;
-}
-
-function packSizesConflict(a: string | null, b: string | null): boolean {
-  return a !== null && b !== null && a !== b;
+  if (!brand || !name || !packSize || sugar === null || !Number.isFinite(sugar)) return null;
+  return `estimate:${brand}:${name}:${packSize}:${detection.score.band}`;
 }
 
 /**
@@ -103,18 +81,15 @@ export function groupRepeatedDetections(detections: readonly Detection[]): Detec
   const estimateGroupsByPrefix = new Map<string, MutableDetectionGroup[]>();
   const orderedGroups: MutableDetectionGroup[] = [];
 
-  const addNewGroup = (detection: Detection, packSize?: string | null): MutableDetectionGroup => {
-    const group: MutableDetectionGroup = { detection, count: 1, box: { ...detection.box }, memberIds: [detection.id], packSize };
+  const addNewGroup = (detection: Detection): MutableDetectionGroup => {
+    const group: MutableDetectionGroup = { detection, count: 1, box: { ...detection.box }, memberIds: [detection.id] };
     orderedGroups.push(group);
     return group;
   };
-  const mergeInto = (group: MutableDetectionGroup, detection: Detection, packSize?: string | null) => {
+  const mergeInto = (group: MutableDetectionGroup, detection: Detection) => {
     group.count += 1;
     group.box = unionNormalizedBoxes(group.box, detection.box);
     group.memberIds.push(detection.id);
-    // Backfill: an earlier member with no legible pack size shouldn't keep the
-    // group blind to a size a later member did read.
-    if (group.packSize == null && packSize != null) group.packSize = packSize;
   };
 
   for (const detection of detections) {
@@ -126,17 +101,14 @@ export function groupRepeatedDetections(detections: readonly Detection[]): Detec
       continue;
     }
 
-    const identity = estimateIdentity(detection);
-    if (identity) {
-      const prefixKey = estimatePrefixKey(identity, detection.score.band);
+    const prefixKey = estimatePrefixKey(detection);
+    if (prefixKey) {
+      const sugar = detection.score.sugarPer100g as number;
       const candidates = estimateGroupsByPrefix.get(prefixKey) ?? [];
-      const match = candidates.find((group) =>
-        Math.abs((group.detection.score.sugarPer100g ?? Infinity) - identity.sugar) <= ESTIMATE_SUGAR_TOLERANCE
-        && !packSizesConflict(group.packSize ?? null, identity.packSize),
-      );
-      if (match) mergeInto(match, detection, identity.packSize);
+      const match = candidates.find((group) => Math.abs((group.detection.score.sugarPer100g ?? Infinity) - sugar) <= ESTIMATE_SUGAR_TOLERANCE);
+      if (match) mergeInto(match, detection);
       else {
-        const group = addNewGroup(detection, identity.packSize);
+        const group = addNewGroup(detection);
         candidates.push(group);
         estimateGroupsByPrefix.set(prefixKey, candidates);
       }

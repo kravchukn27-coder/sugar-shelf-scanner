@@ -11,6 +11,7 @@ import { createSugarScore } from "@/lib/scoring/sugar-score";
 import { calculateSugarFit } from "@/lib/scoring/sugar-fit";
 import { groupRepeatedDetections, sortDetectionGroupsBySugarFit, type DetectionGroup } from "@/lib/scan/deduplicate-detections";
 import { getCenteredFrameCrop } from "@/lib/scan/frame-crop";
+import { createCanvasPreviewLoop } from "@/lib/scan/canvas-preview";
 import { getCameraDiagnosticSnapshot, type CameraDiagnosticSnapshot } from "@/lib/scan/camera-diagnostics";
 import { applyCameraView, getCameraControls, getCameraDeviceId, preferCameraCaptureQuality, rearCameraRequest, supportsTorch } from "@/lib/scan/media-capabilities";
 import { shouldRunScannerScheduler, transitionScannerLifecycle, type ScannerLifecycleEvent, type ScannerLifecycleState } from "@/lib/scan/scanner-lifecycle";
@@ -29,8 +30,9 @@ import { getMockShelfScan, getSugarFitDemoScan, SUGAR_FIT_DEMO_IMAGE } from "@/l
 
 const FRAME_INTERVAL = 650;
 const PREFLIGHT_CANDIDATE_CONFIDENCE_THRESHOLD = 0.65;
-// Live-camera hint copy. The default text stays over the raw preview; a
-// skip/uncertain reason below temporarily replaces it. A local skip reason only surfaces after two
+// Live-viewfinder hint copy. The default (idle) text is always visible
+// alongside the .viewfinder-guide frame; a skip/uncertain reason below
+// temporarily replaces it. A local skip reason only surfaces after two
 // consecutive same-reason ticks so a flickering cause (e.g. blur one tick,
 // glare the next) doesn't spam the copy; `uncertain` already cost a real
 // Gemini round trip, so it replaces the default text immediately.
@@ -109,8 +111,9 @@ async function scanFailureMessage(response: Response) {
 }
 
 export default function HomePage() {
-  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), resultMetrics = useRef({ source: null as "camera" | "upload" | null, started: false, resultShown: false, productOpened: false, recommendationOpened: false }), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), preflightRetryStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
+  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), livePreviewRef = useRef<HTMLDivElement>(null), liveCanvasRef = useRef<HTMLCanvasElement>(null), liveTransitionCanvasRef = useRef<HTMLCanvasElement>(null), liveBackdropCanvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), resultMetrics = useRef({ source: null as "camera" | "upload" | null, started: false, resultShown: false, productOpened: false, recommendationOpened: false }), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), preflightRetryStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
+  const [canvasPreviewActive, setCanvasPreviewActive] = useState(false);
   const [liveHint, setLiveHint] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [scan, setScan] = useState<AnalyzeScanResponse | null>(null);
@@ -201,6 +204,7 @@ export default function HomePage() {
   }, []);
   const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); setCameraDiagnostics(null); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
   const clearResult = useCallback(() => { setRecovery(null); setRecoveryCamera(null); setRecoveryBusy(false); setRecoveryMessage(null); setRecoverySubmissionBanner(null); setLabelDraft(null); setScan(null); setFrozen(null); setFailure(null); setSheet(false); setSelected(null); setUploadBusy(false); }, []);
+  const turnTorchOffAfterCapture = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; if (!torchOn || !track) return; try { await track.applyConstraints({ advanced: [{ torch: false } as unknown as MediaTrackConstraintSet] }); setTorchOn(false); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
   const noteLiveHint = useCallback((reason: LiveHintReason | null) => {
     if (reason && LIVE_HINT_IMMEDIATE_REASONS.has(reason)) { liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(LIVE_HINT_COPY[reason]); return; }
     if (!reason) { liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); return; }
@@ -215,7 +219,9 @@ export default function HomePage() {
     // The detached Image used for uploads has no layout box. Analyze the same
     // crop that the visible upload preview uses, otherwise Gemini's normalized
     // boxes cannot line up with portrait photos on screen.
-    const preview = source instanceof HTMLImageElement ? uploadPreviewRef.current?.getBoundingClientRect() ?? source.getBoundingClientRect() : source.getBoundingClientRect();
+    // The visible live preview is a stable 3:4 canvas; use its rect rather
+    // than the hidden WebKit video surface so the JPEG crop matches it.
+    const preview = source instanceof HTMLImageElement ? uploadPreviewRef.current?.getBoundingClientRect() ?? source.getBoundingClientRect() : livePreviewRef.current?.getBoundingClientRect() ?? source.getBoundingClientRect();
     const crop = getCenteredFrameCrop(w, h, preview.width, preview.height, zoom);
     if (!canvas || !crop) return null;
     canvas.width = width; canvas.height = Math.max(1, Math.round(width / crop.aspect)); canvas.getContext("2d")?.drawImage(source, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, canvas.width, canvas.height);
@@ -238,18 +244,41 @@ export default function HomePage() {
     }
   }, []);
 
+  // iOS Safari can paint the <video> decoder surface with stale letterboxing
+  // after a camera restart. Keep that element only as the media source and
+  // paint its decoded pixels ourselves. All preview canvases deliberately
+  // share one stream: the sharp 3:4 foreground is the real viewfinder, while
+  // the full-screen copy is only a blurred backdrop and never implies extra FOV.
+  useEffect(() => {
+    setCanvasPreviewActive(false);
+    if (state !== "live_searching" || uploadUrl || recoveryCamera) return;
+    const video = videoRef.current;
+    const foreground = liveCanvasRef.current;
+    const transition = liveTransitionCanvasRef.current;
+    const backdrop = liveBackdropCanvasRef.current;
+    if (!video || !foreground || !transition || !backdrop) return;
+    let painted = false;
+    const loop = createCanvasPreviewLoop({ video, targets: [{ canvas: foreground, fps: 30, edgeFeatherPx: 28, cornerRadiusPx: 22 }, { canvas: transition, fps: 15 }, { canvas: backdrop, fps: 15 }], maxPixels: 1_250_000, maxDevicePixelRatio: 2, onFrameDrawn: () => { if (!painted) { painted = true; setCanvasPreviewActive(true); } } });
+    const onVisibilityChange = () => {
+      if (document.hidden) loop.stop();
+      else loop.start();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    loop.start();
+    return () => { document.removeEventListener("visibilitychange", onVisibilityChange); loop.stop(); };
+  }, [recoveryCamera, state, uploadUrl]);
+
   const analyze = useCallback(async (source: HTMLVideoElement | HTMLImageElement, id: number) => {
-    // Capture the same full-screen cover geometry used by the raw camera.
+    // Live captures use the identical centred 3:4 crop painted in the
+    // viewfinder canvas, so the user never sees a different field of view in
+    // the frozen result. Gallery images retain their existing preview crop.
     const encodeStartedAt = performance.now();
     const image = capture(source, 960, .7); scannerMetrics.current.recordCaptureEncode(encodeStartedAt); if (!image || id !== session.current) return;
     // Keep the exact JPEG sent to Gemini for both camera and gallery scans.
     // Detection boxes and per-product thumbnails then share one coordinate
     // system instead of being remapped onto the uncropped gallery original.
     setFrozen(image);
-    // The analysis request has its own encoded JPEG now. Stop the physical
-    // camera at the capture boundary so no WebKit compositor layer can keep
-    // moving behind the frozen foreground/backdrop snapshot.
-    if (source instanceof HTMLVideoElement) stopStream();
+    if (source instanceof HTMLVideoElement) void turnTorchOffAfterCapture();
     inFlight.current = true;
     noteLiveHint(null);
     dispatch("CAPTURED");
@@ -271,7 +300,7 @@ export default function HomePage() {
       if (id === session.current && source instanceof HTMLImageElement) setUploadBusy(false);
       if (id === session.current && abortRef.current === controller) { inFlight.current = false; abortRef.current = null; }
     }
-  }, [capture, completeScanMetrics, dispatch, noteLiveHint, noteMetricsCapability, reportNoDetectionResult, stopStream]);
+  }, [capture, completeScanMetrics, dispatch, noteLiveHint, noteMetricsCapability, reportNoDetectionResult, turnTorchOffAfterCapture]);
 
   const preflight = useCallback(async (source: HTMLVideoElement | HTMLImageElement) => {
     if (inFlight.current || sheet || !shouldRunScannerScheduler(state)) return;
@@ -373,13 +402,6 @@ export default function HomePage() {
       if (controls.standardZoom !== null) { try { await applyCameraView(track, controls, "standard"); } catch { controls = { ...controls, standardZoom: null, closerZoom: null }; } }
       setTorchAvailable(controls.torchAvailable); setCameraDiagnostics(getCameraDiagnosticSnapshot(track)); videoRef.current.srcObject = stream; await videoRef.current.play();
       if (id === session.current) {
-        // Safari can expose torch capability only after the first decoded
-        // frame. Re-read it after play and once more on the next frame so the
-        // control is ready on the first camera session, not only after Retry.
-        const refreshTorch = () => { if (id === session.current && streamRef.current === stream) setTorchAvailable(supportsTorch(track)); };
-        refreshTorch();
-        window.requestAnimationFrame(refreshTorch);
-        window.setTimeout(refreshTorch, 300);
         scannerMetrics.current.markCaptureReady();
         stillnessFingerprint.current = createInitialLiveFrameBaseline(immediateBaselineEnabled, sampleLiveFrame(videoRef.current)?.luma ?? null);
       }
@@ -388,7 +410,7 @@ export default function HomePage() {
     catch { if (id === session.current) { setFailure("Camera unavailable. Check permission and try again."); setState((current) => transitionScannerLifecycle(current, "ANALYZE_FAILURE")); } }
   }, [clearResult, resetScanMetrics, sampleLiveFrame, stopStream]);
   const close = useCallback(() => { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
-  const toggleTorch = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !torchOn; if (!track) return; try { await track.applyConstraints({ advanced: [{ torch: next } as unknown as MediaTrackConstraintSet] }); setTorchAvailable(true); setTorchOn(next); } catch { setTorchAvailable(supportsTorch(track)); setTorchOn(false); } }, [torchOn]);
+  const toggleTorch = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !torchOn; if (!track || !supportsTorch(track)) return setTorchAvailable(false); try { await track.applyConstraints({ advanced: [{ torch: next } as unknown as MediaTrackConstraintSet] }); setTorchOn(next); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
   const retry = useCallback(() => { if (!uploadUrl) void start(); else { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); clearResult(); resetScanMetrics("upload"); setUploadBusy(true); dispatch("RETRY"); } }, [clearResult, dispatch, resetScanMetrics, start, uploadUrl]);
   const startRecovery = useCallback((id: string, mode: "package" | "label" = "package") => {
     session.current += 1;
@@ -561,12 +583,11 @@ export default function HomePage() {
   const recoveryActive = recoveryCamera !== null;
 
   return <main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""} ${recoveryActive ? "recovery-active" : ""}`} aria-label={recoveryActive ? "Recovery camera" : "Sugar product scanner"}>
-    {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video key={cameraKey} ref={videoRef} className="camera-preview" muted playsInline />}
-    {frozen && !recoveryActive && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}
-    {state !== "camera_off" && <div className="camera-vignette" />}
-    {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && !uploadUrl ? "" : "end"}`}><div>{state === "live_searching" && !uploadUrl ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} disabled={!torchAvailable} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
-    {state === "live_searching" && !uploadUrl && <p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p>}
-    {groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}
+    {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video key={cameraKey} ref={videoRef} className={`camera-preview ${!recoveryActive && canvasPreviewActive ? "technical-camera-source" : ""}`} muted playsInline />}
+    {state === "live_searching" && !uploadUrl && !recoveryActive && <><canvas ref={liveBackdropCanvasRef} className="camera-canvas-backdrop" aria-hidden="true" /><div className={`camera-live-preview ${canvasPreviewActive ? "active" : ""}`}><canvas ref={liveTransitionCanvasRef} className="camera-canvas-transition" aria-hidden="true" /><canvas ref={liveCanvasRef} className="camera-canvas-foreground" aria-hidden="true" /><div ref={livePreviewRef} className="camera-capture-frame"><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p></div></div></>}
+    {frozen && !recoveryActive && <>{!uploadUrl && <><img className="camera-preview camera-result-backdrop" src={frozen} alt="" aria-hidden="true" /><div className="camera-result-preview"><img className="camera-result-transition" src={frozen} alt="" aria-hidden="true" /><img className="frozen-preview camera-result-image" src={frozen} alt="Captured products" /><span className="viewfinder-guide" aria-hidden="true" /></div></>}{uploadUrl && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}</>}{state !== "camera_off" && <div className={`camera-vignette ${!uploadUrl && !recoveryActive ? "camera-vignette-soft" : ""}`} />}
+    {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && torchAvailable ? "" : "end"}`}><div>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
+    <div className={frozen && !uploadUrl && !recoveryActive ? "camera-result-overlay-stage" : "camera-overlay-stage"}>{groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}</div>
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}
     {state === "camera_off" && <ScannerHome onStart={() => void start()} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action="Try again" onAction={retry} failure />}
     {state === "captured_analyzing" && <CameraCopy>{analysisPhase === "identifying" ? "Calculating Your Fit" : analysisPhase === "catalog" ? "Personalizing your result" : "Still working on your result"}</CameraCopy>}

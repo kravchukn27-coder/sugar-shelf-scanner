@@ -22,12 +22,6 @@ export type CanvasPreviewTarget = {
   canvas: HTMLCanvasElement;
   /** Maximum refresh rate. The sharp layer normally uses 30; blur 15. */
   fps: number;
-  /**
-   * Use an already-painted canvas instead of the raw video. The backdrop uses
-   * the sharp 3:4 foreground as its source, so it is a blurred enlargement of
-   * exactly the same composition rather than a competing camera crop.
-   */
-  sourceCanvas?: HTMLCanvasElement;
   blurPx?: number;
   brightness?: number;
   /** Softens the target's alpha at every edge. Measured in CSS pixels. */
@@ -106,6 +100,13 @@ export function shouldRenderCanvasFrame(lastRenderedAtMs: number | null, nowMs: 
   return lastRenderedAtMs === null || nowMs - lastRenderedAtMs >= 1000 / fps;
 }
 
+/**
+ * Returns the alpha at a point inside a feathered rounded rectangle.
+ *
+ * Geometry is based on the signed distance to the rounded rectangle, so the
+ * transition has the same physical width along straight edges and corners.
+ * A smoothstep curve avoids visible bands at either end of the transition.
+ */
 function roundedRectFeatherAlphaAt(
   x: number,
   y: number,
@@ -126,7 +127,6 @@ function roundedRectFeatherAlphaAt(
   return progress * progress * (3 - 2 * progress);
 }
 
-/** Returns a smooth alpha based on signed distance to a rounded rectangle. */
 export function getRoundedRectFeatherAlpha(
   point: { x: number; y: number },
   size: CanvasPreviewSize,
@@ -148,12 +148,11 @@ export function getRoundedRectFeatherAlpha(
 
 function getFeatherMask(
   targetCanvas: HTMLCanvasElement,
-  cssSize: CanvasPreviewSize,
+  width: number,
+  height: number,
   edgeFeatherPx: number,
   cornerRadiusPx: number,
 ) {
-  const width = Math.max(1, Math.round(cssSize.width));
-  const height = Math.max(1, Math.round(cssSize.height));
   const cached = featherMasks.get(targetCanvas);
   if (cached && cached.width === width && cached.height === height
     && cached.edgeFeatherPx === edgeFeatherPx && cached.cornerRadiusPx === cornerRadiusPx) return cached.canvas;
@@ -171,6 +170,7 @@ function getFeatherMask(
   data.fill(255);
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 4;
       const alpha = roundedRectFeatherAlphaAt(
         x + 0.5,
         y + 0.5,
@@ -179,31 +179,12 @@ function getFeatherMask(
         edgeFeatherPx,
         cornerRadiusPx,
       );
-      data[(y * width + x) * 4 + 3] = Math.round(alpha * 255);
+      data[offset + 3] = Math.round(alpha * 255);
     }
   }
   maskContext.putImageData(imageData, 0, 0);
   featherMasks.set(targetCanvas, { canvas: maskCanvas, width, height, edgeFeatherPx, cornerRadiusPx });
   return maskCanvas;
-}
-
-function applyTargetFeatherMask(
-  context: CanvasRenderingContext2D,
-  target: CanvasPreviewTarget,
-  cssSize: CanvasPreviewSize,
-  backing: CanvasBackingSize,
-) {
-  if (!Number.isFinite(target.edgeFeatherPx) || (target.edgeFeatherPx ?? 0) <= 0) return;
-  const edgeFeatherPx = target.edgeFeatherPx ?? 0;
-  const cornerRadiusPx = Number.isFinite(target.cornerRadiusPx) ? Math.max(0, target.cornerRadiusPx ?? 0) : 0;
-  const mask = getFeatherMask(target.canvas, cssSize, edgeFeatherPx, cornerRadiusPx);
-  if (!mask) return;
-  context.save();
-  context.setTransform(1, 0, 0, 1, 0, 0);
-  context.filter = "none";
-  context.globalCompositeOperation = "destination-in";
-  context.drawImage(mask, 0, 0, backing.width, backing.height);
-  context.restore();
 }
 
 /** Draw one centred cover frame. Returns false until the video and canvas are ready. */
@@ -235,38 +216,23 @@ export function drawVideoFrameToCanvas(video: HTMLVideoElement, target: CanvasPr
     : "none";
   context.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, backing.width, backing.height);
   context.restore();
-  applyTargetFeatherMask(context, target, cssSize, backing);
-  return true;
-}
 
-/** Draw an existing canvas into a target with the same centred cover geometry. */
-export function drawCanvasFrameToCanvas(source: HTMLCanvasElement, target: CanvasPreviewTarget, options?: {
-  maxPixels?: number;
-  maxDevicePixelRatio?: number;
-  devicePixelRatio?: number;
-}): boolean {
-  const cssSize = { width: target.canvas.clientWidth, height: target.canvas.clientHeight };
-  const crop = getCoverCrop({ width: source.width, height: source.height }, cssSize);
-  if (!crop) return false;
-  const backing = getCanvasBackingSize(
-    cssSize,
-    options?.devicePixelRatio ?? (typeof window === "undefined" ? 1 : window.devicePixelRatio),
-    options?.maxPixels ?? DEFAULT_MAX_PIXELS,
-    options?.maxDevicePixelRatio ?? DEFAULT_MAX_DPR,
-  );
-  if (!backing) return false;
-  if (target.canvas.width !== backing.width) target.canvas.width = backing.width;
-  if (target.canvas.height !== backing.height) target.canvas.height = backing.height;
-  const context = target.canvas.getContext("2d");
-  if (!context) return false;
-  context.save();
-  context.clearRect(0, 0, backing.width, backing.height);
-  context.filter = target.blurPx || target.brightness
-    ? `blur(${target.blurPx ?? 0}px) brightness(${target.brightness ?? 1})`
-    : "none";
-  context.drawImage(source, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, backing.width, backing.height);
-  context.restore();
-  applyTargetFeatherMask(context, target, cssSize, backing);
+  if (Number.isFinite(target.edgeFeatherPx) && (target.edgeFeatherPx ?? 0) > 0) {
+    // The mask describes CSS-pixel geometry, so generating it at the backing
+    // store's Retina resolution only repeats the same alpha work. Keep the
+    // cached mask at CSS resolution and let drawImage interpolate it once.
+    const maskWidth = Math.max(1, Math.round(backing.width / backing.pixelRatio));
+    const maskHeight = Math.max(1, Math.round(backing.height / backing.pixelRatio));
+    const edgeFeatherPx = target.edgeFeatherPx ?? 0;
+    const cornerRadiusPx = Number.isFinite(target.cornerRadiusPx) ? Math.max(0, target.cornerRadiusPx ?? 0) : 0;
+    const mask = getFeatherMask(target.canvas, maskWidth, maskHeight, edgeFeatherPx, cornerRadiusPx);
+    if (mask) {
+      context.save();
+      context.globalCompositeOperation = "destination-in";
+      context.drawImage(mask, 0, 0, backing.width, backing.height);
+      context.restore();
+    }
+  }
   return true;
 }
 
@@ -292,9 +258,7 @@ export function createCanvasPreviewLoop(options: CanvasPreviewLoopOptions) {
     let painted = false;
     for (const target of options.targets) {
       if (shouldRenderCanvasFrame(lastDraws.get(target) ?? null, time, target.fps)
-        && (target.sourceCanvas
-          ? drawCanvasFrameToCanvas(target.sourceCanvas, target, options)
-          : drawVideoFrameToCanvas(options.video, target, options))) {
+        && drawVideoFrameToCanvas(options.video, target, options)) {
         lastDraws.set(target, time);
         painted = true;
       }
