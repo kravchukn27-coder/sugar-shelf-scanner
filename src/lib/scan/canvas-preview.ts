@@ -28,6 +28,19 @@ export type CanvasPreviewTarget = {
   edgeFeatherPx?: number;
   /** Radius of the feathered target boundary. Measured in CSS pixels. */
   cornerRadiusPx?: number;
+  /**
+   * Draw at the same source-to-CSS scale as this element's box instead of this
+   * target's own cover crop. A backdrop then reads as the blurred continuation
+   * of the viewfinder rather than an enlarged second crop of it. Where the
+   * continuation runs past the source, the nearest edge pixels are stretched.
+   */
+  continuationOf?: HTMLElement | null;
+};
+
+export type CanvasPreviewSource = {
+  image: CanvasImageSource;
+  width: number;
+  height: number;
 };
 
 export type CanvasPreviewLoopOptions = {
@@ -71,6 +84,80 @@ export function getCoverCrop(source: CanvasPreviewSize, destination: CanvasPrevi
 
   const sh = source.width / destinationAspect;
   return { sx: 0, sy: (source.height - sh) / 2, sw: source.width, sh };
+}
+
+/**
+ * Returns the centred source crop that fills `destination` at the very same
+ * source-to-CSS scale `reference` is drawn at.
+ *
+ * `reference` is the viewfinder: it shows a cover crop of the source, which
+ * fixes one scale. Reusing that scale for a larger destination means the crop
+ * has to grow, and it can grow past the source — a portrait viewfinder over a
+ * landscape camera has no more rows to give. The returned rectangle is
+ * therefore allowed to fall outside the source; the caller decides how to fill
+ * what is missing.
+ */
+export function getContinuationCrop(
+  source: CanvasPreviewSize,
+  reference: CanvasPreviewSize,
+  destination: CanvasPreviewSize,
+): DrawImageCrop | null {
+  const referenceCrop = getCoverCrop(source, reference);
+  if (!referenceCrop || !usable(destination) || referenceCrop.sw <= 0) return null;
+
+  const scale = reference.width / referenceCrop.sw;
+  if (!Number.isFinite(scale) || scale <= 0) return null;
+
+  const sw = destination.width / scale;
+  const sh = destination.height / scale;
+  return { sx: (source.width - sw) / 2, sy: (source.height - sh) / 2, sw, sh };
+}
+
+/**
+ * Draws `crop` of `source` across the whole destination, clamping to the
+ * source edges. A crop reaching past the source is drawn where it exists and
+ * the adjacent edge line is stretched into the remainder, which under the
+ * backdrop's blur reads as the picture simply continuing.
+ */
+function drawCropClampedToEdge(
+  context: CanvasRenderingContext2D,
+  source: CanvasPreviewSource,
+  crop: DrawImageCrop,
+  destinationWidth: number,
+  destinationHeight: number,
+): boolean {
+  if (crop.sw <= 0 || crop.sh <= 0) return false;
+  const scaleX = destinationWidth / crop.sw;
+  const scaleY = destinationHeight / crop.sh;
+
+  const left = Math.max(0, crop.sx);
+  const top = Math.max(0, crop.sy);
+  const right = Math.min(source.width, crop.sx + crop.sw);
+  const bottom = Math.min(source.height, crop.sy + crop.sh);
+  const width = right - left;
+  const height = bottom - top;
+  if (width <= 0 || height <= 0) return false;
+
+  const dx = (left - crop.sx) * scaleX;
+  const dy = (top - crop.sy) * scaleY;
+  const dw = width * scaleX;
+  const dh = height * scaleY;
+  context.drawImage(source.image, left, top, width, height, dx, dy, dw, dh);
+
+  // One-pixel edge lines stretched into whatever the crop could not reach.
+  const gapTop = dy;
+  const gapLeft = dx;
+  const gapBottom = destinationHeight - (dy + dh);
+  const gapRight = destinationWidth - (dx + dw);
+  if (gapTop > 0) context.drawImage(source.image, left, top, width, 1, dx, 0, dw, gapTop);
+  if (gapBottom > 0) context.drawImage(source.image, left, bottom - 1, width, 1, dx, dy + dh, dw, gapBottom);
+  if (gapLeft > 0) context.drawImage(source.image, left, top, 1, height, 0, dy, gapLeft, dh);
+  if (gapRight > 0) context.drawImage(source.image, right - 1, top, 1, height, dx + dw, dy, gapRight, dh);
+  if (gapTop > 0 && gapLeft > 0) context.drawImage(source.image, left, top, 1, 1, 0, 0, gapLeft, gapTop);
+  if (gapTop > 0 && gapRight > 0) context.drawImage(source.image, right - 1, top, 1, 1, dx + dw, 0, gapRight, gapTop);
+  if (gapBottom > 0 && gapLeft > 0) context.drawImage(source.image, left, bottom - 1, 1, 1, 0, dy + dh, gapLeft, gapBottom);
+  if (gapBottom > 0 && gapRight > 0) context.drawImage(source.image, right - 1, bottom - 1, 1, 1, dx + dw, dy + dh, gapRight, gapBottom);
+  return true;
 }
 
 /**
@@ -193,8 +280,23 @@ export function drawVideoFrameToCanvas(video: HTMLVideoElement, target: CanvasPr
   maxDevicePixelRatio?: number;
   devicePixelRatio?: number;
 }): boolean {
+  return drawSourceToCanvas({ image: video, width: video.videoWidth, height: video.videoHeight }, target, options);
+}
+
+/** Draw one frame from any decoded source. Returns false until it and the canvas are ready. */
+export function drawSourceToCanvas(source: CanvasPreviewSource, target: CanvasPreviewTarget, options?: {
+  maxPixels?: number;
+  maxDevicePixelRatio?: number;
+  devicePixelRatio?: number;
+}): boolean {
   const cssSize = { width: target.canvas.clientWidth, height: target.canvas.clientHeight };
-  const crop = getCoverCrop({ width: video.videoWidth, height: video.videoHeight }, cssSize);
+  const sourceSize = { width: source.width, height: source.height };
+  const reference = target.continuationOf
+    ? { width: target.continuationOf.clientWidth, height: target.continuationOf.clientHeight }
+    : null;
+  const crop = reference && usable(reference)
+    ? getContinuationCrop(sourceSize, reference, cssSize)
+    : getCoverCrop(sourceSize, cssSize);
   if (!crop) return false;
 
   const backing = getCanvasBackingSize(
@@ -214,8 +316,9 @@ export function drawVideoFrameToCanvas(video: HTMLVideoElement, target: CanvasPr
   context.filter = target.blurPx || target.brightness
     ? `blur(${target.blurPx ?? 0}px) brightness(${target.brightness ?? 1})`
     : "none";
-  context.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, backing.width, backing.height);
+  const drawn = drawCropClampedToEdge(context, source, crop, backing.width, backing.height);
   context.restore();
+  if (!drawn) return false;
 
   if (Number.isFinite(target.edgeFeatherPx) && (target.edgeFeatherPx ?? 0) > 0) {
     // The mask describes CSS-pixel geometry, so generating it at the backing

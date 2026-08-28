@@ -2,10 +2,49 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   getCanvasBackingSize,
+  getContinuationCrop,
   getCoverCrop,
   getRoundedRectFeatherAlpha,
   shouldRenderCanvasFrame,
 } from "./canvas-preview";
+
+test("the backdrop crop keeps the viewfinder's scale so the blur continues it", () => {
+  const source = { width: 1440, height: 1080 };
+  const viewfinder = { width: 362, height: 482 };
+  const scene = { width: 429, height: 690 };
+
+  const reference = getCoverCrop(source, viewfinder);
+  const continuation = getContinuationCrop(source, viewfinder, scene);
+  assert.ok(reference && continuation);
+
+  // One source pixel must land on the same number of CSS pixels in both, which
+  // is what makes the backdrop read as the same picture carrying on.
+  const viewfinderScale = viewfinder.width / reference.sw;
+  assert.ok(Math.abs(scene.width / continuation.sw - viewfinderScale) < 1e-9);
+  assert.ok(Math.abs(scene.height / continuation.sh - viewfinderScale) < 1e-9);
+
+  // Both stay centred on the same point, so the frame sits exactly over the
+  // part of the backdrop it repeats.
+  assert.ok(Math.abs((reference.sx + reference.sw / 2) - (continuation.sx + continuation.sw / 2)) < 1e-9);
+  assert.ok(Math.abs((reference.sy + reference.sh / 2) - (continuation.sy + continuation.sh / 2)) < 1e-9);
+});
+
+test("a portrait viewfinder over a landscape camera asks for rows that do not exist", () => {
+  // The caller must expect this and stretch the edge rows; silently re-cropping
+  // here is what made the old backdrop a larger, misaligned second picture.
+  const continuation = getContinuationCrop({ width: 1440, height: 1080 }, { width: 362, height: 482 }, { width: 429, height: 690 });
+  assert.ok(continuation);
+  assert.ok(continuation.sy < 0);
+  assert.ok(continuation.sy + continuation.sh > 1080);
+  assert.ok(continuation.sx > 0);
+  assert.ok(continuation.sx + continuation.sw < 1440);
+});
+
+test("rejects a continuation without a usable source, reference or destination", () => {
+  assert.equal(getContinuationCrop({ width: 0, height: 1080 }, { width: 362, height: 482 }, { width: 429, height: 690 }), null);
+  assert.equal(getContinuationCrop({ width: 1440, height: 1080 }, { width: 0, height: 482 }, { width: 429, height: 690 }), null);
+  assert.equal(getContinuationCrop({ width: 1440, height: 1080 }, { width: 362, height: 482 }, { width: 429, height: 0 }), null);
+});
 
 test("creates the centred 3:4 crop of a 4:3 Safari camera frame", () => {
   assert.deepEqual(getCoverCrop({ width: 1920, height: 1440 }, { width: 402, height: 536 }), {

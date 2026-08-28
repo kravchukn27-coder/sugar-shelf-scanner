@@ -4,29 +4,51 @@
 
 1. **Start** opens the live rear-camera scanner.
 2. A small preflight decides whether a packaged food/drink is a candidate.
-   `none` and `uncertain` remain live; only a candidate can trigger capture.
-3. One full-analysis frame freezes while Gemini identifies visible packaging.
+   A candidate triggers capture automatically. On the live camera `uncertain`
+   stays live with a hint, while `none` is terminal and shows the blocking
+   "No packaged products detected" prompt — a deliberate token guard for a
+   genuinely empty scene.
+3. **Analyze now** is the manual override: it captures the current frame and
+   goes straight to full analysis without waiting for a preflight verdict. A
+   preflight request already in flight is abandoned, because it is only a gate
+   opinion the user has just overruled; a full analysis already running is
+   never interrupted. Because a `none` verdict is terminal, the shutter is
+   reachable while preflight is still running or `uncertain`, not after the
+   scene has already been rejected.
+4. One full-analysis frame freezes while Gemini identifies visible packaging.
    The analysis state uses a compact branded glass status with a persistent
    privacy note.
-4. A completed scan opens results immediately: multiple products open the
+5. A completed scan opens results immediately: multiple products open the
    comparison list, while one product opens its Sugar Fit card. If the user
    collapses results, a centred branded handle remains available to reopen it.
-5. **Details** exposes source, sugar/protein and the clear distinction between
+6. **Details** exposes source, sugar/protein and the clear distinction between
    `Confirmed`, `AI estimate` and unknown.
-6. Retry or close returns to a stable live scanner.
+7. Retry or close returns to a stable live scanner.
 
 The frozen image is the full-analysis capture, not a second camera view. Raw
 frames are not retained by the application.
 
+The blurred surround, live and frozen alike, is drawn at the viewfinder's own
+scale and centre, so it continues the framed picture rather than repeating it
+enlarged. Where the projection runs past the source the nearest edge pixels are
+stretched. Only what the frame encloses is analyzed; the surround is context,
+marked as such by the frame edge, the blur and the darkening.
+
 ## State-specific controls
 
-| State | Gallery | Barcode action | Notes |
-| --- | --- | --- | --- |
-| `camera_off` | hidden | hidden | Start is the entry point. |
-| `live_searching` | available | hidden | Torch is shown only when the selected track reports support. |
-| `captured_analyzing` | hidden | hidden | Spinner is visible only during full Gemini analysis. |
-| `results` | hidden | hidden | Details opens from the centred result handle. |
-| `no_scene` / error | as applicable | top-bar recovery only | Barcode is not a camera-switch control. |
+| State | Gallery | Analyze now | Barcode action | Notes |
+| --- | --- | --- | --- | --- |
+| `camera_off` | hidden | hidden | hidden | Start is the entry point. |
+| `live_searching` | available | available | hidden | Torch is shown only when the selected track reports support. |
+| `captured_analyzing` | hidden | hidden | hidden | Spinner is visible only during full Gemini analysis. |
+| `results` | hidden | hidden | hidden | Details opens from the centred result handle. |
+| `no_scene` / error | as applicable | hidden | top-bar recovery only | Barcode is not a camera-switch control. |
+
+**Analyze now** is a centred pill in the bottom band below the viewfinder,
+sharing that band and its baseline with the gallery button on the left. It
+never overlaps the frame. It stays disabled until the viewfinder has painted
+its first frame, and it is hidden while a gallery image is being analyzed, so
+it never captures a frame the user cannot see.
 
 The default scanner never presents a separate barcode mode. The no-scene/error
 button starts a recovery path only, using a local decoder.
