@@ -146,7 +146,12 @@ export default function HomePage() {
   const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
   const [recoverySubmissionBanner, setRecoverySubmissionBanner] = useState<string | null>(null);
   const [labelDraft, setLabelDraft] = useState<NutritionLabelDraft | null>(null);
-  const [analysisPhase, setAnalysisPhase] = useState<"identifying" | "catalog" | "slow">("identifying");
+  // Set right before analyze() is called for a shelf preflight already knew
+  // was crowded (packagedProductCount). Gallery uploads and the manual
+  // analyze-now shutter skip preflight, so this stays undefined for them and
+  // the phase timeline falls back to the default.
+  const expectedProductCount = useRef<number | undefined>(undefined);
+  const [analysisPhase, setAnalysisPhase] = useState<"identifying" | "catalog" | "slow" | "extended" | "many">("identifying");
   const [deferAutoResults, setDeferAutoResults] = useState(false);
   const groups = groupRepeatedDetections((scan?.detections ?? []).filter(eligible));
   const rankedGroups = sortDetectionGroupsBySugarFit(groups);
@@ -298,7 +303,8 @@ export default function HomePage() {
     return () => { cancelled = true; image.onload = null; window.removeEventListener("resize", paint); };
   }, [frozen, recoveryCamera, uploadUrl]);
 
-  const analyze = useCallback(async (source: HTMLVideoElement | HTMLImageElement, id: number) => {
+  const analyze = useCallback(async (source: HTMLVideoElement | HTMLImageElement, id: number, expectedCount?: number) => {
+    expectedProductCount.current = expectedCount;
     // Live captures use the identical centred 3:4 crop painted in the
     // viewfinder canvas, so the user never sees a different field of view in
     // the frozen result. Gallery images retain their existing preview crop.
@@ -318,7 +324,7 @@ export default function HomePage() {
     let requestTimingFinished = false;
     const finishRequestTiming = () => { if (!requestTimingFinished) { scannerMetrics.current.finishRequest("analyze", requestStartedAt); requestTimingFinished = true; } };
     try {
-      const response = await fetch("/api/scan/analyze", { method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal, body: JSON.stringify({ imageBase64: image.split(",")[1], mimeType: "image/jpeg", context: "shelf", clientFrameId: `frame-${++frame.current}` }) });
+      const response = await fetch("/api/scan/analyze", { method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal, body: JSON.stringify({ imageBase64: image.split(",")[1], mimeType: "image/jpeg", context: "shelf", clientFrameId: `frame-${++frame.current}`, ...(expectedCount === undefined ? {} : { expectedProductCount: expectedCount }) }) });
       finishRequestTiming(); noteMetricsCapability(response);
       if (id !== session.current) return;
       if (!response.ok) { setFailure(await scanFailureMessage(response)); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); return; }
@@ -385,7 +391,7 @@ export default function HomePage() {
         completeScanMetrics(id, "preflight_terminal");
         return;
       }
-      await analyze(source, id);
+      await analyze(source, id, result.packagedProductCount);
     } catch (error) {
       finishRequestTiming();
       if (id === session.current && !(error instanceof DOMException && error.name === "AbortError")) {
@@ -586,7 +592,14 @@ export default function HomePage() {
     }, 500);
     return () => window.clearInterval(timer);
   }, [showCameraDiagnostics]);
-  useEffect(() => { if (state !== "captured_analyzing") { setAnalysisPhase("identifying"); return; } setAnalysisPhase("identifying"); const toCatalog = window.setTimeout(() => setAnalysisPhase("catalog"), 1500); const toSlow = window.setTimeout(() => setAnalysisPhase("slow"), 7000); return () => { window.clearTimeout(toCatalog); window.clearTimeout(toSlow); }; }, [state]);
+  useEffect(() => {
+    if (state !== "captured_analyzing") { setAnalysisPhase("identifying"); return; }
+    setAnalysisPhase((expectedProductCount.current ?? 0) >= 10 ? "many" : "identifying");
+    const toCatalog = window.setTimeout(() => setAnalysisPhase("catalog"), 1500);
+    const toSlow = window.setTimeout(() => setAnalysisPhase("slow"), 7000);
+    const toExtended = window.setTimeout(() => setAnalysisPhase("extended"), 15000);
+    return () => { window.clearTimeout(toCatalog); window.clearTimeout(toSlow); window.clearTimeout(toExtended); };
+  }, [state]);
   useEffect(() => { if (!shouldRunScannerScheduler(state) || sheet || uploadUrl || recoveryCamera) return; const timer = window.setInterval(() => {
     const video = videoRef.current;
     if (!video?.readyState || inFlight.current) return;
@@ -639,7 +652,7 @@ export default function HomePage() {
     <div className={frozen && !uploadUrl && !recoveryActive ? "camera-result-overlay-stage" : "camera-overlay-stage"}>{groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}</div>
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}
     {state === "camera_off" && <ScannerHome onStart={() => void start()} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action="Try again" onAction={retry} failure />}
-    {state === "captured_analyzing" && <CameraCopy>{analysisPhase === "identifying" ? "Calculating Your Fit" : analysisPhase === "catalog" ? "Personalizing your result" : "Still working on your result"}</CameraCopy>}
+    {state === "captured_analyzing" && <CameraCopy>{analysisPhase === "many" ? "Full shelf detected — this may take a moment" : analysisPhase === "identifying" ? "Calculating Your Fit" : analysisPhase === "catalog" ? "Personalizing your result" : analysisPhase === "slow" ? "Still working on your result" : "This one's taking a bit longer than usual"}</CameraCopy>}
     {state !== "camera_off" && state !== "captured_analyzing" && state !== "results" ? <label className={`gallery-button ${uploadBusy ? "busy" : ""}`} aria-label="Choose a product photo" aria-disabled={uploadBusy}><input type="file" accept="image/*" disabled={uploadBusy} onChange={(e) => { upload(e.target.files?.[0]); e.currentTarget.value = ""; }} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label> : null}
     {state === "live_searching" && !uploadUrl ? <button className="analyze-now-button" type="button" disabled={!canvasPreviewActive} onClick={analyzeNow}>Analyze now</button> : null}
     {showCameraDiagnostics && cameraDiagnostics ? <CameraDiagnostics snapshot={cameraDiagnostics} layoutProbe={videoLayoutProbe} /> : null}</>}
