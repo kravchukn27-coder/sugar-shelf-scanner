@@ -114,12 +114,110 @@ export function getContinuationCrop(
 }
 
 /**
+ * Fills one corner gap of the clamped-edge backdrop.
+ *
+ * There is no real source data past the frame's own edges: at the true
+ * corner, the row (top/bottom) strip's own nearest-edge clamp and the
+ * column (left/right) strip's own nearest-edge clamp settle on the exact
+ * same source pixel. A "diagonal blend between the two edges" therefore has
+ * no genuinely different samples to blend — it degenerates back to the same
+ * flat value. What actually reads as a seam is geometric, not chromatic: the
+ * corner is a single flat rectangle sitting right next to two strips that
+ * visibly vary, so the eye catches the *hard cut* from "gradient" to "flat"
+ * at the corner boundary, especially against the sharp rounded-corner
+ * viewfinder drawn on top.
+ *
+ * The fix softens that cut instead of fabricating content: each neighboring
+ * strip's own clamped mapping is extended a few pixels into the corner,
+ * alpha-fading from faint at the far corner point up to fully opaque right
+ * at the strip's real boundary. Every extension sample still clamps to the
+ * strip's own edge line — nothing new is invented — but the transition into
+ * the flat fill happens gradually instead of at a hard rectangular edge.
+ */
+type CornerGapSpec = {
+  /** Source neighborhood for the flat base fill (a couple of pixels wide/tall rather than one exact pixel). */
+  baseSampleX: number;
+  baseSampleY: number;
+  baseSampleWidth: number;
+  baseSampleHeight: number;
+  /** Row (top/bottom) strip: source y of its edge line, and the source x its own clamp settles on across this whole corner. */
+  rowSourceY: number;
+  rowClampX: number;
+  /** True when the row strip's real region sits at this corner's right edge (feather zone hugs that edge, fading out leftward); false when it sits at the left edge. */
+  rowBoundaryAtRight: boolean;
+  /** Column (left/right) strip: source x of its edge line, and the source y its own clamp settles on across this whole corner. */
+  colSourceX: number;
+  colClampY: number;
+  /** True when the column strip's real region sits at this corner's bottom edge; false when it sits at the top edge. */
+  colBoundaryAtBottom: boolean;
+};
+
+/** How far into the corner each strip's feathered extension reaches, in destination pixels. */
+const CORNER_FEATHER_PX = 12;
+/** Thin alpha steps rather than a real gradient — cheap, and the result only needs to look smooth after the blur already applied to the whole draw. */
+const CORNER_FEATHER_SLICES = 4;
+
+function drawCornerGap(
+  context: CanvasRenderingContext2D,
+  source: CanvasPreviewSource,
+  spec: CornerGapSpec,
+  destX: number,
+  destY: number,
+  destWidth: number,
+  destHeight: number,
+): void {
+  if (destWidth <= 0 || destHeight <= 0) return;
+
+  // The flat base fill, exactly as before but sampling a small neighborhood
+  // instead of one exact pixel.
+  context.drawImage(
+    source.image,
+    spec.baseSampleX, spec.baseSampleY, spec.baseSampleWidth, spec.baseSampleHeight,
+    destX, destY, destWidth, destHeight,
+  );
+
+  context.save();
+
+  // Feather the seam against the row (top/bottom) strip.
+  const rowFeatherWidth = Math.min(destWidth, CORNER_FEATHER_PX);
+  if (rowFeatherWidth > 0) {
+    const zoneStart = spec.rowBoundaryAtRight ? destX + destWidth - rowFeatherWidth : destX;
+    for (let i = 0; i < CORNER_FEATHER_SLICES; i += 1) {
+      const t0 = i / CORNER_FEATHER_SLICES;
+      const t1 = (i + 1) / CORNER_FEATHER_SLICES;
+      const sliceX = zoneStart + t0 * rowFeatherWidth;
+      const sliceWidth = (t1 - t0) * rowFeatherWidth;
+      const proximityToStrip = spec.rowBoundaryAtRight ? (t0 + t1) / 2 : 1 - (t0 + t1) / 2;
+      context.globalAlpha = proximityToStrip;
+      context.drawImage(source.image, spec.rowClampX, spec.rowSourceY, 1, 1, sliceX, destY, sliceWidth, destHeight);
+    }
+  }
+
+  // Feather the seam against the column (left/right) strip.
+  const colFeatherHeight = Math.min(destHeight, CORNER_FEATHER_PX);
+  if (colFeatherHeight > 0) {
+    const zoneStart = spec.colBoundaryAtBottom ? destY + destHeight - colFeatherHeight : destY;
+    for (let i = 0; i < CORNER_FEATHER_SLICES; i += 1) {
+      const t0 = i / CORNER_FEATHER_SLICES;
+      const t1 = (i + 1) / CORNER_FEATHER_SLICES;
+      const sliceY = zoneStart + t0 * colFeatherHeight;
+      const sliceHeight = (t1 - t0) * colFeatherHeight;
+      const proximityToStrip = spec.colBoundaryAtBottom ? (t0 + t1) / 2 : 1 - (t0 + t1) / 2;
+      context.globalAlpha = proximityToStrip;
+      context.drawImage(source.image, spec.colSourceX, spec.colClampY, 1, 1, destX, sliceY, destWidth, sliceHeight);
+    }
+  }
+
+  context.restore();
+}
+
+/**
  * Draws `crop` of `source` across the whole destination, clamping to the
  * source edges. A crop reaching past the source is drawn where it exists and
  * the adjacent edge line is stretched into the remainder, which under the
  * backdrop's blur reads as the picture simply continuing.
  */
-function drawCropClampedToEdge(
+export function drawCropClampedToEdge(
   context: CanvasRenderingContext2D,
   source: CanvasPreviewSource,
   crop: DrawImageCrop,
@@ -153,10 +251,36 @@ function drawCropClampedToEdge(
   if (gapBottom > 0) context.drawImage(source.image, left, bottom - 1, width, 1, dx, dy + dh, dw, gapBottom);
   if (gapLeft > 0) context.drawImage(source.image, left, top, 1, height, 0, dy, gapLeft, dh);
   if (gapRight > 0) context.drawImage(source.image, right - 1, top, 1, height, dx + dw, dy, gapRight, dh);
-  if (gapTop > 0 && gapLeft > 0) context.drawImage(source.image, left, top, 1, 1, 0, 0, gapLeft, gapTop);
-  if (gapTop > 0 && gapRight > 0) context.drawImage(source.image, right - 1, top, 1, 1, dx + dw, 0, gapRight, gapTop);
-  if (gapBottom > 0 && gapLeft > 0) context.drawImage(source.image, left, bottom - 1, 1, 1, 0, dy + dh, gapLeft, gapBottom);
-  if (gapBottom > 0 && gapRight > 0) context.drawImage(source.image, right - 1, bottom - 1, 1, 1, dx + dw, dy + dh, gapRight, gapBottom);
+  const baseW = Math.min(2, width);
+  const baseH = Math.min(2, height);
+  if (gapTop > 0 && gapLeft > 0) {
+    drawCornerGap(context, source, {
+      baseSampleX: left, baseSampleY: top, baseSampleWidth: baseW, baseSampleHeight: baseH,
+      rowSourceY: top, rowClampX: left, rowBoundaryAtRight: true,
+      colSourceX: left, colClampY: top, colBoundaryAtBottom: true,
+    }, 0, 0, gapLeft, gapTop);
+  }
+  if (gapTop > 0 && gapRight > 0) {
+    drawCornerGap(context, source, {
+      baseSampleX: Math.max(left, right - baseW), baseSampleY: top, baseSampleWidth: baseW, baseSampleHeight: baseH,
+      rowSourceY: top, rowClampX: right - 1, rowBoundaryAtRight: false,
+      colSourceX: right - 1, colClampY: top, colBoundaryAtBottom: true,
+    }, dx + dw, 0, gapRight, gapTop);
+  }
+  if (gapBottom > 0 && gapLeft > 0) {
+    drawCornerGap(context, source, {
+      baseSampleX: left, baseSampleY: Math.max(top, bottom - baseH), baseSampleWidth: baseW, baseSampleHeight: baseH,
+      rowSourceY: bottom - 1, rowClampX: left, rowBoundaryAtRight: true,
+      colSourceX: left, colClampY: bottom - 1, colBoundaryAtBottom: false,
+    }, 0, dy + dh, gapLeft, gapBottom);
+  }
+  if (gapBottom > 0 && gapRight > 0) {
+    drawCornerGap(context, source, {
+      baseSampleX: Math.max(left, right - baseW), baseSampleY: Math.max(top, bottom - baseH), baseSampleWidth: baseW, baseSampleHeight: baseH,
+      rowSourceY: bottom - 1, rowClampX: right - 1, rowBoundaryAtRight: false,
+      colSourceX: right - 1, colClampY: bottom - 1, colBoundaryAtBottom: false,
+    }, dx + dw, dy + dh, gapRight, gapBottom);
+  }
   return true;
 }
 
