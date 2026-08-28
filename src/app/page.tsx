@@ -265,9 +265,13 @@ export default function HomePage() {
     const backdrop = liveBackdropCanvasRef.current;
     if (!video || !foreground || !transition || !backdrop) return;
     let painted = false;
-    // The backdrop keeps the foreground's projection, so it continues the
-    // viewfinder instead of being a second, larger crop of the same frame.
-    const loop = createCanvasPreviewLoop({ video, targets: [{ canvas: foreground, fps: 30, edgeFeatherPx: 28, cornerRadiusPx: 22 }, { canvas: transition, fps: 15, edgeFeatherPx: 28, cornerRadiusPx: 22 }, { canvas: backdrop, fps: 15, continuationOf: foreground }], maxPixels: 1_250_000, maxDevicePixelRatio: 2, onFrameDrawn: () => { if (!painted) { painted = true; setCanvasPreviewActive(true); } } });
+    // All three targets project at the frame's own scale, not their own
+    // (bled) box: the foreground/transition canvases are drawn larger than
+    // the visible frame so their real content covers the backdrop's corner
+    // seam, but what the user sees inside the white border must stay the
+    // exact crop capture() sends to Gemini — cropping each canvas to its own
+    // enlarged box would silently shrink that field of view instead.
+    const loop = createCanvasPreviewLoop({ video, targets: [{ canvas: foreground, fps: 30, edgeFeatherPx: 28, cornerRadiusPx: 22, continuationOf: livePreviewRef.current }, { canvas: transition, fps: 15, edgeFeatherPx: 28, cornerRadiusPx: 22, continuationOf: livePreviewRef.current }, { canvas: backdrop, fps: 15, continuationOf: livePreviewRef.current }], maxPixels: 1_250_000, maxDevicePixelRatio: 2, onFrameDrawn: () => { if (!painted) { painted = true; setCanvasPreviewActive(true); } } });
     const onVisibilityChange = () => {
       if (document.hidden) loop.stop();
       else loop.start();
