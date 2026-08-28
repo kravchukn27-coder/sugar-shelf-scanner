@@ -30,6 +30,10 @@ export type CanvasPreviewTarget = {
   sourceCanvas?: HTMLCanvasElement;
   blurPx?: number;
   brightness?: number;
+  /** Softens the target's alpha at every edge. Measured in CSS pixels. */
+  edgeFeatherPx?: number;
+  /** Radius of the feathered target boundary. Measured in CSS pixels. */
+  cornerRadiusPx?: number;
 };
 
 export type CanvasPreviewLoopOptions = {
@@ -45,6 +49,16 @@ export type CanvasPreviewLoopOptions = {
 
 const DEFAULT_MAX_PIXELS = 1_250_000;
 const DEFAULT_MAX_DPR = 2;
+
+type CanvasFeatherMask = {
+  canvas: HTMLCanvasElement;
+  width: number;
+  height: number;
+  edgeFeatherPx: number;
+  cornerRadiusPx: number;
+};
+
+const featherMasks = new WeakMap<HTMLCanvasElement, CanvasFeatherMask>();
 
 function usable(size: CanvasPreviewSize) {
   return Number.isFinite(size.width) && Number.isFinite(size.height) && size.width > 0 && size.height > 0;
@@ -92,6 +106,106 @@ export function shouldRenderCanvasFrame(lastRenderedAtMs: number | null, nowMs: 
   return lastRenderedAtMs === null || nowMs - lastRenderedAtMs >= 1000 / fps;
 }
 
+function roundedRectFeatherAlphaAt(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  edgeFeatherPx: number,
+  cornerRadiusPx: number,
+) {
+  const halfWidth = width / 2;
+  const halfHeight = height / 2;
+  const radius = Math.min(Math.max(0, cornerRadiusPx), halfWidth, halfHeight);
+  const qx = Math.abs(x - halfWidth) - (halfWidth - radius);
+  const qy = Math.abs(y - halfHeight) - (halfHeight - radius);
+  const outsideDistance = Math.hypot(Math.max(qx, 0), Math.max(qy, 0));
+  const insideDistance = Math.min(Math.max(qx, qy), 0);
+  const signedDistance = outsideDistance + insideDistance - radius;
+  const progress = Math.min(1, Math.max(0, -signedDistance / edgeFeatherPx));
+  return progress * progress * (3 - 2 * progress);
+}
+
+/** Returns a smooth alpha based on signed distance to a rounded rectangle. */
+export function getRoundedRectFeatherAlpha(
+  point: { x: number; y: number },
+  size: CanvasPreviewSize,
+  edgeFeatherPx: number,
+  cornerRadiusPx = 0,
+): number {
+  if (!usable(size) || !Number.isFinite(point.x) || !Number.isFinite(point.y)
+    || !Number.isFinite(edgeFeatherPx) || edgeFeatherPx <= 0
+    || !Number.isFinite(cornerRadiusPx)) return 0;
+  return roundedRectFeatherAlphaAt(
+    point.x,
+    point.y,
+    size.width,
+    size.height,
+    edgeFeatherPx,
+    cornerRadiusPx,
+  );
+}
+
+function getFeatherMask(
+  targetCanvas: HTMLCanvasElement,
+  cssSize: CanvasPreviewSize,
+  edgeFeatherPx: number,
+  cornerRadiusPx: number,
+) {
+  const width = Math.max(1, Math.round(cssSize.width));
+  const height = Math.max(1, Math.round(cssSize.height));
+  const cached = featherMasks.get(targetCanvas);
+  if (cached && cached.width === width && cached.height === height
+    && cached.edgeFeatherPx === edgeFeatherPx && cached.cornerRadiusPx === cornerRadiusPx) return cached.canvas;
+
+  const ownerDocument = targetCanvas.ownerDocument ?? (typeof document === "undefined" ? null : document);
+  if (!ownerDocument) return null;
+  const maskCanvas = ownerDocument.createElement("canvas");
+  maskCanvas.width = width;
+  maskCanvas.height = height;
+  const maskContext = maskCanvas.getContext("2d");
+  if (!maskContext) return null;
+
+  const imageData = maskContext.createImageData(width, height);
+  const data = imageData.data;
+  data.fill(255);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const alpha = roundedRectFeatherAlphaAt(
+        x + 0.5,
+        y + 0.5,
+        width,
+        height,
+        edgeFeatherPx,
+        cornerRadiusPx,
+      );
+      data[(y * width + x) * 4 + 3] = Math.round(alpha * 255);
+    }
+  }
+  maskContext.putImageData(imageData, 0, 0);
+  featherMasks.set(targetCanvas, { canvas: maskCanvas, width, height, edgeFeatherPx, cornerRadiusPx });
+  return maskCanvas;
+}
+
+function applyTargetFeatherMask(
+  context: CanvasRenderingContext2D,
+  target: CanvasPreviewTarget,
+  cssSize: CanvasPreviewSize,
+  backing: CanvasBackingSize,
+) {
+  if (!Number.isFinite(target.edgeFeatherPx) || (target.edgeFeatherPx ?? 0) <= 0) return;
+  const edgeFeatherPx = target.edgeFeatherPx ?? 0;
+  const cornerRadiusPx = Number.isFinite(target.cornerRadiusPx) ? Math.max(0, target.cornerRadiusPx ?? 0) : 0;
+  const mask = getFeatherMask(target.canvas, cssSize, edgeFeatherPx, cornerRadiusPx);
+  if (!mask) return;
+  context.save();
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.filter = "none";
+  context.globalCompositeOperation = "destination-in";
+  context.drawImage(mask, 0, 0, backing.width, backing.height);
+  context.restore();
+}
+
 /** Draw one centred cover frame. Returns false until the video and canvas are ready. */
 export function drawVideoFrameToCanvas(video: HTMLVideoElement, target: CanvasPreviewTarget, options?: {
   maxPixels?: number;
@@ -121,6 +235,7 @@ export function drawVideoFrameToCanvas(video: HTMLVideoElement, target: CanvasPr
     : "none";
   context.drawImage(video, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, backing.width, backing.height);
   context.restore();
+  applyTargetFeatherMask(context, target, cssSize, backing);
   return true;
 }
 
@@ -151,6 +266,7 @@ export function drawCanvasFrameToCanvas(source: HTMLCanvasElement, target: Canva
     : "none";
   context.drawImage(source, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, backing.width, backing.height);
   context.restore();
+  applyTargetFeatherMask(context, target, cssSize, backing);
   return true;
 }
 

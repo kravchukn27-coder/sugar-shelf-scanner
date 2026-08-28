@@ -112,7 +112,7 @@ async function scanFailureMessage(response: Response) {
 }
 
 export default function HomePage() {
-  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), livePreviewRef = useRef<HTMLDivElement>(null), liveCanvasRef = useRef<HTMLCanvasElement>(null), liveBackdropCanvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), resultMetrics = useRef({ source: null as "camera" | "upload" | null, started: false, resultShown: false, productOpened: false, recommendationOpened: false }), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), preflightRetryStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
+  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), livePreviewRef = useRef<HTMLDivElement>(null), liveCanvasRef = useRef<HTMLCanvasElement>(null), liveTransitionCanvasRef = useRef<HTMLCanvasElement>(null), liveBackdropCanvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), resultMetrics = useRef({ source: null as "camera" | "upload" | null, started: false, resultShown: false, productOpened: false, recommendationOpened: false }), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), preflightRetryStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
   const [canvasPreviewActive, setCanvasPreviewActive] = useState(false);
   const [frozenBackdrop, setFrozenBackdrop] = useState<string | null>(null);
@@ -247,18 +247,21 @@ export default function HomePage() {
 
   // iOS Safari can paint the <video> decoder surface with stale letterboxing
   // after a camera restart. Keep that element only as the media source and
-  // paint its decoded pixels ourselves. Both canvases deliberately share one
-  // stream: the sharp 3:4 foreground is the real viewfinder, while the full
-  // screen copy is only a blurred backdrop and never implies extra FOV.
+  // paint its decoded pixels ourselves. The stage canvases deliberately share
+  // one stream and projection: transition first, contextual backdrop second,
+  // and the feathered sharp 3:4 viewfinder last.
   useEffect(() => {
     setCanvasPreviewActive(false);
     if (state !== "live_searching" || uploadUrl || recoveryCamera) return;
     const video = videoRef.current;
     const foreground = liveCanvasRef.current;
+    const transition = liveTransitionCanvasRef.current;
     const backdrop = liveBackdropCanvasRef.current;
-    if (!video || !foreground || !backdrop) return;
+    if (!video || !foreground || !transition || !backdrop) return;
     let painted = false;
-    const loop = createCanvasPreviewLoop({ video, targets: [{ canvas: foreground, fps: 30 }, { canvas: backdrop, fps: 15, sourceCanvas: foreground }], maxPixels: 1_250_000, maxDevicePixelRatio: 2, onFrameDrawn: () => { if (!painted) { painted = true; setCanvasPreviewActive(true); } } });
+    // Keep the raw transition target first: the backdrop samples that exact
+    // 3:4 projection, then the masked sharp target is painted above both.
+    const loop = createCanvasPreviewLoop({ video, targets: [{ canvas: transition, fps: 15 }, { canvas: backdrop, fps: 15, sourceCanvas: transition }, { canvas: foreground, fps: 30, edgeFeatherPx: 28, cornerRadiusPx: 22 }], maxPixels: 1_250_000, maxDevicePixelRatio: 2, onFrameDrawn: () => { if (!painted) { painted = true; setCanvasPreviewActive(true); } } });
     const onVisibilityChange = () => {
       if (document.hidden) loop.stop();
       else loop.start();
@@ -594,7 +597,7 @@ export default function HomePage() {
     {state === "live_searching" && !uploadUrl && !recoveryActive && <canvas ref={liveBackdropCanvasRef} className="camera-canvas-backdrop" aria-hidden="true" />}
     {frozen && !uploadUrl && !recoveryActive && <img className="camera-canvas-backdrop frozen-backdrop" src={frozenBackdrop ?? frozen} alt="" aria-hidden="true" />}
     {cameraStageActive && <div ref={livePreviewRef} className={`camera-crop-stage ${canvasPreviewActive ? "active" : ""}`}>
-      {state === "live_searching" ? <><canvas ref={liveCanvasRef} className="camera-crop-stage-media" aria-hidden="true" /><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p></> : frozen ? <><img className="camera-crop-stage-media frozen-preview" src={frozen} alt="Captured products" /><div className="camera-stage-overlay">{groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}</div></> : null}
+      {state === "live_searching" ? <><canvas ref={liveTransitionCanvasRef} className="camera-crop-stage-media camera-stage-transition" aria-hidden="true" /><canvas ref={liveCanvasRef} className="camera-crop-stage-media camera-stage-sharp" aria-hidden="true" /><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p></> : frozen ? <><img className="camera-crop-stage-media camera-stage-transition" src={frozen} alt="" aria-hidden="true" /><img className="camera-crop-stage-media camera-stage-frozen-sharp frozen-preview" src={frozen} alt="Captured products" /><span className="viewfinder-guide" aria-hidden="true" /><div className="camera-stage-overlay">{groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}</div></> : null}
     </div>}
     {state !== "camera_off" && <div className={`camera-vignette ${cameraStageActive ? "camera-stage-vignette" : ""}`} />}
     {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && torchAvailable ? "" : "end"}`}><div>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
