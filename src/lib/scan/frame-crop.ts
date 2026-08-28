@@ -21,6 +21,11 @@ type FrameSize = {
   height: number;
 };
 
+type FrameRect = FrameSize & {
+  x: number;
+  y: number;
+};
+
 const isUsableSize = ({ width, height }: FrameSize) =>
   Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0;
 
@@ -42,6 +47,34 @@ export function getObjectFitCoverTransform(source: FrameSize, preview: FrameSize
     offsetX: (preview.width - renderedWidth) / 2,
     offsetY: (preview.height - renderedHeight) / 2,
   };
+}
+
+/**
+ * Maps a visible frame inside an object-fit: cover viewport back to source
+ * pixels. This keeps a captured JPEG identical to the portion of one large
+ * camera projection that the user sees through the sharp viewfinder window.
+ */
+export function getFrameCropFromCoverViewport(
+  source: FrameSize,
+  viewport: FrameSize,
+  frame: FrameRect,
+): SourceFrameCrop | null {
+  const transform = getObjectFitCoverTransform(source, viewport);
+  if (!transform || !isUsableSize(frame) || !Number.isFinite(frame.x) || !Number.isFinite(frame.y)) return null;
+
+  const left = (frame.x - transform.offsetX) / transform.scale;
+  const top = (frame.y - transform.offsetY) / transform.scale;
+  const right = (frame.x + frame.width - transform.offsetX) / transform.scale;
+  const bottom = (frame.y + frame.height - transform.offsetY) / transform.scale;
+  const sx = Math.max(0, Math.min(source.width, left));
+  const sy = Math.max(0, Math.min(source.height, top));
+  const cropRight = Math.max(0, Math.min(source.width, right));
+  const cropBottom = Math.max(0, Math.min(source.height, bottom));
+  const sw = cropRight - sx;
+  const sh = cropBottom - sy;
+  if (sw <= 0 || sh <= 0) return null;
+
+  return { aspect: sw / sh, sx, sy, sw, sh };
 }
 
 /**

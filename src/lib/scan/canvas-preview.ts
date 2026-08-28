@@ -22,11 +22,7 @@ export type CanvasPreviewTarget = {
   canvas: HTMLCanvasElement;
   /** Maximum refresh rate. The sharp layer normally uses 30; blur 15. */
   fps: number;
-  /**
-   * Use an already-painted canvas instead of the raw video. The backdrop uses
-   * the sharp 3:4 foreground as its source, so it is a blurred enlargement of
-   * exactly the same composition rather than a competing camera crop.
-   */
+  /** Use an already-painted canvas instead of the raw video. */
   sourceCanvas?: HTMLCanvasElement;
   blurPx?: number;
   brightness?: number;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getCenteredFrameCrop, getObjectFitCoverTransform, mapAnalyzedBoxToPreview } from "./frame-crop";
+import { getCenteredFrameCrop, getFrameCropFromCoverViewport, getObjectFitCoverTransform, mapAnalyzedBoxToPreview } from "./frame-crop";
 
 test("uses a detached upload's natural aspect ratio instead of its empty layout box", () => {
   const crop = getCenteredFrameCrop(4032, 3024, 0, 0);
@@ -17,6 +17,36 @@ test("applies a modest centred digital crop without changing the output aspect",
   assert.ok(crop.sh < 1080);
   assert.equal(crop.sx, (1920 - crop.sw) / 2);
   assert.equal(crop.sy, (1080 - crop.sh) / 2);
+});
+
+test("captures the exact sharp window from one full-screen cover projection", () => {
+  const source = { width: 1920, height: 1440 };
+  const viewport = { width: 390, height: 844 };
+  const frame = { x: 18, y: 84, width: 354, height: 676 };
+  const transform = getObjectFitCoverTransform(source, viewport);
+  const crop = getFrameCropFromCoverViewport(source, viewport, frame);
+
+  assert.ok(transform);
+  assert.ok(crop);
+  assert.ok(Math.abs(crop.sx * transform.scale + transform.offsetX - frame.x) < 1e-9);
+  assert.ok(Math.abs(crop.sy * transform.scale + transform.offsetY - frame.y) < 1e-9);
+  assert.ok(Math.abs(crop.sw * transform.scale - frame.width) < 1e-9);
+  assert.ok(Math.abs(crop.sh * transform.scale - frame.height) < 1e-9);
+  assert.ok(Math.abs(crop.aspect - frame.width / frame.height) < 1e-12);
+});
+
+test("clips a requested viewfinder window to the visible source projection", () => {
+  const crop = getFrameCropFromCoverViewport(
+    { width: 100, height: 100 },
+    { width: 100, height: 100 },
+    { x: -20, y: 10, width: 80, height: 80 },
+  );
+
+  assert.ok(crop);
+  assert.equal(crop.sx, 0);
+  assert.equal(crop.sy, 10);
+  assert.equal(crop.sw, 60);
+  assert.equal(crop.sh, 80);
 });
 
 test("maps portrait upload boxes from the analyzed crop into a 359×782 cover preview", () => {
