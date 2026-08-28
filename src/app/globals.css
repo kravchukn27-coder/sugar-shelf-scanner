@@ -91,15 +91,22 @@
 .camera-live-preview.active{background:transparent}
 /* The backdrop has no real camera pixels past the frame's own edge, so its
    corner fill is an unavoidably flat stretch — visible as a seam against the
-   frame's rounded corner. Rather than fabricate corner detail that doesn't
-   exist, bleed the sharp foreground past the visible border by
-   --camera-frame-bleed so its real (already-feathered) content physically
-   covers that seam instead. Both are replaced elements (canvas): inset alone
-   does not stretch a replaced element's used size, so width/height must be
-   set explicitly or the canvas collapses to its own backing-store size. */
-.camera-canvas-transition,.camera-canvas-foreground{position:absolute;inset:calc(-1 * var(--camera-frame-bleed));width:calc(100% + 2 * var(--camera-frame-bleed));height:calc(100% + 2 * var(--camera-frame-bleed));display:block}
-.camera-canvas-transition{z-index:1;opacity:.96;filter:blur(10px) brightness(.94)}
-.camera-canvas-foreground{z-index:2}
+   frame's rounded corner. Bleeding the SHARP foreground past the border to
+   cover that seam only swapped one artifact for another: past the real
+   source data, its bled edge is flat but unblurred, reading as a hard "glow"
+   ring before the real blur starts. The transition layer is already blurred
+   (blur(10px) below) and, via the same continuationOf projection, shares the
+   sharp layer's exact framing — so bleed *that* one instead: what shows past
+   the border is blurred from the start, no unblurred ring. The sharp
+   foreground stays flush with the visible frame, as on origin/main. Both are
+   replaced elements (canvas): inset alone does not stretch a replaced
+   element's used size, so width/height must be set explicitly or the canvas
+   collapses to its own backing-store size. */
+/* Matches .camera-canvas-backdrop's own filter exactly (blur/saturate/
+   brightness) so the transition layer's bled ring hands off to the backdrop
+   with no visible tonal step where one fades into the other. */
+.camera-canvas-transition{position:absolute;z-index:1;inset:calc(-1 * var(--camera-frame-bleed));width:calc(100% + 2 * var(--camera-frame-bleed));height:calc(100% + 2 * var(--camera-frame-bleed));display:block;opacity:1;filter:blur(14px) saturate(.96) brightness(.78)}
+.camera-canvas-foreground{position:absolute;z-index:2;inset:0;width:100%;height:100%;display:block;border-radius:var(--camera-frame-radius)}
 .camera-capture-frame{position:absolute;z-index:3;inset:0;border-radius:var(--camera-frame-radius);pointer-events:none}
 .camera-capture-frame .viewfinder-guide{z-index:2;inset:0;border:1.35px solid rgba(255,255,255,.9);border-radius:var(--camera-frame-radius);box-shadow:0 0 12px rgba(255,255,255,.16),0 1px 2px rgba(0,0,0,.2),inset 0 0 0 .5px rgba(255,255,255,.2)}
 .camera-capture-frame .live-hint{z-index:3;inset:0;margin:0;padding:0 24px;font-size:15px}
