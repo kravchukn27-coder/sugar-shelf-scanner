@@ -102,7 +102,7 @@ test("still separates estimates whose sugar reads differ by more than the tolera
   assert.equal(groups.length, 2);
 });
 
-test("does not group otherwise-identical estimates with different pack sizes", () => {
+test("does not group otherwise-identical estimates when both sides read a pack size and it differs", () => {
   const estimate = (id: string, packSize: string | null) => detection({
     id,
     status: "estimate",
@@ -113,10 +113,51 @@ test("does not group otherwise-identical estimates with different pack sizes", (
   const groups = groupRepeatedDetections([
     estimate("330ml", "330 ml"),
     estimate("2l", "2 L"),
+  ]);
+
+  assert.equal(groups.length, 2);
+});
+
+test("a facing with no legible pack size still joins a group that has one (dense-shelf OCR gaps)", () => {
+  // Small-print pack size routinely fails to OCR on some facings even when
+  // brand/name/sugar read fine — that alone must not keep an obviously
+  // identical facing permanently ungrouped.
+  const estimate = (id: string, packSize: string | null) => detection({
+    id,
+    status: "estimate",
+    visualCandidate: { brand: "Lay's", name: "Oven Baked Yoghurt With Herbs", packSize, gtin: null },
+    score: { band: "green", sugarPer100g: 6, source: "vision_estimate" },
+  });
+
+  const groups = groupRepeatedDetections([
+    estimate("a", "150 g"),
+    estimate("b", null),
+    estimate("c", null),
+    estimate("d", "150 g"),
+  ]);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]?.count, 4);
+});
+
+test("a missing-pack-size facing still refuses to bridge two genuinely different sizes", () => {
+  const estimate = (id: string, packSize: string | null) => detection({
+    id,
+    status: "estimate",
+    visualCandidate: { brand: "Corona", name: "Extra", packSize, gtin: null },
+    score: { band: "green", sugarPer100g: 1.2, source: "vision_estimate" },
+  });
+
+  // "missing-size" matches whichever compatible group it's compared against
+  // first (330ml here); it does not retroactively bridge 330ml and 2L.
+  const groups = groupRepeatedDetections([
+    estimate("330ml", "330 ml"),
+    estimate("2l", "2 L"),
     estimate("missing-size", null),
   ]);
 
-  assert.equal(groups.length, 3);
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups.map((g) => g.count).sort(), [1, 2]);
 });
 
 test("leaves unknown and incomplete estimates independent, preserves first appearance, and does not mutate inputs", () => {
