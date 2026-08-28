@@ -65,7 +65,7 @@
    letterboxing across camera sessions. The video remains the technical media
    source (capture, torch and scheduler), while canvases paint its decoded
    pixels in a deterministic 3:4 foreground plus a clearly non-actionable
-   blurred backdrop drawn at the foreground's own scale, so the two read as one
+   blurred backdrop drawn at the capture frame's scale, so the two read as one
    picture. Existing controls intentionally remain scene-relative. */
 .technical-camera-source{position:absolute!important;width:1px!important;height:1px!important;inset:auto!important;right:0!important;bottom:0!important;opacity:0!important;pointer-events:none!important}
 .camera-canvas-backdrop{position:absolute;z-index:0;inset:-24px;width:calc(100% + 48px);height:calc(100% + 48px);opacity:.66;filter:blur(22px) saturate(.82) brightness(.46);transform:scale(1.03);pointer-events:none}
