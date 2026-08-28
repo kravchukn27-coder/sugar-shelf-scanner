@@ -1,59 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  drawCropClampedToEdge,
   getCanvasBackingSize,
   getContinuationCrop,
   getCoverCrop,
   getRoundedRectFeatherAlpha,
   shouldRenderCanvasFrame,
 } from "./canvas-preview";
-
-/**
- * A pixel source whose color depends on (x, y), so drawImage calls that
- * sample different source rectangles can be told apart by "what color did
- * this destination pixel end up as". This module never touches a real
- * canvas/DOM (see its header comment), so tests fake the 2D context instead
- * of using one.
- */
-type DrawImageCall = {
-  sx: number;
-  sy: number;
-  sw: number;
-  sh: number;
-  dx: number;
-  dy: number;
-  dw: number;
-  dh: number;
-  globalAlpha: number;
-};
-
-function createFakeContext() {
-  const calls: DrawImageCall[] = [];
-  const context = {
-    globalAlpha: 1,
-    save() {},
-    restore() {
-      context.globalAlpha = 1;
-    },
-    drawImage(
-      _image: unknown,
-      sx: number,
-      sy: number,
-      sw: number,
-      sh: number,
-      dx: number,
-      dy: number,
-      dw: number,
-      dh: number,
-    ) {
-      calls.push({ sx, sy, sw, sh, dx, dy, dw, dh, globalAlpha: context.globalAlpha });
-    },
-  };
-  return { context: context as unknown as CanvasRenderingContext2D, calls };
-}
-
-const fakeSource = { image: {} as CanvasImageSource, width: 100, height: 80 };
 
 test("the backdrop crop keeps the viewfinder's scale so the blur continues it", () => {
   const source = { width: 1440, height: 1080 };
@@ -156,119 +109,4 @@ test("keeps feather geometry stable when scaled to a canvas backing store", () =
 test("rejects invalid feather geometry", () => {
   assert.equal(getRoundedRectFeatherAlpha({ x: 5, y: 5 }, { width: 0, height: 80 }, 10, 20), 0);
   assert.equal(getRoundedRectFeatherAlpha({ x: 5, y: 5 }, { width: 100, height: 80 }, 0, 20), 0);
-});
-
-test("feathers a corner's seam against both adjacent strips instead of one abrupt flat block", () => {
-  const { context, calls } = createFakeContext();
-  // A crop that overhangs the 100x80 source on every side, so all four
-  // corner gaps are non-zero and wider than the feather zone (12px).
-  const crop = { sx: -10, sy: -10, sw: 120, sh: 100 };
-  const drawn = drawCropClampedToEdge(context, fakeSource, crop, 200, 160);
-  assert.equal(drawn, true);
-
-  // gapLeft ~= 16.67, gapTop = 16, matching drawCropClampedToEdge's math.
-  const gapLeft = 200 / crop.sw * (0 - crop.sx);
-  const gapTop = 160 / crop.sh * (0 - crop.sy);
-
-  const isClose = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) < eps;
-
-  // The flat base fill: still one call spanning the whole corner rect, but
-  // now sampling a small neighborhood (2x2) rather than one exact pixel.
-  const baseFill = calls.filter((call) => isClose(call.dx, 0) && isClose(call.dy, 0)
-    && isClose(call.dw, gapLeft) && isClose(call.dh, gapTop) && call.globalAlpha === 1);
-  assert.equal(baseFill.length, 1);
-  assert.ok(baseFill[0].sw > 1 && baseFill[0].sh > 1,
-    "the base fill should sample more than a single flat source pixel");
-
-  // The row (top-strip) feather: several thin vertical slices hugging the
-  // corner's right edge (where the top strip's real region begins), each
-  // sampling the strip's own clamped edge point (0,0) — never remapping the
-  // whole row into the narrow corner — at increasing alpha as x approaches
-  // the strip's real boundary.
-  const rowFeatherSlices = calls
-    .filter((call) => isClose(call.sx, 0) && isClose(call.sy, 0) && call.sw === 1 && call.sh === 1
-      && isClose(call.dy, 0) && isClose(call.dh, gapTop) && call.globalAlpha < 1)
-    .sort((a, b) => a.dx - b.dx);
-  assert.ok(rowFeatherSlices.length >= 3, "expected several thin row-feather slices, not one abrupt draw");
-  for (let i = 1; i < rowFeatherSlices.length; i += 1) {
-    assert.ok(rowFeatherSlices[i].globalAlpha > rowFeatherSlices[i - 1].globalAlpha,
-      "row-feather alpha should increase toward the strip's real boundary");
-    assert.ok(rowFeatherSlices[i].dx > rowFeatherSlices[i - 1].dx);
-  }
-  // The last (highest-alpha) slice must sit right at the corner's right
-  // edge, i.e. exactly where the real top strip begins.
-  const lastRowSlice = rowFeatherSlices[rowFeatherSlices.length - 1];
-  assert.ok(isClose(lastRowSlice.dx + lastRowSlice.dw, gapLeft, 1e-6));
-
-  // The column (left-strip) feather: mirror check along y, hugging the
-  // corner's bottom edge.
-  const colFeatherSlices = calls
-    .filter((call) => isClose(call.sx, 0) && isClose(call.sy, 0) && call.sw === 1 && call.sh === 1
-      && isClose(call.dx, 0) && isClose(call.dw, gapLeft) && call.globalAlpha < 1)
-    .sort((a, b) => a.dy - b.dy);
-  assert.ok(colFeatherSlices.length >= 3, "expected several thin column-feather slices, not one abrupt draw");
-  for (let i = 1; i < colFeatherSlices.length; i += 1) {
-    assert.ok(colFeatherSlices[i].globalAlpha > colFeatherSlices[i - 1].globalAlpha,
-      "column-feather alpha should increase toward the strip's real boundary");
-    assert.ok(colFeatherSlices[i].dy > colFeatherSlices[i - 1].dy);
-  }
-  const lastColSlice = colFeatherSlices[colFeatherSlices.length - 1];
-  assert.ok(isClose(lastColSlice.dy + lastColSlice.dh, gapTop, 1e-6));
-
-  // No feather slice ever samples more than a single source pixel — there is
-  // no real data past the frame's edge to remap into the corner, so nothing
-  // should stretch a whole row/column across the narrow corner rect (the
-  // bug in the previous attempt).
-  assert.ok(![...rowFeatherSlices, ...colFeatherSlices].some((call) => call.sw > 1 || call.sh > 1));
-});
-
-test("leaves the non-corner edge-stretch strips unchanged", () => {
-  const { context, calls } = createFakeContext();
-  const crop = { sx: -10, sy: -10, sw: 120, sh: 100 };
-  drawCropClampedToEdge(context, fakeSource, crop, 200, 160);
-
-  const scaleX = 200 / crop.sw;
-  const scaleY = 160 / crop.sh;
-  const left = 0;
-  const top = 0;
-  const right = 100;
-  const bottom = 80;
-  const width = right - left;
-  const height = bottom - top;
-  const dx = (left - crop.sx) * scaleX;
-  const dy = (top - crop.sy) * scaleY;
-  const dw = width * scaleX;
-  const dh = height * scaleY;
-  const gapTop = dy;
-  const gapLeft = dx;
-  const gapBottom = 160 - (dy + dh);
-  const gapRight = 200 - (dx + dw);
-
-  // Top/bottom/left/right single-strip draws must be exactly as before: one
-  // call each, sampling the full-width/height edge line.
-  const isClose = (a: number, b: number) => Math.abs(a - b) < 1e-6;
-  const topStrip = calls.filter((call) => isClose(call.sx, left) && isClose(call.sy, top) && isClose(call.sw, width)
-    && call.sh === 1 && isClose(call.dx, dx) && call.dy === 0 && isClose(call.dw, dw) && isClose(call.dh, gapTop));
-  const bottomStrip = calls.filter((call) => isClose(call.sx, left) && isClose(call.sy, bottom - 1) && isClose(call.sw, width)
-    && call.sh === 1 && isClose(call.dx, dx) && isClose(call.dy, dy + dh) && isClose(call.dw, dw) && isClose(call.dh, gapBottom));
-  const leftStrip = calls.filter((call) => isClose(call.sx, left) && isClose(call.sy, top) && call.sw === 1
-    && isClose(call.sh, height) && call.dx === 0 && isClose(call.dy, dy) && isClose(call.dw, gapLeft) && isClose(call.dh, dh));
-  const rightStrip = calls.filter((call) => isClose(call.sx, right - 1) && isClose(call.sy, top) && call.sw === 1
-    && isClose(call.sh, height) && isClose(call.dx, dx + dw) && isClose(call.dy, dy) && isClose(call.dw, gapRight) && isClose(call.dh, dh));
-
-  assert.equal(topStrip.length, 1);
-  assert.equal(bottomStrip.length, 1);
-  assert.equal(leftStrip.length, 1);
-  assert.equal(rightStrip.length, 1);
-});
-
-test("does not throw on a very small (1-2px) corner gap", () => {
-  const { context } = createFakeContext();
-  // A crop that overhangs the source by only ~1-2 destination pixels on
-  // every side.
-  const crop = { sx: -1, sy: -1.5, sw: 102, sh: 83 };
-  assert.doesNotThrow(() => {
-    const drawn = drawCropClampedToEdge(context, fakeSource, crop, 100.5, 80.75);
-    assert.equal(drawn, true);
-  });
 });

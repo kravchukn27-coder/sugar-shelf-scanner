@@ -84,12 +84,18 @@
    The frame is centred in the scene, so its height cap keeps the top control
    row and the gallery button clear on short viewports and in full-screen mode
    where the safe-area insets grow. */
-.camera-scene{--camera-control-bottom:max(18px,calc(env(safe-area-inset-bottom) + 6px));--camera-frame-top-inset:max(64px,calc(env(safe-area-inset-top) + 54px));--camera-frame-bottom-inset:calc(var(--camera-control-bottom) + 56px);--camera-frame-width:min(97%,460px,calc((100svh - var(--camera-frame-top-inset) - var(--camera-frame-bottom-inset)) * 3 / 4));--camera-frame-radius:22px;--camera-edge-feather:28px}
+.camera-scene{--camera-control-bottom:max(18px,calc(env(safe-area-inset-bottom) + 6px));--camera-frame-top-inset:max(64px,calc(env(safe-area-inset-top) + 54px));--camera-frame-bottom-inset:calc(var(--camera-control-bottom) + 56px);--camera-frame-width:min(97%,460px,calc((100svh - var(--camera-frame-top-inset) - var(--camera-frame-bottom-inset)) * 3 / 4));--camera-frame-radius:22px;--camera-edge-feather:28px;--camera-frame-bleed:24px}
 .camera-vignette.camera-vignette-soft{background:linear-gradient(180deg,rgba(5,5,8,.18),transparent 27%,transparent 70%,rgba(5,5,8,.24))}
 .camera-canvas-backdrop{inset:-18px;width:calc(100% + 36px);height:calc(100% + 36px);opacity:1;filter:blur(14px) saturate(.96) brightness(.78);transform:none}
 .camera-live-preview{left:50%;top:50%;width:var(--camera-frame-width);max-height:none;aspect-ratio:3 / 4;transform:translate(-50%,-50%);overflow:visible;border-radius:0;background:transparent;box-shadow:none;pointer-events:none}
 .camera-live-preview.active{background:transparent}
-.camera-canvas-transition,.camera-canvas-foreground{position:absolute;inset:0;width:100%;height:100%;display:block;border-radius:var(--camera-frame-radius)}
+/* The backdrop has no real camera pixels past the frame's own edge, so its
+   corner fill is an unavoidably flat stretch — visible as a seam against the
+   frame's rounded corner. Rather than fabricate corner detail that doesn't
+   exist, bleed the sharp foreground past the visible border by
+   --camera-frame-bleed so its real (already-feathered) content physically
+   covers that seam instead. */
+.camera-canvas-transition,.camera-canvas-foreground{position:absolute;inset:calc(-1 * var(--camera-frame-bleed));display:block}
 .camera-canvas-transition{z-index:1;opacity:.96;filter:blur(10px) brightness(.94)}
 .camera-canvas-foreground{z-index:2}
 .camera-capture-frame{position:absolute;z-index:3;inset:0;border-radius:var(--camera-frame-radius);pointer-events:none}
@@ -97,7 +103,7 @@
 .camera-capture-frame .live-hint{z-index:3;inset:0;margin:0;padding:0 24px;font-size:15px}
 .camera-result-backdrop{position:absolute;display:block;z-index:0;inset:-18px;width:calc(100% + 36px);height:calc(100% + 36px);opacity:1;filter:blur(14px) saturate(.96) brightness(.78);transform:none;pointer-events:none}
 .camera-result-preview{position:absolute;z-index:2;left:50%;top:50%;width:var(--camera-frame-width);height:auto;max-height:none;aspect-ratio:3 / 4;transform:translate(-50%,-50%);border-radius:var(--camera-frame-radius);opacity:1;pointer-events:none}
-.camera-result-transition,.camera-result-image{position:absolute;inset:0;width:100%;height:100%;display:block;border-radius:var(--camera-frame-radius);object-fit:cover}
+.camera-result-transition,.camera-result-image{position:absolute;inset:calc(-1 * var(--camera-frame-bleed));display:block;object-fit:cover}
 .camera-result-transition{z-index:1;filter:blur(10px) brightness(.94)}
 .camera-result-image{z-index:2;-webkit-mask-image:linear-gradient(to right,transparent,#000 var(--camera-edge-feather),#000 calc(100% - var(--camera-edge-feather)),transparent),linear-gradient(to bottom,transparent,#000 var(--camera-edge-feather),#000 calc(100% - var(--camera-edge-feather)),transparent);-webkit-mask-composite:source-in;mask-image:linear-gradient(to right,transparent,#000 var(--camera-edge-feather),#000 calc(100% - var(--camera-edge-feather)),transparent),linear-gradient(to bottom,transparent,#000 var(--camera-edge-feather),#000 calc(100% - var(--camera-edge-feather)),transparent);mask-composite:intersect}
 .camera-result-preview .viewfinder-guide{z-index:3;inset:0;border:1.35px solid rgba(255,255,255,.9);border-radius:var(--camera-frame-radius);box-shadow:0 0 12px rgba(255,255,255,.16),0 1px 2px rgba(0,0,0,.2),inset 0 0 0 .5px rgba(255,255,255,.2)}
