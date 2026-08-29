@@ -271,7 +271,13 @@ export default function HomePage() {
     // seam, but what the user sees inside the white border must stay the
     // exact crop capture() sends to Gemini — cropping each canvas to its own
     // enlarged box would silently shrink that field of view instead.
-    const loop = createCanvasPreviewLoop({ video, targets: [{ canvas: foreground, fps: 30, edgeFeatherPx: 28, cornerRadiusPx: 22, continuationOf: livePreviewRef.current }, { canvas: transition, fps: 15, edgeFeatherPx: 28, cornerRadiusPx: 22, continuationOf: livePreviewRef.current }, { canvas: backdrop, fps: 15, continuationOf: livePreviewRef.current }], maxPixels: 1_250_000, maxDevicePixelRatio: 2, onFrameDrawn: () => { if (!painted) { painted = true; setCanvasPreviewActive(true); } } });
+    // Shared across all three targets, so the near-fullscreen backdrop and the
+    // small transition/foreground canvases must fit the SAME pixel budget at
+    // full maxDevicePixelRatio — otherwise the backdrop alone gets clamped to
+    // a lower pixelRatio, and the identical `blur(14px)` filter the two
+    // layers share ends up physically weaker on the backdrop, visible as a
+    // seam right where the transition's bled edge hands off to it.
+    const loop = createCanvasPreviewLoop({ video, targets: [{ canvas: foreground, fps: 30, edgeFeatherPx: 28, cornerRadiusPx: 22, continuationOf: livePreviewRef.current }, { canvas: transition, fps: 15, edgeFeatherPx: 28, cornerRadiusPx: 22, continuationOf: livePreviewRef.current }, { canvas: backdrop, fps: 15, continuationOf: livePreviewRef.current }], maxPixels: 2_000_000, maxDevicePixelRatio: 2, onFrameDrawn: () => { if (!painted) { painted = true; setCanvasPreviewActive(true); } } });
     const onVisibilityChange = () => {
       if (document.hidden) loop.stop();
       else loop.start();
