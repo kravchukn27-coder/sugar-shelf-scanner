@@ -149,3 +149,27 @@ for that bucket instead of the outlier's 30s+.
 
 **Result:** _(pending — needs a fresh log pull once this has been live long
 enough to accumulate a few dozen small-shelf `analyze` calls)_
+
+### 2026-08-30 — investigation follow-up — Gemini incident resolved
+
+**Check:** re-pulled logs from the current deployment (`80e52276`, live since
+08-29 06:41 UTC, so its logs span all of 08-29 and 08-30 to date) to see
+whether the 08-27/08-28 external Gemini incident (previous entry above) had
+self-resolved.
+
+| Window | n | success | preflight p50 | preflight timeout% |
+| --- | --- | --- | --- | --- |
+| Incident (27.08 21:00 → 28.08 14:22) | 103 | 43.7% | 4.8s | 42.7% |
+| 29.08 | 43 | 79% | 2.4s | 7.4% |
+| 30.08 (partial day, n small) | 11 | 91% | 4.0–4.5s | 1/6 |
+
+Token usage stayed flat (preflight avg 1421, analyze avg 1590 — consistent
+with the 1436/1928 baseline), confirming this was never a payload-side
+issue. 29.08's numbers are back at (in fact slightly better than) the
+original healthy baseline. 30.08's sample is too small for real confidence
+yet, but shows no failure pattern.
+
+**Result:** ✅ resolved — no code or config change was involved; the
+external Gemini-side degradation identified on 08-28 appears to have
+cleared on its own by 08-29. Worth a larger-sample re-check later in the day
+on 08-30 once more traffic accumulates, but nothing actionable right now.
