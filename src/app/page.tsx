@@ -62,19 +62,26 @@ const LIVE_HINT_COPY = {
   dark: "Move to better light",
   glare: "Reduce glare — tilt the product",
   uncertain: "Getting a closer look…",
-  connection: "Reconnecting…",
 } as const;
 type LiveHintReason = keyof typeof LIVE_HINT_COPY;
 const LIVE_HINT_STREAK_THRESHOLD = 2;
-// `uncertain` and `connection` already cost a real (if unsuccessful) Gemini
-// round trip, so they replace the default text immediately instead of
-// waiting for a repeat like the locally-detected motion/quality reasons do.
-const LIVE_HINT_IMMEDIATE_REASONS = new Set<LiveHintReason>(["uncertain", "connection"]);
+// `uncertain` already cost a real Gemini round trip, so it replaces the
+// default text immediately instead of waiting for a repeat like the
+// locally-detected motion/quality reasons do.
+//
+// A transient provider timeout deliberately has no copy at all. It used to
+// show "Reconnecting…", which named the wrong culprit — the user's connection
+// is usually fine, Gemini just didn't answer in time — and it appeared on the
+// very first blip, with no repeat filter, so it kept blanking the one line
+// telling the user what to do. The retry is silent and bounded; a failure that
+// outlives it still surfaces the blocking Try again prompt.
+const LIVE_HINT_IMMEDIATE_REASONS = new Set<LiveHintReason>(["uncertain"]);
 // A preflight failure only means "Gemini never answered" (timeout/5xx) for
 // these codes. It is retried silently up to this many times before giving up
 // with the blocking Try again prompt — that prompt is a deliberate token
 // guard for a genuine empty scene, and must stay reachable, but a transient
-// network blip on a live tick shouldn't cost the user a manual retry.
+// network blip on a live tick shouldn't cost the user a manual retry, or a
+// line of copy.
 const PREFLIGHT_TRANSIENT_CODES = new Set(["provider_timeout", "provider_error"]);
 const PREFLIGHT_TRANSIENT_RETRY_LIMIT = 2;
 const clientScannerMetricsEnabled = process.env.NEXT_PUBLIC_SCANNER_METRICS_ENABLED === "true";
@@ -466,7 +473,7 @@ export default function HomePage() {
           // here — terminal() is one-shot per session and would otherwise
           // swallow the real outcome that follows.
           preflightRetryStreak.current += 1;
-          noteLiveHint("connection");
+          noteLiveHint(null);
           return;
         }
         preflightRetryStreak.current = 0;
@@ -500,7 +507,7 @@ export default function HomePage() {
           // Same non-terminal case as above, reached via a thrown network
           // error instead of a non-ok response.
           preflightRetryStreak.current += 1;
-          noteLiveHint("connection");
+          noteLiveHint(null);
         } else {
           preflightRetryStreak.current = 0;
           setFailure("Couldn’t check this scene");

@@ -100,7 +100,7 @@
    as one row, and carries the same translucent glass as the other floating
    camera controls. The band is reserved by --camera-frame-bottom-inset, so the pill
    never overlaps the frame. */
-.analyze-now-button{position:absolute;z-index:5;left:50%;bottom:var(--camera-control-bottom);transform:translateX(-50%);height:48px;padding:0 22px;border-radius:999px;white-space:nowrap;color:#fff;background:rgba(20,18,24,.55);backdrop-filter:blur(12px);font-size:15px;font-weight:600;letter-spacing:.005em;-webkit-tap-highlight-color:transparent;transition:transform .16s ease,opacity .16s ease}
+.analyze-now-button{position:absolute;z-index:5;left:50%;bottom:var(--camera-control-bottom);transform:translateX(-50%);min-height:52px;padding:0 28px;border-radius:999px;white-space:nowrap;color:#16141b;background:#fff;font-size:16px;font-weight:700;letter-spacing:-.005em;box-shadow:0 8px 24px rgba(0,0,0,.38);-webkit-tap-highlight-color:transparent;transition:transform .16s ease,opacity .16s ease}
 .analyze-now-button:active:not(:disabled){transform:translateX(-50%) scale(.97)}
 .analyze-now-button:disabled{cursor:default;opacity:.48}
 @media(prefers-reduced-motion:reduce){.analyze-now-button{transition:none}}
