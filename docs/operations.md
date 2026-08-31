@@ -48,6 +48,41 @@ safe fallback.
   redeployed after a future credential rotation; never paste a connection URL
   into the app's Variables.
 
+## Paid access (monetization test)
+
+Required before enabling: migration `006_access_passes.sql` applied and a Stripe
+Payment Link whose after-payment redirect is
+`https://<production address>/?checkout={CHECKOUT_SESSION_ID}`.
+
+The test deliberately runs on the existing Railway address with no custom
+domain. Card details are entered on `checkout.stripe.com`, not here, so the
+address never sits under a payment form. The one thing it could affect is Meta
+ad review, which rejects raw hosting subdomains more often than ordinary
+domains; if that happens, add the domain before spending on traffic rather than
+mid-test. The free allowance and passes are per-origin, so a domain move resets
+every counter. Paid access survives it — a pass restores by the buyer's email.
+
+Railway variables: `STRIPE_SECRET_KEY` and `ACCESS_PASS_SECRET` are server-only
+and must never be given a `NEXT_PUBLIC_` name. `NEXT_PUBLIC_PAYWALL_ENABLED`
+and `NEXT_PUBLIC_STRIPE_PAYMENT_LINK` are build-time, so redeploy after
+changing them. `ACCESS_PASS_SECRET` is durable: rotating it makes every
+existing pass unrestorable by email.
+
+There is no webhook and no Stripe SDK. `POST /api/access/redeem` asks Stripe
+once whether the returned session was paid and issues the pass; issuing is
+idempotent per checkout session. `POST /api/access/restore` returns an active
+pass for the address the buyer paid with and is rate limited.
+
+Refunds are issued in the Stripe dashboard on first request without argument.
+A demo that fails to find a product has already cost the buyer their goodwill;
+a chargeback and a public review cost more than $2.99.
+
+To turn the test off: set `NEXT_PUBLIC_PAYWALL_ENABLED=false` and redeploy —
+the scanner returns to unlimited free scanning immediately, and existing passes
+simply stop mattering. To remove it entirely: delete `src/lib/access/`,
+`src/app/api/access/`, `src/app/paywall.tsx`, `src/app/paywall.module.css`,
+their call sites in `src/app/page.tsx`, and drop the `access_passes` table.
+
 ## Privacy-safe scanner telemetry
 
 Scanner telemetry is implemented but disabled by default. It includes

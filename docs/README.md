@@ -11,6 +11,7 @@ For a local demo quickstart, current scope, and privacy caveats, start at the
 | iPhone/Safari camera decisions, permission failures and regression checks | [camera.md](camera.md) |
 | Reviewed SKU data, matching, PostgreSQL and contribution policy | [catalog-data.md](catalog-data.md) |
 | Review-pending catalog proposal handling | [catalog-proposals.md](catalog-proposals.md) |
+| Paywall hypothesis, success thresholds and access mechanics | [monetization-test.md](monetization-test.md) |
 | Railway activation, deploy and observability operations | [operations.md](operations.md) |
 | Scanner timings, Gemini request logs, token measurement, and telemetry privacy boundary | [gemini-usage-observability.md](gemini-usage-observability.md) |
 | P0 result-funnel and result-quality telemetry verification | [p0-funnel-quality-telemetry-verification.md](p0-funnel-quality-telemetry-verification.md) |

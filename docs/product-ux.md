@@ -17,6 +17,34 @@ Because the flag is per browser and per origin, someone who has already opened
 the production link will not see the story again. Forcing it back for everyone
 means bumping the key, not clearing state at runtime.
 
+## Paid access (monetization test)
+
+The scanner allows three completed scans per browser, then shows a wall
+offering seven days of unlimited scanning for a single $2.99 payment. Only a
+scan that produced a result consumes the allowance: a failed or empty scan is
+not the user's fault and must not be charged for.
+
+The allowance lives in `localStorage` under `sugar:free-scans:v1` and resets
+when the user switches browsers or clears site data. That is deliberate — a
+scan costs a fraction of a cent, and server-side identity would cost more in
+conversion than the tokens it saves, while conflicting with the no-identifier
+telemetry contract.
+
+A purchase behaves differently. It is stored server-side, keyed to a digest of
+the buyer's email, and restorable from any browser through **Already paid on
+another browser?** on the wall. This exists because an ad click opens in the
+Instagram in-app browser, whose storage is isolated from Safari: without a
+restore path a buyer who reopens the link elsewhere would lose what they paid
+for.
+
+The remaining free count is never shown. A visible counter turns a trial into
+rationing, and the test needs the opposite — people scanning as much as they
+actually want to.
+
+The whole feature is off unless the build carries
+`NEXT_PUBLIC_PAYWALL_ENABLED=true`. See
+[monetization-test.md](monetization-test.md).
+
 ## Main flow
 
 1. **Start** opens the live rear-camera scanner.
