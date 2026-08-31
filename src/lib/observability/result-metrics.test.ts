@@ -37,3 +37,17 @@ test("result metrics logger emits only the allowlisted aggregate event", () => {
   }
   assert.deepEqual(JSON.parse(entries[0]), { event: "scan_result_metric", ...resultShown });
 });
+
+test("paywall funnel events are accepted with no identifiers", () => {
+  assert.equal(resultMetricsSchema.safeParse({ action: "paywall_shown" }).success, true);
+  assert.equal(resultMetricsSchema.safeParse({ action: "paywall_checkout_started" }).success, true);
+  assert.equal(resultMetricsSchema.safeParse({ action: "access_granted", grantSource: "checkout" }).success, true);
+  assert.equal(resultMetricsSchema.safeParse({ action: "access_granted", grantSource: "restore" }).success, true);
+});
+
+test("paywall events reject unknown fields and free-form values", () => {
+  // The buyer's address, a token, or a price must never become a log line.
+  assert.equal(resultMetricsSchema.safeParse({ action: "paywall_shown", email: "buyer@example.com" }).success, false);
+  assert.equal(resultMetricsSchema.safeParse({ action: "access_granted" }).success, false);
+  assert.equal(resultMetricsSchema.safeParse({ action: "access_granted", grantSource: "gift" }).success, false);
+});
