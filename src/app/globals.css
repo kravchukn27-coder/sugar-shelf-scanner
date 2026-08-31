@@ -128,3 +128,22 @@
 .analyze-now-button:active:not(:disabled){transform:translateX(-50%) scale(.97)}
 .analyze-now-button:disabled{cursor:default;opacity:.48}
 @media(prefers-reduced-motion:reduce){.analyze-now-button{transition:none}}
+
+/* Monetization test: the payoff moment right after access is granted. The
+   Home Screen ask is here because an installed origin is the only way iOS
+   keeps the camera grant between visits. */
+.access-granted-banner {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  bottom: calc(120px + env(safe-area-inset-bottom));
+  z-index: 5;
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255, 90, 69, 0.16);
+  color: #f2f1f6;
+  font-size: 14px;
+  line-height: 1.4;
+  text-align: center;
+}

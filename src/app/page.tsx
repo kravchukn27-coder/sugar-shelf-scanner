@@ -6,6 +6,15 @@ import "./sugar-fit-results.css";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SugarFitResultHandle, SugarFitResultsSheet } from "./sugar-fit-results";
 import OnboardingStory from "./onboarding-story";
+import Paywall, { type PaywallRestoreState } from "./paywall";
+import {
+  FREE_SCAN_LIMIT,
+  clearExpiredAccessPass,
+  readEntitlement,
+  recordCompletedScan,
+  storeAccessPass,
+  type Entitlement,
+} from "@/lib/access/scan-entitlement";
 import type { AnalyzeScanResponse, Detection, PreflightScanResponse } from "@/lib/contracts/scan";
 import { formatSugarPer100g } from "@/lib/scoring/format-sugar";
 import { createSugarScore } from "@/lib/scoring/sugar-score";
@@ -62,6 +71,10 @@ const LIVE_HINT_IMMEDIATE_REASONS = new Set<LiveHintReason>(["uncertain", "conne
 const PREFLIGHT_TRANSIENT_CODES = new Set(["provider_timeout", "provider_error"]);
 const PREFLIGHT_TRANSIENT_RETRY_LIMIT = 2;
 const clientScannerMetricsEnabled = process.env.NEXT_PUBLIC_SCANNER_METRICS_ENABLED === "true";
+// Monetization test. While this is not "true" nothing below changes behaviour:
+// no free-scan counter, no wall, no access requests.
+const paywallEnabled = process.env.NEXT_PUBLIC_PAYWALL_ENABLED === "true";
+const checkoutUrl = process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK ?? "";
 // Default-on for live camera; set NEXT_PUBLIC_FRAME_QUALITY_ENABLED=false for fast rollback.
 const clientFrameQualityEnabled = process.env.NEXT_PUBLIC_FRAME_QUALITY_ENABLED !== "false";
 // Roll out the earlier stillness baseline independently; disabled preserves
@@ -113,6 +126,20 @@ async function scanFailureMessage(response: Response) {
   return failureMessageFor(code, retryAfterSecondsFrom(response), "Couldn’t analyze this capture");
 }
 
+/** Blocked site data throws on access, so every caller takes null instead. */
+function browserStorage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function accessGrantedCopy(expiresAt: string): string {
+  const until = new Date(expiresAt).toLocaleDateString(undefined, { day: "numeric", month: "long" });
+  return `You’re in — unlimited scans until ${until}. Add this page to your Home Screen so the camera stays allowed between visits.`;
+}
+
 export default function HomePage() {
   const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), livePreviewRef = useRef<HTMLDivElement>(null), liveCanvasRef = useRef<HTMLCanvasElement>(null), liveTransitionCanvasRef = useRef<HTMLCanvasElement>(null), liveBackdropCanvasRef = useRef<HTMLCanvasElement>(null), resultBackdropCanvasRef = useRef<HTMLCanvasElement>(null), resultPreviewRef = useRef<HTMLDivElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), activeRequestKind = useRef<"preflight" | "analyze" | null>(null), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), resultMetrics = useRef({ source: null as "camera" | "upload" | null, started: false, resultShown: false, productOpened: false, recommendationOpened: false }), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), preflightRetryStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
@@ -159,6 +186,10 @@ export default function HomePage() {
   const [introResolved, setIntroResolved] = useState(false);
   const [analysisPhase, setAnalysisPhase] = useState<"identifying" | "catalog" | "slow" | "extended" | "many">("identifying");
   const [deferAutoResults, setDeferAutoResults] = useState(false);
+  const [entitlement, setEntitlement] = useState<Entitlement>({ paid: false, freeScansUsed: 0, freeScansRemaining: FREE_SCAN_LIMIT, mustPay: false });
+  const [paywallOpen, setPaywallOpen] = useState(false);
+  const [restoreState, setRestoreState] = useState<PaywallRestoreState>("idle");
+  const [accessBanner, setAccessBanner] = useState<string | null>(null);
   const groups = groupRepeatedDetections((scan?.detections ?? []).filter(eligible));
   const rankedGroups = sortDetectionGroupsBySugarFit(groups);
   const dispatch = useCallback((event: ScannerLifecycleEvent) => setState((current) => transitionScannerLifecycle(current, event)), []);
@@ -222,6 +253,44 @@ export default function HomePage() {
       setShowIntro(true);
     }
     setIntroResolved(true);
+  }, []);
+  // The Payment Link returns the buyer here with a checkout session id. It is
+  // exchanged once for a pass and then stripped from the address, so a shared
+  // or reloaded URL can never look like a second purchase.
+  useEffect(() => {
+    if (!paywallEnabled) return;
+    clearExpiredAccessPass(browserStorage(), new Date());
+    const checkoutSessionId = new URLSearchParams(window.location.search).get("checkout");
+    if (!checkoutSessionId) {
+      setEntitlement(readEntitlement(browserStorage(), new Date()));
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch("/api/access/redeem", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ checkoutSessionId }),
+        });
+        if (cancelled || !response.ok) return;
+        const pass = await response.json() as { token: string; expiresAt: string };
+        storeAccessPass(browserStorage(), pass);
+        reportResultMetric(clientScannerMetricsEnabled, { action: "access_granted", grantSource: "checkout" });
+        setAccessBanner(accessGrantedCopy(pass.expiresAt));
+        setPaywallOpen(false);
+      } catch {
+        // A failed exchange is recoverable: the buyer can restore by email.
+      } finally {
+        if (!cancelled) {
+          const url = new URL(window.location.href);
+          url.searchParams.delete("checkout");
+          window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+          setEntitlement(readEntitlement(browserStorage(), new Date()));
+        }
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
   const finishIntro = useCallback(() => {
     try {
@@ -367,7 +436,14 @@ export default function HomePage() {
       if (!response.ok) { setFailure(await scanFailureMessage(response)); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); return; }
       const result = await response.json() as AnalyzeScanResponse;
       if (id !== session.current) return;
-      if (result.detections.some(eligible)) { setScan(result); dispatch("ANALYZE_SUCCESS"); } else { reportNoDetectionResult(); setFailure("No recognizable packaged products found"); dispatch("NO_SCENE"); }
+      if (result.detections.some(eligible)) {
+        setScan(result);
+        dispatch("ANALYZE_SUCCESS");
+        // Only a scan that produced a result consumes the allowance: a failed
+        // or empty scan is our problem, and charging for it would also make
+        // the funnel numbers stop meaning what they say.
+        if (paywallEnabled) setEntitlement(recordCompletedScan(browserStorage(), new Date()));
+      } else { reportNoDetectionResult(); setFailure("No recognizable packaged products found"); dispatch("NO_SCENE"); }
       completeScanMetrics(id, "analysis_completed");
     } catch (error) { finishRequestTiming(); if (id === session.current && !(error instanceof DOMException && error.name === "AbortError")) { setFailure("Couldn’t analyze this frame"); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); } }
     finally {
@@ -473,7 +549,46 @@ export default function HomePage() {
     void analyze(video, session.current);
   }, [analyze, canvasPreviewActive, recoveryCamera, state, uploadUrl]);
 
+  const openPaywall = useCallback(() => {
+    setRestoreState("idle");
+    setPaywallOpen(true);
+    reportResultMetric(clientScannerMetricsEnabled, { action: "paywall_shown" });
+  }, []);
+
+  const startCheckout = useCallback(() => {
+    if (!checkoutUrl) return;
+    reportResultMetric(clientScannerMetricsEnabled, { action: "paywall_checkout_started" });
+    // Same tab on purpose: a new window inside an in-app browser from an ad
+    // has no reliable way back to this page.
+    window.location.assign(checkoutUrl);
+  }, []);
+
+  const restoreAccess = useCallback(async (email: string) => {
+    setRestoreState("working");
+    try {
+      const response = await fetch("/api/access/restore", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (!response.ok) {
+        setRestoreState(response.status === 404 ? "not_found" : "error");
+        return;
+      }
+      const pass = await response.json() as { token: string; expiresAt: string };
+      storeAccessPass(browserStorage(), pass);
+      reportResultMetric(clientScannerMetricsEnabled, { action: "access_granted", grantSource: "restore" });
+      setEntitlement(readEntitlement(browserStorage(), new Date()));
+      setAccessBanner(accessGrantedCopy(pass.expiresAt));
+      setRestoreState("idle");
+      setPaywallOpen(false);
+    } catch {
+      setRestoreState("error");
+    }
+  }, []);
+
   const start = useCallback(async () => {
+    if (paywallEnabled && readEntitlement(browserStorage(), new Date()).mustPay) { openPaywall(); return; }
     const id = ++session.current; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); stopStream(); clearResult(); resetScanMetrics("camera"); setUploadUrl(null); setCameraKey((key) => key + 1); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
     try {
       // A device ID is a best-effort way to keep the same browser-selected rear
@@ -500,7 +615,7 @@ export default function HomePage() {
       if (id !== session.current) { stream.getTracks().forEach((t) => t.stop()); if (videoRef.current) videoRef.current.srcObject = null; streamRef.current = null; }
     }
     catch (error) { if (id === session.current) { const failed = describeCameraAccessFailure(error); setFailure(failed.message); setFailureCanRetry(failed.canRetry); setState((current) => transitionScannerLifecycle(current, "ANALYZE_FAILURE")); } }
-  }, [clearResult, resetScanMetrics, sampleLiveFrame, stopStream]);
+  }, [clearResult, openPaywall, resetScanMetrics, sampleLiveFrame, stopStream]);
   const close = useCallback(() => { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
   const toggleTorch = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !torchOn; if (!track || !supportsTorch(track)) return setTorchAvailable(false); try { await track.applyConstraints({ advanced: [{ torch: next } as unknown as MediaTrackConstraintSet] }); setTorchOn(next); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
   const retry = useCallback(() => { if (!uploadUrl) void start(); else { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); clearResult(); resetScanMetrics("upload"); setUploadBusy(true); dispatch("RETRY"); } }, [clearResult, dispatch, resetScanMetrics, start, uploadUrl]);
@@ -585,6 +700,7 @@ export default function HomePage() {
   }, [capture, recoveryBusy, recoveryCamera, recoveryCameraReady, stopStream]);
   function upload(file: File | undefined) {
     if (!file || uploadBusy) return;
+    if (paywallEnabled && readEntitlement(browserStorage(), new Date()).mustPay) { openPaywall(); return; }
     session.current += 1;
     stillnessFingerprint.current = null;
     qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0;
@@ -681,14 +797,14 @@ export default function HomePage() {
   const showAnalysisSpinner = state === "captured_analyzing" || (uploadUrl !== null && uploadBusy && state === "live_searching");
   const recoveryActive = recoveryCamera !== null;
 
-  return <>{introResolved && showIntro && !recoveryActive && <OnboardingStory onFinish={finishIntro} />}<main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""} ${recoveryActive ? "recovery-active" : ""}`} aria-label={recoveryActive ? "Recovery camera" : "Sugar product scanner"}>
+  return <>{introResolved && showIntro && !recoveryActive && <OnboardingStory onFinish={finishIntro} />}{paywallEnabled && paywallOpen && !recoveryActive && <Paywall checkoutAvailable={checkoutUrl.length > 0} restoreState={restoreState} onCheckout={startCheckout} onRestore={(email) => void restoreAccess(email)} onClose={() => setPaywallOpen(false)} />}<main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""} ${recoveryActive ? "recovery-active" : ""}`} aria-label={recoveryActive ? "Recovery camera" : "Sugar product scanner"}>
     {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video key={cameraKey} ref={videoRef} className={`camera-preview ${!recoveryActive && (canvasPreviewActive || frozen) ? "technical-camera-source" : ""}`} muted playsInline />}
     {state === "live_searching" && !uploadUrl && !recoveryActive && <><canvas ref={liveBackdropCanvasRef} className="camera-canvas-backdrop" aria-hidden="true" /><div className={`camera-live-preview ${canvasPreviewActive ? "active" : ""}`}><canvas ref={liveTransitionCanvasRef} className="camera-canvas-transition" aria-hidden="true" /><canvas ref={liveCanvasRef} className="camera-canvas-foreground" aria-hidden="true" /><div ref={livePreviewRef} className="camera-capture-frame"><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p></div></div></>}
     {frozen && !recoveryActive && <>{!uploadUrl && <><canvas ref={resultBackdropCanvasRef} className="camera-result-backdrop" aria-hidden="true" /><div ref={resultPreviewRef} className="camera-result-preview"><img className="camera-result-transition" src={frozen} alt="" aria-hidden="true" /><img className="frozen-preview camera-result-image" src={frozen} alt="Captured products" /><span className="viewfinder-guide" aria-hidden="true" /></div></>}{uploadUrl && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}</>}{state !== "camera_off" && <div className={`camera-vignette ${!uploadUrl && !recoveryActive ? "camera-vignette-soft" : ""}`} />}
     {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && torchAvailable ? "" : "end"}`}><div>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
     <div className={frozen && !uploadUrl && !recoveryActive ? "camera-result-overlay-stage" : "camera-overlay-stage"}>{groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}</div>
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}
-    {state === "camera_off" && <ScannerHome onStart={() => void start()} onReplayIntro={() => setShowIntro(true)} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action={failureCanRetry ? "Try again" : undefined} onAction={retry} failure />}
+    {state === "camera_off" && <ScannerHome onStart={() => void start()} onReplayIntro={() => setShowIntro(true)} />}{accessBanner && state === "camera_off" ? <p className="access-granted-banner" role="status">{accessBanner}</p> : null}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action={failureCanRetry ? "Try again" : undefined} onAction={retry} failure />}
     {state === "captured_analyzing" && <CameraCopy>{analysisPhase === "many" ? "Full shelf detected — this may take a moment" : analysisPhase === "identifying" ? "Calculating Your Fit" : analysisPhase === "catalog" ? "Personalizing your result" : analysisPhase === "slow" ? "Still working on your result" : "This one's taking a bit longer than usual"}</CameraCopy>}
     {state !== "camera_off" && state !== "captured_analyzing" && state !== "results" ? <label className={`gallery-button ${uploadBusy ? "busy" : ""}`} aria-label="Choose a product photo" aria-disabled={uploadBusy}><input type="file" accept="image/*" disabled={uploadBusy} onChange={(e) => { upload(e.target.files?.[0]); e.currentTarget.value = ""; }} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label> : null}
     {state === "live_searching" && !uploadUrl ? <button className="analyze-now-button" type="button" disabled={!canvasPreviewActive} onClick={analyzeNow}>Analyze now</button> : null}
