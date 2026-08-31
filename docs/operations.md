@@ -68,6 +68,70 @@ Launch check: before spending money on traffic, open the wall once on the
 deployed build and confirm a `paywall_shown` event actually appears in the
 Railway logs.
 
+### Turning the test on, in order
+
+The order matters. Each step is only meaningful once the one before it is done,
+and turning the browser flag on first produces a wall that takes a payment and
+then cannot redeem it — which reads as a broken product rather than a missing
+step.
+
+1. **Apply the migration.** `psql "$DATABASE_URL" -f db/migrations/006_access_passes.sql`
+   against the Railway database. Nothing in the deploy applies it: `npm start`
+   only boots the server, so shipping this code creates no table by itself.
+   Confirm with `\d access_passes` that the table exists.
+
+2. **Set the two server-only secrets in Railway.** `STRIPE_SECRET_KEY` (use the
+   test key, `sk_test_...`, for your own run-through; swap to `sk_live_...` only
+   when real traffic starts) and `ACCESS_PASS_SECRET` (any random string of at
+   least 16 characters). Neither may ever be given a `NEXT_PUBLIC_` name — that
+   prefix inlines a value into the browser bundle, which for the Stripe key
+   would publish it. `DATABASE_URL` is already set.
+
+   `ACCESS_PASS_SECRET` is durable for the life of the test: it keys the digest
+   of each buyer's email, so rotating it makes every pass already sold
+   unrestorable by its buyer.
+
+3. **Check the routes answer before showing anyone a wall.** With the paywall
+   still off, `curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"email":"nobody@example.com"}' https://sugar-api-production.up.railway.app/api/access/restore`
+   should return **404** ("no active pass for that address"), not 503. A 503
+   means step 1 or step 2 is incomplete — the routes fail closed on purpose
+   rather than half-working.
+
+4. **Turn on the telemetry flags and redeploy.** `SCANNER_METRICS_ENABLED=true`
+   and `NEXT_PUBLIC_SCANNER_METRICS_ENABLED=true`. The second is build-time, so
+   it needs a redeploy to take effect.
+
+5. **Turn on the paywall and redeploy.** `NEXT_PUBLIC_PAYWALL_ENABLED=true` and
+   `NEXT_PUBLIC_STRIPE_PAYMENT_LINK=<the Payment Link URL>`. Both are
+   build-time; a variable change alone does nothing until the build reruns.
+
+6. **Buy it yourself, end to end, with the test key.** Three scans until the
+   wall appears, then card `4242 4242 4242 4242`, any future expiry, any CVC.
+   Expected: Stripe returns you to `/?checkout=cs_test_...`, the address loses
+   the `?checkout=` parameter, and the confirmation banner appears. Then check
+   the database holds exactly one row: `SELECT count(*) FROM access_passes;`
+   Reloading the same success URL must not add a second row — issuing is
+   idempotent per checkout session.
+
+   This one run is the highest-value check before spending on traffic. It is the
+   only thing that proves the real shape of a Payment Link session: the actual
+   length of the session id, whether `customer_details.email` is populated for
+   every payment method the link accepts, and what `payment_status` reads for a
+   card that requires 3-D Secure.
+
+7. **Prove the restore path.** Open the site in a different browser (or a
+   private window), exhaust the free scans, and restore with the address you
+   paid with. This is the path that saves a buyer who paid inside the Instagram
+   in-app browser and later opened the link in Safari.
+
+8. **Confirm the funnel is recording.** Look in the Railway logs for a
+   `paywall_shown` line. If the wall works but no line appears, step 4 did not
+   take effect — and the test would run to completion producing no numbers.
+
+**Rolling back** is one variable: set `NEXT_PUBLIC_PAYWALL_ENABLED=false` and
+redeploy. Scanning returns to unlimited immediately; passes already sold simply
+stop mattering, and the table can stay until the test is removed for good.
+
 The test deliberately runs on the existing Railway address with no custom
 domain. Card details are entered on `checkout.stripe.com`, not here, so the
 address never sits under a payment form. The one thing it could affect is Meta
