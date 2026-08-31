@@ -3,6 +3,7 @@ import { z } from "zod";
 import { issueAccessPass } from "@/lib/access/access-pass";
 import { verifyCheckoutSession } from "@/lib/access/stripe-checkout";
 import { getAccessPassConfig } from "@/lib/env";
+import { checkScanRateLimit } from "@/lib/observability/scan-route";
 
 export const runtime = "nodejs";
 
@@ -10,8 +11,20 @@ const bodySchema = z.object({ checkoutSessionId: z.string().min(1).max(120) }).s
 
 const accessPool = globalThis as typeof globalThis & { __sugarAccessPool?: Pool };
 
-function json(body: unknown, status: number) {
-  return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
+function json(body: unknown, status: number, headers: Record<string, string> = {}) {
+  return Response.json(body, { status, headers: { "Cache-Control": "no-store", ...headers } });
+}
+
+// Bounded like every other pool here: two low-traffic routes share this one, and
+// a hung database must surface as the documented 503 rather than a hanging route.
+function getAccessPool(databaseUrl: string): Pool {
+  return accessPool.__sugarAccessPool ??= new Pool({
+    connectionString: databaseUrl,
+    max: 2,
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 1_500,
+    query_timeout: 1_500,
+  });
 }
 
 /**
@@ -25,6 +38,18 @@ export async function POST(request: Request) {
   const config = getAccessPassConfig();
   if (!config) return json({ error: "unavailable" }, 503);
 
+  // Ahead of the Stripe call on purpose: a loop of junk session ids would
+  // otherwise rate limit the Stripe account and break redemption for buyers.
+  const rateLimit = checkScanRateLimit(request, {
+    scope: "access_redeem",
+    limit: 10,
+    windowMs: 60_000,
+    secret: process.env.RATE_LIMIT_SECRET,
+  });
+  if (!rateLimit.allowed) {
+    return json({ error: "rate_limited" }, 429, { "Retry-After": String(rateLimit.retryAfterSeconds) });
+  }
+
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return json({ error: "invalid_request" }, 400);
 
@@ -33,8 +58,8 @@ export async function POST(request: Request) {
   if (verification.status === "unavailable") return json({ error: "unavailable" }, 503);
   if (verification.status === "unpaid") return json({ error: "not_paid" }, 402);
 
-  const pool = (accessPool.__sugarAccessPool ??= new Pool({ connectionString: config.databaseUrl }));
   try {
+    const pool = getAccessPool(config.databaseUrl);
     const pass = await issueAccessPass(pool, {
       checkoutSessionId: parsed.data.checkoutSessionId,
       email: verification.email,

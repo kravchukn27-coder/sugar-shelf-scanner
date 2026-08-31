@@ -14,6 +14,18 @@ function json(body: unknown, status: number, headers: Record<string, string> = {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store", ...headers } });
 }
 
+// Bounded like every other pool here: two low-traffic routes share this one, and
+// a hung database must surface as the documented 503 rather than a hanging route.
+function getAccessPool(databaseUrl: string): Pool {
+  return accessPool.__sugarAccessPool ??= new Pool({
+    connectionString: databaseUrl,
+    max: 2,
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 1_500,
+    query_timeout: 1_500,
+  });
+}
+
 /**
  * Returns an active pass for the address the buyer paid with.
  *
@@ -39,8 +51,8 @@ export async function POST(request: Request) {
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return json({ error: "invalid_request" }, 400);
 
-  const pool = (accessPool.__sugarAccessPool ??= new Pool({ connectionString: config.databaseUrl }));
   try {
+    const pool = getAccessPool(config.databaseUrl);
     const pass = await findActivePassByEmail(pool, {
       email: parsed.data.email,
       secret: config.accessPassSecret,

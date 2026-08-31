@@ -50,9 +50,23 @@ safe fallback.
 
 ## Paid access (monetization test)
 
-Required before enabling: migration `006_access_passes.sql` applied and a Stripe
+Required before enabling: migration `006_access_passes.sql` applied, a Stripe
 Payment Link whose after-payment redirect is
-`https://<production address>/?checkout={CHECKOUT_SESSION_ID}`.
+`https://<production address>/?checkout={CHECKOUT_SESSION_ID}`, and both
+telemetry flags — `SCANNER_METRICS_ENABLED=true` in Railway **and**
+`NEXT_PUBLIC_SCANNER_METRICS_ENABLED=true` in the deployed browser build. The
+funnel events `paywall_shown`, `paywall_checkout_started` and `access_granted`
+travel through `POST /api/scan/result-metrics`, which discards everything
+unless both flags are set — so without them the wall works perfectly and the
+funnel, which is the entire point of this test, records nothing.
+
+Do not enable promotion codes on this Payment Link. A fully discounted checkout
+returns Stripe's `payment_status: no_payment_required`, which redemption treats
+as unpaid, so that buyer is refused access with a 402.
+
+Launch check: before spending money on traffic, open the wall once on the
+deployed build and confirm a `paywall_shown` event actually appears in the
+Railway logs.
 
 The test deliberately runs on the existing Railway address with no custom
 domain. Card details are entered on `checkout.stripe.com`, not here, so the

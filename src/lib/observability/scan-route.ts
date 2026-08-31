@@ -4,7 +4,9 @@ import { isScannerMetricsEnabled } from "@/lib/env";
 
 // `access_restore` is an email-guessing surface, so it is rate limited by the
 // same keyed digest as the scan routes. It never calls scanJsonResponse.
-type ScanRoute = "preflight" | "analyze" | "recovery_label" | "access_restore";
+// `access_redeem` makes an outbound authenticated Stripe call per request, so
+// it is rate limited by the same digest. It never calls scanJsonResponse.
+type ScanRoute = "preflight" | "analyze" | "recovery_label" | "access_restore" | "access_redeem";
 
 type ScanRouteTiming = {
   route: ScanRoute;

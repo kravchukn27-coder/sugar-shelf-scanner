@@ -255,8 +255,9 @@ export default function HomePage() {
     setIntroResolved(true);
   }, []);
   // The Payment Link returns the buyer here with a checkout session id. It is
-  // exchanged once for a pass and then stripped from the address, so a shared
-  // or reloaded URL can never look like a second purchase.
+  // exchanged for a pass and stripped from the address only once that succeeds,
+  // so a shared or reloaded URL can never look like a second purchase, while a
+  // failed exchange leaves the id in place for a reload to retry.
   useEffect(() => {
     if (!paywallEnabled) return;
     clearExpiredAccessPass(browserStorage(), new Date());
@@ -267,6 +268,7 @@ export default function HomePage() {
     }
     let cancelled = false;
     void (async () => {
+      let redeemed = false;
       try {
         const response = await fetch("/api/access/redeem", {
           method: "POST",
@@ -279,13 +281,21 @@ export default function HomePage() {
         reportResultMetric(clientScannerMetricsEnabled, { action: "access_granted", grantSource: "checkout" });
         setAccessBanner(accessGrantedCopy(pass.expiresAt));
         setPaywallOpen(false);
+        redeemed = true;
       } catch {
-        // A failed exchange is recoverable: the buyer can restore by email.
+        // Handled below: a failed exchange has issued no pass, so there is
+        // nothing to restore by email yet and the session id must survive.
       } finally {
         if (!cancelled) {
-          const url = new URL(window.location.href);
-          url.searchParams.delete("checkout");
-          window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+          if (redeemed) {
+            const url = new URL(window.location.href);
+            url.searchParams.delete("checkout");
+            window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+          } else {
+            // The session id is the buyer's only proof of purchase until a pass
+            // exists, so leave it in the address: a reload is then a free retry.
+            setAccessBanner("We couldn’t confirm your payment yet. Reload this page in a moment — you have not been charged again.");
+          }
           setEntitlement(readEntitlement(browserStorage(), new Date()));
         }
       }
@@ -589,6 +599,7 @@ export default function HomePage() {
 
   const start = useCallback(async () => {
     if (paywallEnabled && readEntitlement(browserStorage(), new Date()).mustPay) { openPaywall(); return; }
+    setAccessBanner(null);
     const id = ++session.current; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); stopStream(); clearResult(); resetScanMetrics("camera"); setUploadUrl(null); setCameraKey((key) => key + 1); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
     try {
       // A device ID is a best-effort way to keep the same browser-selected rear

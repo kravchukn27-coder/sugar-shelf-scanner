@@ -17,10 +17,13 @@ async function withoutAccessConfig(run: () => Promise<void>) {
   }
 }
 
-function request(body: unknown) {
+function request(body: unknown, forwardedFor?: string) {
   return new Request("http://localhost/api/access/redeem", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...(forwardedFor ? { "x-forwarded-for": forwardedFor } : {}),
+    },
     body: JSON.stringify(body),
   });
 }
@@ -42,6 +45,27 @@ test("redeem rejects a body that is not a checkout session id", async () => {
     assert.equal((await POST(request({ checkoutSessionId: "../admin" }))).status, 400);
     assert.equal((await POST(request({ token: "nope" }))).status, 400);
     assert.equal((await POST(request(null))).status, 400);
+  } finally {
+    delete process.env.STRIPE_SECRET_KEY;
+    delete process.env.ACCESS_PASS_SECRET;
+    delete process.env.DATABASE_URL;
+  }
+});
+
+test("redeem rate limits a burst before it can reach Stripe", async () => {
+  process.env.STRIPE_SECRET_KEY = "sk_test_example";
+  process.env.ACCESS_PASS_SECRET = "0123456789abcdef01";
+  process.env.DATABASE_URL = "postgres://localhost:5432/sugar";
+  // Its own forwarded address, so this burst cannot spend another test's quota.
+  const client = "198.51.100.7";
+  try {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      assert.notEqual((await POST(request({ checkoutSessionId: "../admin" }, client))).status, 429);
+    }
+    const limited = await POST(request({ checkoutSessionId: "../admin" }, client));
+    assert.equal(limited.status, 429);
+    assert.equal(limited.headers.get("Cache-Control"), "no-store");
+    assert.ok(Number(limited.headers.get("Retry-After")) >= 1);
   } finally {
     delete process.env.STRIPE_SECRET_KEY;
     delete process.env.ACCESS_PASS_SECRET;
