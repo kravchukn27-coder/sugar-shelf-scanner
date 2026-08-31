@@ -24,7 +24,7 @@
 .sugar-fit-why>span.caution i{background:#fbf0d8;color:#8b5a1c}.sugar-fit-why>span.bad i{background:#fde9eb;color:#a13b48}.sugar-fit-why>span.neutral i{background:#e5e1e9;color:#6f6874}
 .sugar-fit-empty{display:grid;gap:6px;margin:18px 0;padding:20px;border-radius:18px;background:#f0edf4;text-align:center}.sugar-fit-empty strong{font-size:22px}.sugar-fit-empty span{color:#746d78;font-size:13px}
 .sugar-fit-repeat{margin:0 0 12px;color:#7c7580;font-size:11px;text-align:center}
-.sugar-fit-scan-again{width:100%;min-height:50px;margin-top:2px;border-radius:16px;background:#211d23;color:#fff;font-size:14px;font-weight:900}
+.sugar-fit-scan-again{width:100%;min-height:50px;margin-top:2px;border-radius:16px;background:#211d23;color:#fff;font-size:14px;font-weight:600}
 .sugar-fit-amazon{display:flex;align-items:center;justify-content:center;min-height:50px;margin:8px 0 2px;border-radius:16px;background:#ffca55;color:#2d2415;text-align:center;text-decoration:none;font-size:14px;font-weight:500;box-shadow:0 7px 18px rgba(194,126,13,.24);transition:transform .15s ease,background-color .15s ease}
 .sugar-fit-amazon:active{transform:translateY(1px);background:#ffc13b}
 .sugar-fit-compare-heading{display:grid;gap:4px;margin:2px 0 14px}.sugar-fit-compare-heading strong{font-size:22px;letter-spacing:-.04em}.sugar-fit-compare-heading span{color:#7b7480;font-size:12px}

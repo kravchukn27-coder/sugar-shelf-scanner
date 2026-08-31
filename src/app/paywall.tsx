@@ -47,14 +47,14 @@ export default function Paywall({ checkoutAvailable, restoreState, onCheckout, o
 
         <div className={styles.content}>
           <p className={styles.used}>You’ve used your free scans.</p>
-          <h1 className={styles.title}>Keep scanning<br />all week.</h1>
+          <h1 className={styles.title}>Keep scanning<br />all week</h1>
           <p className={styles.body}>Get unlimited scans for 7 days and see what’s really in the groceries you buy.</p>
 
           <div className={styles.offer}>
             <button className={styles.checkout} type="button" disabled={!checkoutAvailable} onClick={onCheckout}>
               Start now
             </button>
-            <p className={styles.price}>Unlimited scans for 7 days · $2.99 once</p>
+            <p className={styles.price}>Unlimited scans · $2.99 one-time</p>
             {!checkoutAvailable ? <p className={styles.unavailable} role="status">Payments aren’t available right now. Please try again later.</p> : null}
           </div>
 
@@ -88,7 +88,7 @@ export default function Paywall({ checkoutAvailable, restoreState, onCheckout, o
             </form>
           ) : (
             <button className={styles.restoreToggle} type="button" onClick={() => setRestoreOpen(true)}>
-              Already paid on another browser?
+              Restore purchase
             </button>
           )}
         </div>
