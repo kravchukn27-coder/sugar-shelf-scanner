@@ -12,6 +12,7 @@ import { createSugarScore } from "@/lib/scoring/sugar-score";
 import { calculateSugarFit } from "@/lib/scoring/sugar-fit";
 import { groupRepeatedDetections, sortDetectionGroupsBySugarFit, type DetectionGroup } from "@/lib/scan/deduplicate-detections";
 import { getCenteredFrameCrop } from "@/lib/scan/frame-crop";
+import { describeCameraAccessFailure } from "@/lib/scan/camera-access";
 import { createCanvasPreviewLoop, drawSourceToCanvas } from "@/lib/scan/canvas-preview";
 import { getCameraDiagnosticSnapshot, type CameraDiagnosticSnapshot } from "@/lib/scan/camera-diagnostics";
 import { applyCameraView, getCameraControls, getCameraDeviceId, preferCameraCaptureQuality, rearCameraRequest, supportsTorch } from "@/lib/scan/media-capabilities";
@@ -118,6 +119,7 @@ export default function HomePage() {
   const [canvasPreviewActive, setCanvasPreviewActive] = useState(false);
   const [liveHint, setLiveHint] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const [failureCanRetry, setFailureCanRetry] = useState(true);
   const [scan, setScan] = useState<AnalyzeScanResponse | null>(null);
   const [frozen, setFrozen] = useState<string | null>(null);
   const [uploadUrl, setUploadUrl] = useState<string | null>(null);
@@ -230,7 +232,7 @@ export default function HomePage() {
     setShowIntro(false);
   }, []);
   const stopStream = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; inFlight.current = false; activeRequestKind.current = null; streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setTorchOn(false); setTorchAvailable(false); setCameraDiagnostics(null); if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; } }, []);
-  const clearResult = useCallback(() => { setRecovery(null); setRecoveryCamera(null); setRecoveryBusy(false); setRecoveryMessage(null); setRecoverySubmissionBanner(null); setLabelDraft(null); setScan(null); setFrozen(null); setFailure(null); setSheet(false); setSelected(null); setUploadBusy(false); }, []);
+  const clearResult = useCallback(() => { setRecovery(null); setRecoveryCamera(null); setRecoveryBusy(false); setRecoveryMessage(null); setRecoverySubmissionBanner(null); setLabelDraft(null); setScan(null); setFrozen(null); setFailure(null); setFailureCanRetry(true); setSheet(false); setSelected(null); setUploadBusy(false); }, []);
   const noteLiveHint = useCallback((reason: LiveHintReason | null) => {
     if (reason && LIVE_HINT_IMMEDIATE_REASONS.has(reason)) { liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(LIVE_HINT_COPY[reason]); return; }
     if (!reason) { liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); return; }
@@ -497,7 +499,7 @@ export default function HomePage() {
       }
       if (id !== session.current) { stream.getTracks().forEach((t) => t.stop()); if (videoRef.current) videoRef.current.srcObject = null; streamRef.current = null; }
     }
-    catch { if (id === session.current) { setFailure("Camera unavailable. Check permission and try again."); setState((current) => transitionScannerLifecycle(current, "ANALYZE_FAILURE")); } }
+    catch (error) { if (id === session.current) { const failed = describeCameraAccessFailure(error); setFailure(failed.message); setFailureCanRetry(failed.canRetry); setState((current) => transitionScannerLifecycle(current, "ANALYZE_FAILURE")); } }
   }, [clearResult, resetScanMetrics, sampleLiveFrame, stopStream]);
   const close = useCallback(() => { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
   const toggleTorch = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !torchOn; if (!track || !supportsTorch(track)) return setTorchAvailable(false); try { await track.applyConstraints({ advanced: [{ torch: next } as unknown as MediaTrackConstraintSet] }); setTorchOn(next); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
@@ -686,7 +688,7 @@ export default function HomePage() {
     {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && torchAvailable ? "" : "end"}`}><div>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
     <div className={frozen && !uploadUrl && !recoveryActive ? "camera-result-overlay-stage" : "camera-overlay-stage"}>{groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}</div>
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}
-    {state === "camera_off" && <ScannerHome onStart={() => void start()} onReplayIntro={() => setShowIntro(true)} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action="Try again" onAction={retry} failure />}
+    {state === "camera_off" && <ScannerHome onStart={() => void start()} onReplayIntro={() => setShowIntro(true)} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action={failureCanRetry ? "Try again" : undefined} onAction={retry} failure />}
     {state === "captured_analyzing" && <CameraCopy>{analysisPhase === "many" ? "Full shelf detected — this may take a moment" : analysisPhase === "identifying" ? "Calculating Your Fit" : analysisPhase === "catalog" ? "Personalizing your result" : analysisPhase === "slow" ? "Still working on your result" : "This one's taking a bit longer than usual"}</CameraCopy>}
     {state !== "camera_off" && state !== "captured_analyzing" && state !== "results" ? <label className={`gallery-button ${uploadBusy ? "busy" : ""}`} aria-label="Choose a product photo" aria-disabled={uploadBusy}><input type="file" accept="image/*" disabled={uploadBusy} onChange={(e) => { upload(e.target.files?.[0]); e.currentTarget.value = ""; }} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label> : null}
     {state === "live_searching" && !uploadUrl ? <button className="analyze-now-button" type="button" disabled={!canvasPreviewActive} onClick={analyzeNow}>Analyze now</button> : null}
@@ -749,10 +751,10 @@ function ScannerHome({ onStart, onReplayIntro }: { onStart: () => void; onReplay
   </div>;
 }
 
-function Prompt({ title, action, onAction, failure = false }: { title: string; action: string; onAction: () => void; failure?: boolean }) {
+function Prompt({ title, action, onAction, failure = false }: { title: string; action?: string; onAction: () => void; failure?: boolean }) {
   const [heading, ...rest] = title.split("\n");
   const description = rest.join(" ") || null;
-  return <div className={`scanner-prompt ${failure ? "failure" : ""}`} role={failure ? "status" : undefined}><strong>{heading}</strong>{description && <p>{description}</p>}<button onClick={onAction}>{action}</button></div>;
+  return <div className={`scanner-prompt ${failure ? "failure" : ""}`} role={failure ? "status" : undefined}><strong>{heading}</strong>{description && <p>{description}</p>}{action && <button onClick={onAction}>{action}</button>}</div>;
 }
 function CameraCopy({ children }: { children: React.ReactNode }) { return <div className="camera-copy" aria-live="polite"><span className="camera-copy-indicator" aria-hidden="true"><i /></span><span className="camera-copy-text"><strong>{children}</strong><small>Your photo is sent for analysis and isn’t saved.</small></span><span className="camera-copy-progress" aria-hidden="true"><i /></span></div>; }
 function CameraDiagnostics({ snapshot, layoutProbe }: { snapshot: CameraDiagnosticSnapshot; layoutProbe: string | null }) { const { settings, capabilities, source, imageCapture } = snapshot; return <aside className="camera-diagnostics" aria-label="Local camera diagnostics"><strong>Camera diagnostics</strong><span>{source.sessionId ?? "camera unavailable"} · {settings.width ?? "?"}×{settings.height ?? "?"} · {settings.frameRate ?? "?"} fps</span><span>{settings.facingMode ?? "unknown"} · zoom {settings.zoom ?? "n/a"}{capabilities.zoom ? ` (${capabilities.zoom.min ?? "?"}–${capabilities.zoom.max ?? "?"})` : ""}</span><span>ImageCapture {imageCapture.takePhoto ? "takePhoto available" : "not available"}</span>{layoutProbe && <span>{layoutProbe}</span>}</aside>; }
