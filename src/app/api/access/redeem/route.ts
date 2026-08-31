@@ -3,7 +3,7 @@ import { z } from "zod";
 import { issueAccessPass } from "@/lib/access/access-pass";
 import { verifyCheckoutSession } from "@/lib/access/stripe-checkout";
 import { getAccessPassConfig } from "@/lib/env";
-import { checkScanRateLimit } from "@/lib/observability/scan-route";
+import { checkScanRateLimit, logAccessRequest } from "@/lib/observability/scan-route";
 
 export const runtime = "nodejs";
 
@@ -35,8 +35,14 @@ function getAccessPool(databaseUrl: string): Pool {
  * idempotent, so reloading the success URL returns the same pass.
  */
 export async function POST(request: Request) {
+  const startedAt = performance.now();
+  const respond = (body: unknown, status: number, headers: Record<string, string> = {}) => {
+    logAccessRequest("access_redeem", startedAt, status);
+    return json(body, status, headers);
+  };
+
   const config = getAccessPassConfig();
-  if (!config) return json({ error: "unavailable" }, 503);
+  if (!config) return respond({ error: "unavailable" }, 503);
 
   // Ahead of the Stripe call on purpose: a loop of junk session ids would
   // otherwise rate limit the Stripe account and break redemption for buyers.
@@ -47,16 +53,16 @@ export async function POST(request: Request) {
     secret: process.env.RATE_LIMIT_SECRET,
   });
   if (!rateLimit.allowed) {
-    return json({ error: "rate_limited" }, 429, { "Retry-After": String(rateLimit.retryAfterSeconds) });
+    return respond({ error: "rate_limited" }, 429, { "Retry-After": String(rateLimit.retryAfterSeconds) });
   }
 
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) return json({ error: "invalid_request" }, 400);
+  if (!parsed.success) return respond({ error: "invalid_request" }, 400);
 
   const verification = await verifyCheckoutSession(parsed.data.checkoutSessionId, config.stripeSecretKey);
-  if (verification.status === "invalid") return json({ error: "invalid_request" }, 400);
-  if (verification.status === "unavailable") return json({ error: "unavailable" }, 503);
-  if (verification.status === "unpaid") return json({ error: "not_paid" }, 402);
+  if (verification.status === "invalid") return respond({ error: "invalid_request" }, 400);
+  if (verification.status === "unavailable") return respond({ error: "unavailable" }, 503);
+  if (verification.status === "unpaid") return respond({ error: "not_paid" }, 402);
 
   try {
     const pool = getAccessPool(config.databaseUrl);
@@ -66,10 +72,10 @@ export async function POST(request: Request) {
       secret: config.accessPassSecret,
       now: new Date(),
     });
-    return json(pass, 200);
+    return respond(pass, 200);
   } catch {
     // The payment succeeded even though we could not store the pass. Say
     // nothing about the database; the buyer can restore by email once it is up.
-    return json({ error: "unavailable" }, 503);
+    return respond({ error: "unavailable" }, 503);
   }
 }

@@ -3,9 +3,11 @@ import { NextResponse } from "next/server";
 import { isScannerMetricsEnabled } from "@/lib/env";
 
 // `access_restore` is an email-guessing surface, so it is rate limited by the
-// same keyed digest as the scan routes. It never calls scanJsonResponse.
-// `access_redeem` makes an outbound authenticated Stripe call per request, so
-// it is rate limited by the same digest. It never calls scanJsonResponse.
+// same keyed digest as the scan routes. `access_redeem` makes an outbound
+// authenticated Stripe call per request, so it is rate limited by the same
+// digest. Neither calls scanJsonResponse — its Server-Timing headers and
+// scanner-metrics gating are specific to the camera routes — so both log
+// through logAccessRequest below instead.
 type ScanRoute = "preflight" | "analyze" | "recovery_label" | "access_restore" | "access_redeem";
 
 type ScanRouteTiming = {
@@ -80,6 +82,20 @@ export function checkScanRateLimit(request: Request, config: RateLimitConfig) {
 
   store.set(key, { count: 1, resetAt: now + config.windowMs });
   return { allowed: true, retryAfterSeconds: 0 };
+}
+
+/**
+ * Structured stdout log for the access routes, mirroring scan_request's
+ * duration/status/route shape. No email, token, or checkout session id: the
+ * payment and restore payloads never reach this call.
+ */
+export function logAccessRequest(route: "access_restore" | "access_redeem", startedAt: number, status: number) {
+  console.info(JSON.stringify({
+    event: "access_request",
+    route,
+    durationMs: Math.round(performance.now() - startedAt),
+    status,
+  }));
 }
 
 export function scanJsonResponse(body: unknown, init: ResponseInit, timing: ScanRouteTiming) {

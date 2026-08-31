@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { scanJsonResponse } from "./scan-route";
+import { logAccessRequest, scanJsonResponse } from "./scan-route";
 
 function withMetricsFlag(value: string | undefined, run: () => void) {
   const previous = process.env.SCANNER_METRICS_ENABLED;
@@ -42,4 +42,22 @@ test("analyze response preserves parallel timing stages in Server-Timing", () =>
   const serverTiming = response.headers.get("Server-Timing") ?? "";
   assert.match(serverTiming, /db_probe;dur=12/);
   assert.match(serverTiming, /catalog_resolution;dur=10/);
+});
+
+test("logAccessRequest logs route, status, and duration with no other fields", () => {
+  const originalInfo = console.info;
+  const logs: unknown[] = [];
+  console.info = (...args: unknown[]) => { logs.push(args[0]); };
+  try {
+    logAccessRequest("access_restore", performance.now() - 5, 404);
+  } finally {
+    console.info = originalInfo;
+  }
+  assert.equal(logs.length, 1);
+  const payload = JSON.parse(logs[0] as string);
+  assert.equal(payload.event, "access_request");
+  assert.equal(payload.route, "access_restore");
+  assert.equal(payload.status, 404);
+  assert.equal(typeof payload.durationMs, "number");
+  assert.deepEqual(Object.keys(payload).sort(), ["durationMs", "event", "route", "status"]);
 });

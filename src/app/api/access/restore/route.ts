@@ -2,7 +2,7 @@ import { Pool } from "pg";
 import { z } from "zod";
 import { findActivePassByEmail } from "@/lib/access/access-pass";
 import { getAccessPassConfig } from "@/lib/env";
-import { checkScanRateLimit } from "@/lib/observability/scan-route";
+import { checkScanRateLimit, logAccessRequest } from "@/lib/observability/scan-route";
 
 export const runtime = "nodejs";
 
@@ -35,8 +35,14 @@ function getAccessPool(databaseUrl: string): Pool {
  * address would gain anything.
  */
 export async function POST(request: Request) {
+  const startedAt = performance.now();
+  const respond = (body: unknown, status: number, headers: Record<string, string> = {}) => {
+    logAccessRequest("access_restore", startedAt, status);
+    return json(body, status, headers);
+  };
+
   const config = getAccessPassConfig();
-  if (!config) return json({ error: "unavailable" }, 503);
+  if (!config) return respond({ error: "unavailable" }, 503);
 
   const rateLimit = checkScanRateLimit(request, {
     scope: "access_restore",
@@ -45,11 +51,11 @@ export async function POST(request: Request) {
     secret: process.env.RATE_LIMIT_SECRET,
   });
   if (!rateLimit.allowed) {
-    return json({ error: "rate_limited" }, 429, { "Retry-After": String(rateLimit.retryAfterSeconds) });
+    return respond({ error: "rate_limited" }, 429, { "Retry-After": String(rateLimit.retryAfterSeconds) });
   }
 
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) return json({ error: "invalid_request" }, 400);
+  if (!parsed.success) return respond({ error: "invalid_request" }, 400);
 
   try {
     const pool = getAccessPool(config.databaseUrl);
@@ -58,9 +64,9 @@ export async function POST(request: Request) {
       secret: config.accessPassSecret,
       now: new Date(),
     });
-    if (!pass) return json({ error: "not_found" }, 404);
-    return json(pass, 200);
+    if (!pass) return respond({ error: "not_found" }, 404);
+    return respond(pass, 200);
   } catch {
-    return json({ error: "unavailable" }, 503);
+    return respond({ error: "unavailable" }, 503);
   }
 }
