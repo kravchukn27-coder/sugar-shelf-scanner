@@ -22,7 +22,7 @@ import { calculateSugarFit } from "@/lib/scoring/sugar-fit";
 import { groupRepeatedDetections, sortDetectionGroupsBySugarFit, type DetectionGroup } from "@/lib/scan/deduplicate-detections";
 import { getCenteredFrameCrop } from "@/lib/scan/frame-crop";
 import { describeCameraAccessFailure } from "@/lib/scan/camera-access";
-import { createCanvasPreviewLoop, drawSourceToCanvas } from "@/lib/scan/canvas-preview";
+import { createCanvasPreviewLoop } from "@/lib/scan/canvas-preview";
 import { getCameraDiagnosticSnapshot, type CameraDiagnosticSnapshot } from "@/lib/scan/camera-diagnostics";
 import { applyCameraView, getCameraControls, getCameraDeviceId, preferCameraCaptureQuality, rearCameraRequest, supportsTorch } from "@/lib/scan/media-capabilities";
 import { shouldRunScannerScheduler, transitionScannerLifecycle, type ScannerLifecycleEvent, type ScannerLifecycleState } from "@/lib/scan/scanner-lifecycle";
@@ -48,7 +48,7 @@ const PREFLIGHT_CANDIDATE_CONFIDENCE_THRESHOLD = 0.65;
 // consecutive same-reason ticks so a flickering cause (e.g. blur one tick,
 // glare the next) doesn't spam the copy; `uncertain` already cost a real
 // Gemini round trip, so it replaces the default text immediately.
-const LIVE_HINT_DEFAULT = "Scan a product to see how it fits your day";
+const LIVE_HINT_DEFAULT = "Point at a product and hold still — or tap Analyze now";
 const LIVE_HINT_COPY = {
   motion: "Hold still for a second",
   blur: "Hold still for a second",
@@ -141,7 +141,7 @@ function accessGrantedCopy(expiresAt: string): string {
 }
 
 export default function HomePage() {
-  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), livePreviewRef = useRef<HTMLDivElement>(null), liveCanvasRef = useRef<HTMLCanvasElement>(null), liveTransitionCanvasRef = useRef<HTMLCanvasElement>(null), liveBackdropCanvasRef = useRef<HTMLCanvasElement>(null), resultBackdropCanvasRef = useRef<HTMLCanvasElement>(null), resultPreviewRef = useRef<HTMLDivElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), activeRequestKind = useRef<"preflight" | "analyze" | null>(null), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), resultMetrics = useRef({ source: null as "camera" | "upload" | null, started: false, resultShown: false, productOpened: false, recommendationOpened: false }), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), preflightRetryStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
+  const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), livePreviewRef = useRef<HTMLDivElement>(null), liveCanvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), activeRequestKind = useRef<"preflight" | "analyze" | null>(null), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), resultMetrics = useRef({ source: null as "camera" | "upload" | null, started: false, resultShown: false, productOpened: false, recommendationOpened: false }), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), preflightRetryStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
   const [canvasPreviewActive, setCanvasPreviewActive] = useState(false);
   const [liveHint, setLiveHint] = useState<string | null>(null);
@@ -353,34 +353,21 @@ export default function HomePage() {
 
   // iOS Safari can paint the <video> decoder surface with stale letterboxing
   // after a camera restart. Keep that element only as the media source and
-  // paint its decoded pixels ourselves. All preview canvases deliberately
-  // share one stream: the sharp 3:4 foreground is the real viewfinder, and the
-  // backdrop carries the same projection so it continues that picture instead
-  // of restating it larger. The backdrop therefore does show camera field of
-  // view that is not analyzed; the bright frame edge, the blur and the
-  // darkening are what mark the analyzed region.
+  // paint its decoded pixels ourselves: the sharp 3:4 foreground canvas is the
+  // real viewfinder, and everything around it is the scene's plain black.
   useEffect(() => {
     setCanvasPreviewActive(false);
     if (state !== "live_searching" || uploadUrl || recoveryCamera) return;
     const video = videoRef.current;
     const foreground = liveCanvasRef.current;
-    const transition = liveTransitionCanvasRef.current;
-    const backdrop = liveBackdropCanvasRef.current;
-    if (!video || !foreground || !transition || !backdrop) return;
+    if (!video || !foreground) return;
     let painted = false;
-    // All three targets project at the frame's own scale, not their own
-    // (bled) box: the foreground/transition canvases are drawn larger than
-    // the visible frame so their real content covers the backdrop's corner
-    // seam, but what the user sees inside the white border must stay the
-    // exact crop capture() sends to Gemini — cropping each canvas to its own
-    // enlarged box would silently shrink that field of view instead.
-    // Shared across all three targets, so the near-fullscreen backdrop and the
-    // small transition/foreground canvases must fit the SAME pixel budget at
-    // full maxDevicePixelRatio — otherwise the backdrop alone gets clamped to
-    // a lower pixelRatio, and the identical `blur(14px)` filter the two
-    // layers share ends up physically weaker on the backdrop, visible as a
-    // seam right where the transition's bled edge hands off to it.
-    const loop = createCanvasPreviewLoop({ video, targets: [{ canvas: foreground, fps: 30, edgeFeatherPx: 28, cornerRadiusPx: 22, continuationOf: livePreviewRef.current }, { canvas: transition, fps: 15, edgeFeatherPx: 28, cornerRadiusPx: 22, continuationOf: livePreviewRef.current }, { canvas: backdrop, fps: 15, continuationOf: livePreviewRef.current }], maxPixels: 2_000_000, maxDevicePixelRatio: 2, onFrameDrawn: () => { if (!painted) { painted = true; setCanvasPreviewActive(true); } } });
+    // The canvas projects at the frame's own scale: what the user sees inside
+    // the white border must stay the exact crop capture() sends to Gemini.
+    // The 28px edge feather belonged to the blurred surround it used to fade
+    // into; over plain black it would only read as a muddy dark border, so the
+    // mask is now just enough to antialias the frame's rounded corners.
+    const loop = createCanvasPreviewLoop({ video, targets: [{ canvas: foreground, fps: 30, edgeFeatherPx: 1, cornerRadiusPx: 22, continuationOf: livePreviewRef.current }], maxPixels: 2_000_000, maxDevicePixelRatio: 2, onFrameDrawn: () => { if (!painted) { painted = true; setCanvasPreviewActive(true); } } });
     const onVisibilityChange = () => {
       if (document.hidden) loop.stop();
       else loop.start();
@@ -389,31 +376,6 @@ export default function HomePage() {
     loop.start();
     return () => { document.removeEventListener("visibilitychange", onVisibilityChange); loop.stop(); };
   }, [recoveryCamera, state, uploadUrl]);
-
-  // The frozen result gets the same treatment as the live backdrop. The capture
-  // is exactly what the viewfinder framed, so drawing it at the result card's
-  // own scale and stretching the edges outward keeps the blurred surround a
-  // continuation of the card rather than a larger re-crop behind it.
-  useEffect(() => {
-    const canvas = resultBackdropCanvasRef.current;
-    const reference = resultPreviewRef.current;
-    if (!frozen || uploadUrl || recoveryCamera || !canvas || !reference) return;
-    let cancelled = false;
-    const image = new Image();
-    const paint = () => {
-      if (cancelled || !resultBackdropCanvasRef.current || !resultPreviewRef.current) return;
-      drawSourceToCanvas(
-        { image, width: image.naturalWidth, height: image.naturalHeight },
-        { canvas: resultBackdropCanvasRef.current, fps: 0, continuationOf: resultPreviewRef.current },
-        { maxPixels: 1_250_000, maxDevicePixelRatio: 2 },
-      );
-    };
-    image.onload = paint;
-    image.src = frozen;
-    // A late layout pass can change the reference box after the first paint.
-    window.addEventListener("resize", paint);
-    return () => { cancelled = true; image.onload = null; window.removeEventListener("resize", paint); };
-  }, [frozen, recoveryCamera, uploadUrl]);
 
   const analyze = useCallback(async (source: HTMLVideoElement | HTMLImageElement, id: number, expectedCount?: number) => {
     expectedProductCount.current = expectedCount;
@@ -810,8 +772,8 @@ export default function HomePage() {
 
   return <>{introResolved && showIntro && !recoveryActive && <OnboardingStory onFinish={finishIntro} />}{paywallEnabled && paywallOpen && !recoveryActive && <Paywall checkoutAvailable={checkoutUrl.length > 0} restoreState={restoreState} onCheckout={startCheckout} onRestore={(email) => void restoreAccess(email)} onClose={() => setPaywallOpen(false)} />}<main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""} ${recoveryActive ? "recovery-active" : ""}`} aria-label={recoveryActive ? "Recovery camera" : "Sugar product scanner"}>
     {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video key={cameraKey} ref={videoRef} className={`camera-preview ${!recoveryActive && (canvasPreviewActive || frozen) ? "technical-camera-source" : ""}`} muted playsInline />}
-    {state === "live_searching" && !uploadUrl && !recoveryActive && <><canvas ref={liveBackdropCanvasRef} className="camera-canvas-backdrop" aria-hidden="true" /><div className={`camera-live-preview ${canvasPreviewActive ? "active" : ""}`}><canvas ref={liveTransitionCanvasRef} className="camera-canvas-transition" aria-hidden="true" /><canvas ref={liveCanvasRef} className="camera-canvas-foreground" aria-hidden="true" /><div ref={livePreviewRef} className="camera-capture-frame"><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p></div></div></>}
-    {frozen && !recoveryActive && <>{!uploadUrl && <><canvas ref={resultBackdropCanvasRef} className="camera-result-backdrop" aria-hidden="true" /><div ref={resultPreviewRef} className="camera-result-preview"><img className="camera-result-transition" src={frozen} alt="" aria-hidden="true" /><img className="frozen-preview camera-result-image" src={frozen} alt="Captured products" /><span className="viewfinder-guide" aria-hidden="true" /></div></>}{uploadUrl && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}</>}{state !== "camera_off" && <div className={`camera-vignette ${!uploadUrl && !recoveryActive ? "camera-vignette-soft" : ""}`} />}
+    {state === "live_searching" && !uploadUrl && !recoveryActive && <div className={`camera-live-preview ${canvasPreviewActive ? "active" : ""}`}><canvas ref={liveCanvasRef} className="camera-canvas-foreground" aria-hidden="true" /><div ref={livePreviewRef} className="camera-capture-frame"><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p></div></div>}
+    {frozen && !recoveryActive && <>{!uploadUrl && <div className="camera-result-preview"><img className="frozen-preview camera-result-image" src={frozen} alt="Captured products" /><span className="viewfinder-guide" aria-hidden="true" /></div>}{uploadUrl && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}</>}{state !== "camera_off" && <div className="camera-vignette" />}
     {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && torchAvailable ? "" : "end"}`}><div>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
     <div className={frozen && !uploadUrl && !recoveryActive ? "camera-result-overlay-stage" : "camera-overlay-stage"}>{groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}</div>
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}

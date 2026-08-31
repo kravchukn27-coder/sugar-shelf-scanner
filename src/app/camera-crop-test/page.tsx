@@ -257,7 +257,7 @@ export default function CameraCropTestPage() {
             <>
               <span aria-hidden="true" style={{ position: "absolute", inset: "12% 5%", border: "1.5px solid rgba(255,255,255,.7)", borderRadius: 16, boxShadow: "0 0 0 1px rgba(0,0,0,.16) inset", pointerEvents: "none" }} />
               <p style={{ position: "absolute", inset: "12% 5%", margin: 0, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", color: "rgba(255,255,255,.6)", fontSize: 15, fontWeight: 700, letterSpacing: ".005em", textShadow: "0 1px 3px rgba(0,0,0,.5)", padding: "0 24px", pointerEvents: "none" }}>
-                Scan a product to see how it fits your day
+                Point at a product and hold still — or tap Analyze now
               </p>
             </>
           )}
