@@ -1,122 +1,315 @@
-/* Full-screen paid-access wall. It sits above the scanner the same way the
-   onboarding story does, and uses the brand's dark ground with the coral
-   accent so it does not read as a third-party payment interstitial. */
 .overlay {
   position: fixed;
   inset: 0;
   z-index: 40;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  padding: 24px 20px calc(28px + env(safe-area-inset-bottom));
-  background: linear-gradient(180deg, rgba(10, 10, 12, 0.72) 0%, rgba(10, 10, 12, 0.97) 46%, #0a0a0c 100%);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  color: #f2f1f6;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: calc(14px + env(safe-area-inset-top)) 18px calc(20px + env(safe-area-inset-bottom));
+  background:
+    radial-gradient(circle at 86% 8%, rgba(238, 207, 244, 0.62), transparent 34%),
+    radial-gradient(circle at 5% 72%, rgba(197, 226, 255, 0.72), transparent 38%),
+    linear-gradient(155deg, #f8fdff 0%, #f6f4ff 52%, #fff9fc 100%);
+  color: #17171b;
+  overscroll-behavior: contain;
+}
+
+.shell {
+  width: min(100%, 440px);
+  min-height: calc(100svh - 34px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  margin: 0 auto;
 }
 
 .close {
-  position: absolute;
+  position: fixed;
+  z-index: 2;
   top: calc(14px + env(safe-area-inset-top));
-  right: 16px;
-  width: 36px;
-  height: 36px;
-  border: 0;
+  left: max(18px, calc((100vw - 440px) / 2 + 18px));
+  display: grid;
+  width: 42px;
+  height: 42px;
+  padding: 0 0 3px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.8);
   border-radius: 50%;
-  background: rgba(242, 241, 246, 0.12);
-  color: #f2f1f6;
-  font-size: 20px;
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: 0 10px 24px rgba(90, 105, 142, 0.12);
+  color: #17171b;
+  font: inherit;
+  font-size: 29px;
+  font-weight: 500;
   line-height: 1;
   cursor: pointer;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.hero {
+  display: grid;
+  height: clamp(215px, 31svh, 270px);
+  padding: 14px 0 0;
+  place-items: end center;
+}
+
+.heroArt {
+  display: block;
+  width: min(100%, 390px);
+  height: 100%;
+  overflow: visible;
+}
+
+.scanCorner {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 6;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 5px #5c9bff);
+}
+
+.content {
+  text-align: center;
+}
+
+.used {
+  margin: 0 0 7px;
+  color: #176ff2;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.25;
 }
 
 .title {
-  margin: 0 0 10px;
-  font-size: 26px;
-  line-height: 1.15;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  margin: 0;
+  font-size: clamp(32px, 9.2vw, 40px);
+  font-weight: 900;
+  letter-spacing: -0.035em;
+  line-height: 0.94;
 }
 
 .body {
-  margin: 0 0 22px;
+  max-width: 350px;
+  margin: 13px auto 0;
+  color: #302e35;
   font-size: 15px;
-  line-height: 1.45;
-  color: #cfccd8;
+  font-weight: 600;
+  line-height: 1.42;
+}
+
+.offer {
+  margin-top: 18px;
+  padding: 10px 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 17px 35px rgba(92, 111, 151, 0.15);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .checkout {
   width: 100%;
-  padding: 17px 20px;
+  min-height: 52px;
+  padding: 12px 20px;
   border: 0;
-  border-radius: 16px;
-  background: #ff5a45;
+  border-radius: 999px;
+  background: linear-gradient(100deg, #f4515b 0%, #ff4057 100%);
+  box-shadow: 0 12px 22px rgba(244, 81, 91, 0.24);
   color: #ffffff;
-  font-size: 17px;
-  font-weight: 600;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1.1;
   cursor: pointer;
 }
 
 .checkout:disabled {
-  background: rgba(255, 90, 69, 0.4);
+  background: #d9b5bb;
+  box-shadow: none;
+  color: rgba(255, 255, 255, 0.9);
   cursor: default;
 }
 
-.fineprint {
-  margin: 12px 0 0;
+.price {
+  margin: 10px 0 0;
+  color: #176ff2;
   font-size: 13px;
-  line-height: 1.4;
-  color: #a19cad;
-  text-align: center;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.unavailable {
+  margin: 7px 8px 0;
+  color: #8a3540;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
 }
 
 .restoreToggle {
   display: block;
   width: 100%;
-  margin-top: 18px;
+  margin-top: 17px;
   padding: 0;
   border: 0;
   background: none;
-  color: #cfccd8;
+  color: #176ff2;
+  font: inherit;
   font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
   text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
   cursor: pointer;
 }
 
 .restore {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 10px;
-  margin-top: 16px;
+  margin-top: 15px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 15px 34px rgba(92, 111, 151, 0.14);
+  text-align: left;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .restore input {
-  padding: 14px 16px;
-  border: 1px solid rgba(242, 241, 246, 0.22);
-  border-radius: 14px;
-  background: rgba(242, 241, 246, 0.06);
-  color: #f2f1f6;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 1px solid #d7dbe7;
+  border-radius: 15px;
+  outline: none;
+  background: #ffffff;
+  color: #17171b;
+  font: inherit;
   font-size: 16px;
+  font-weight: 600;
+}
+
+.restore input::placeholder {
+  color: #777381;
+  opacity: 1;
+}
+
+.restore input:focus {
+  border-color: #2f6fef;
+  box-shadow: 0 0 0 3px rgba(47, 111, 239, 0.14);
 }
 
 .restore button {
-  padding: 14px 16px;
-  border: 1px solid rgba(242, 241, 246, 0.28);
-  border-radius: 14px;
-  background: none;
-  color: #f2f1f6;
+  min-height: 46px;
+  padding: 11px 16px;
+  border: 1.5px solid #d9dce7;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #17171b;
+  font: inherit;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 800;
   cursor: pointer;
 }
 
+.restore button:disabled {
+  color: #777381;
+  cursor: default;
+}
+
 .restoreNote {
-  margin: 0;
+  margin: 0 2px;
+  color: #5f5a68;
   font-size: 13px;
+  font-weight: 700;
   line-height: 1.4;
-  color: #a19cad;
 }
 
 .restoreError {
-  color: #ff7b68;
+  color: #a52e3d;
+}
+
+.close:focus-visible,
+.checkout:focus-visible,
+.restoreToggle:focus-visible,
+.restore button:focus-visible {
+  outline: 3px solid rgba(47, 111, 239, 0.42);
+  outline-offset: 3px;
+}
+
+@media (max-height: 740px) {
+  .hero {
+    height: 195px;
+  }
+
+  .body {
+    margin-top: 9px;
+  }
+
+  .offer {
+    margin-top: 12px;
+  }
+
+  .restoreToggle,
+  .restore {
+    margin-top: 12px;
+  }
+}
+
+@media (max-width: 340px) {
+  .overlay {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .hero {
+    height: 205px;
+  }
+
+  .used {
+    font-size: 13px;
+  }
+
+  .body {
+    font-size: 14px;
+  }
+
+  .price {
+    font-size: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .heroArt {
+    animation: shelf-arrive 620ms cubic-bezier(0.22, 0.78, 0.25, 1) both;
+  }
+
+  .content {
+    animation: copy-arrive 500ms 120ms ease-out both;
+  }
+}
+
+@keyframes shelf-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes copy-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
