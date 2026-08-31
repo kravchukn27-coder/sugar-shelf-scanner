@@ -13,6 +13,13 @@ const serverEnvSchema = z.object({
   USDA_FDC_API_KEY: z.string().min(1).optional(),
   // Open Food Facts asks integrators to identify their app and contact address.
   OPEN_FOOD_FACTS_USER_AGENT: z.string().min(1).optional(),
+  // Monetization test. Server-only: the secret key must never be inlined into
+  // a browser bundle, so it is deliberately not a NEXT_PUBLIC_ variable.
+  STRIPE_SECRET_KEY: z.string().min(1).optional(),
+  // Keys the buyer-email digest stored with an access pass. Rotating it makes
+  // every existing pass unrestorable by email, so treat the value as durable
+  // for the life of the test.
+  ACCESS_PASS_SECRET: z.string().min(16).optional(),
 });
 
 export type ServerEnv = Omit<z.infer<typeof serverEnvSchema>, "GEMINI_PREFLIGHT_MODEL"> & {
@@ -43,4 +50,25 @@ export function isScannerMetricsEnabled(environment: NodeJS.ProcessEnv = process
  */
 export function isVisionUsageMetricsEnabled(environment: NodeJS.ProcessEnv = process.env) {
   return environment.VISION_USAGE_METRICS_ENABLED === "true";
+}
+
+export type AccessPassConfig = {
+  stripeSecretKey: string;
+  accessPassSecret: string;
+  databaseUrl: string;
+};
+
+/**
+ * The paid-access routes need three independent pieces of configuration. A
+ * partially configured deployment must not half-work: it answers 503 rather
+ * than issuing a pass it cannot store, or storing a digest under a weak key.
+ */
+export function getAccessPassConfig(environment: NodeJS.ProcessEnv = process.env): AccessPassConfig | null {
+  const stripeSecretKey = environment.STRIPE_SECRET_KEY;
+  const accessPassSecret = environment.ACCESS_PASS_SECRET;
+  const databaseUrl = environment.DATABASE_URL;
+  if (!stripeSecretKey) return null;
+  if (!accessPassSecret || accessPassSecret.length < 16) return null;
+  if (!databaseUrl) return null;
+  return { stripeSecretKey, accessPassSecret, databaseUrl };
 }
