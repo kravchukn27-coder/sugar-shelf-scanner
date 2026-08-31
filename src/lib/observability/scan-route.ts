@@ -2,7 +2,9 @@ import { createHmac, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { isScannerMetricsEnabled } from "@/lib/env";
 
-type ScanRoute = "preflight" | "analyze" | "recovery_label";
+// `access_restore` is an email-guessing surface, so it is rate limited by the
+// same keyed digest as the scan routes. It never calls scanJsonResponse.
+type ScanRoute = "preflight" | "analyze" | "recovery_label" | "access_restore";
 
 type ScanRouteTiming = {
   route: ScanRoute;
