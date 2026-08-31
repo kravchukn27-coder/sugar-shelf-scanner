@@ -131,19 +131,8 @@
 
 /* Monetization test: the payoff moment right after access is granted. The
    Home Screen ask is here because an installed origin is the only way iOS
-   keeps the camera grant between visits. */
-.access-granted-banner {
-  position: absolute;
-  left: 20px;
-  right: 20px;
-  bottom: calc(120px + env(safe-area-inset-bottom));
-  z-index: 5;
-  margin: 0;
-  padding: 14px 16px;
-  border-radius: 14px;
-  background: rgba(255, 90, 69, 0.16);
-  color: #f2f1f6;
-  font-size: 14px;
-  line-height: 1.4;
-  text-align: center;
-}
+   keeps the camera grant between visits. This banner sits on the light,
+   near-white idle home screen (.scanner-home), which is why the text is
+   dark (not the app's usual light-on-dark colour) and the box is kept
+   clear of the primary "Start scanning" button below it. */
+.access-granted-banner{position:absolute;left:20px;right:20px;bottom:calc(24px + env(safe-area-inset-bottom));z-index:5;margin:0;padding:14px 16px;border-radius:14px;background:rgba(255, 90, 69, 0.16);color:#1f2025;pointer-events:none;font-size:14px;line-height:1.4;text-align:center}
