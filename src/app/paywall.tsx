@@ -18,7 +18,7 @@ const RESTORE_NOTE: Record<PaywallRestoreState, string | null> = {
   idle: null,
   working: "Looking for your access…",
   not_found: "No active access for that address. Check the address you paid with.",
-  error: "Couldn't check that right now. Try again in a moment.",
+  error: "Couldn’t check that right now. Try again in a moment.",
 };
 
 /**
@@ -36,7 +36,7 @@ export default function Paywall({ checkoutAvailable, restoreState, onCheckout, o
   return (
     <div className={styles.overlay} role="dialog" aria-modal="true" aria-label="Unlock unlimited scans">
       <button className={styles.close} type="button" onClick={onClose} aria-label="Close">×</button>
-      <h1 className={styles.title}>You've used your free scans</h1>
+      <h1 className={styles.title}>You’ve used your free scans</h1>
       <p className={styles.body}>
         Unlimited scanning for 7 days. One payment of $2.99 — nothing renews and there is no subscription.
       </p>
@@ -46,7 +46,7 @@ export default function Paywall({ checkoutAvailable, restoreState, onCheckout, o
       <p className={styles.fineprint}>
         {checkoutAvailable
           ? "This is a demo. Always check the package label before a dietary decision."
-          : "Payments aren't available right now. Please try again later."}
+          : "Payments aren’t available right now. Please try again later."}
       </p>
 
       {restoreOpen ? (
