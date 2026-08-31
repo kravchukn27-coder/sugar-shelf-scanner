@@ -72,7 +72,7 @@ export default function Paywall({ checkoutAvailable, restoreState, onCheckout, o
             {restoreState === "working" ? "Restoring…" : "Restore access"}
           </button>
           {note ? (
-            <p className={`${styles.restoreNote} ${restoreState === "not_found" || restoreState === "error" ? styles.restoreError : ""}`}>
+            <p role="status" className={`${styles.restoreNote} ${restoreState === "not_found" || restoreState === "error" ? styles.restoreError : ""}`}>
               {note}
             </p>
           ) : null}
