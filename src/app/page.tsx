@@ -25,7 +25,7 @@ import { describeCameraAccessFailure } from "@/lib/scan/camera-access";
 import { createCanvasPreviewLoop } from "@/lib/scan/canvas-preview";
 import { getCameraDiagnosticSnapshot, type CameraDiagnosticSnapshot } from "@/lib/scan/camera-diagnostics";
 import { applyCameraView, getCameraControls, getCameraDeviceId, preferCameraCaptureQuality, rearCameraRequest, supportsTorch } from "@/lib/scan/media-capabilities";
-import { shouldRunScannerScheduler, transitionScannerLifecycle, type ScannerLifecycleEvent, type ScannerLifecycleState } from "@/lib/scan/scanner-lifecycle";
+import { shouldRunScannerScheduler, shouldShowLiveViewfinder, transitionScannerLifecycle, type ScannerLifecycleEvent, type ScannerLifecycleState } from "@/lib/scan/scanner-lifecycle";
 import { createScannerMetrics, type ScannerMetricsCompletion } from "@/lib/scan/scanner-metrics";
 import { classifyScanResultAnalytics } from "@/lib/scan/result-analytics";
 import { reportResultMetric } from "@/lib/scan/result-metrics";
@@ -40,6 +40,13 @@ import { catalogProposalErrorMessage, catalogProposalSubmissionOutcome, GENERIC_
 import { getMockShelfScan, getSugarFitDemoScan, SUGAR_FIT_DEMO_IMAGE } from "@/lib/mock/scan-fixtures";
 
 const FRAME_INTERVAL = 650;
+// The first preflight answer lands roughly 650ms plus one Gemini round trip
+// after the camera opens — before the user has finished aiming. Treating that
+// answer as terminal turned "nothing in frame yet" into a blocking prompt the
+// user never had time to read. A negative verdict inside this window is
+// discarded and the scheduler keeps looking; the prompt stays reachable, it
+// just cannot pre-empt the user's first few seconds.
+const NO_SCENE_GRACE_MS = 4000;
 const ONBOARDING_SEEN_KEY = "sugar:onboarding-seen:v1";
 const PREFLIGHT_CANDIDATE_CONFIDENCE_THRESHOLD = 0.65;
 // Live-viewfinder hint copy. The default (idle) text is always visible
@@ -144,6 +151,12 @@ export default function HomePage() {
   const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), livePreviewRef = useRef<HTMLDivElement>(null), liveCanvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), activeRequestKind = useRef<"preflight" | "analyze" | null>(null), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), resultMetrics = useRef({ source: null as "camera" | "upload" | null, started: false, resultShown: false, productOpened: false, recommendationOpened: false }), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), preflightRetryStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
   const [canvasPreviewActive, setCanvasPreviewActive] = useState(false);
+  const liveSearchStartedAt = useRef(0);
+  // live_searching and the two prompt states share one preview loop. Keying the
+  // loop on this instead of on `state` means crossing that boundary does not
+  // restart it: a restart would blank canvasPreviewActive for the frame or two
+  // before the canvas repaints, and the raw <video> would flash full-bleed.
+  const viewfinderVisible = shouldShowLiveViewfinder(state);
   const [liveHint, setLiveHint] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [failureCanRetry, setFailureCanRetry] = useState(true);
@@ -357,7 +370,7 @@ export default function HomePage() {
   // real viewfinder, and everything around it is the scene's plain black.
   useEffect(() => {
     setCanvasPreviewActive(false);
-    if (state !== "live_searching" || uploadUrl || recoveryCamera) return;
+    if (!viewfinderVisible || frozen || uploadUrl || recoveryCamera) return;
     const video = videoRef.current;
     const foreground = liveCanvasRef.current;
     if (!video || !foreground) return;
@@ -375,7 +388,7 @@ export default function HomePage() {
     document.addEventListener("visibilitychange", onVisibilityChange);
     loop.start();
     return () => { document.removeEventListener("visibilitychange", onVisibilityChange); loop.stop(); };
-  }, [recoveryCamera, state, uploadUrl]);
+  }, [cameraKey, frozen, recoveryCamera, uploadUrl, viewfinderVisible]);
 
   const analyze = useCallback(async (source: HTMLVideoElement | HTMLImageElement, id: number, expectedCount?: number) => {
     expectedProductCount.current = expectedCount;
@@ -469,6 +482,7 @@ export default function HomePage() {
         const isUpload = source instanceof HTMLImageElement;
         if (isUpload) setUploadBusy(false);
         if (!isUpload && result.decision === "uncertain") { noteLiveHint("uncertain"); return; }
+        if (!isUpload && Date.now() - liveSearchStartedAt.current < NO_SCENE_GRACE_MS) { noteLiveHint(null); return; }
         noteLiveHint(null);
         setFailure(result.decision === "uncertain" ? "Move closer to a packaged product" : "No packaged products detected\nMove your camera closer");
         reportNoDetectionResult();
@@ -766,13 +780,17 @@ export default function HomePage() {
     image.src = uploadUrl;
     return () => { cancelled = true; image.onload = null; image.onerror = null; };
   }, [analyze, dispatch, sheet, state, uploadUrl]);
+  // Stamped when the scanner actually reaches the live state, not when the
+  // user taps: a camera-permission dialog can sit in front of the scene for
+  // seconds, and the grace window is about the user's aiming time.
+  useEffect(() => { if (state === "live_searching") liveSearchStartedAt.current = Date.now(); }, [state]);
   const failed = state === "no_scene" || state === "error";
   const showAnalysisSpinner = state === "captured_analyzing" || (uploadUrl !== null && uploadBusy && state === "live_searching");
   const recoveryActive = recoveryCamera !== null;
 
   return <>{introResolved && showIntro && !recoveryActive && <OnboardingStory onFinish={finishIntro} />}{paywallEnabled && paywallOpen && !recoveryActive && <Paywall checkoutAvailable={checkoutUrl.length > 0} restoreState={restoreState} onCheckout={startCheckout} onRestore={(email) => void restoreAccess(email)} onClose={() => setPaywallOpen(false)} />}<main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""} ${recoveryActive ? "recovery-active" : ""}`} aria-label={recoveryActive ? "Recovery camera" : "Sugar product scanner"}>
     {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video key={cameraKey} ref={videoRef} className={`camera-preview ${!recoveryActive && (canvasPreviewActive || frozen) ? "technical-camera-source" : ""}`} muted playsInline />}
-    {state === "live_searching" && !uploadUrl && !recoveryActive && <div className={`camera-live-preview ${canvasPreviewActive ? "active" : ""}`}><canvas ref={liveCanvasRef} className="camera-canvas-foreground" aria-hidden="true" /><div ref={livePreviewRef} className="camera-capture-frame"><span className="viewfinder-guide" aria-hidden="true" /><p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p></div></div>}
+    {viewfinderVisible && !frozen && !uploadUrl && !recoveryActive && <div className={`camera-live-preview ${canvasPreviewActive ? "active" : ""}`}><canvas ref={liveCanvasRef} className="camera-canvas-foreground" aria-hidden="true" /><div ref={livePreviewRef} className="camera-capture-frame"><span className="viewfinder-guide" aria-hidden="true" />{!failed && <p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p>}</div></div>}
     {frozen && !recoveryActive && <>{!uploadUrl && <div className="camera-result-preview"><img className="frozen-preview camera-result-image" src={frozen} alt="Captured products" /><span className="viewfinder-guide" aria-hidden="true" /></div>}{uploadUrl && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}</>}{state !== "camera_off" && <div className="camera-vignette" />}
     {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && torchAvailable ? "" : "end"}`}><div>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
     <div className={frozen && !uploadUrl && !recoveryActive ? "camera-result-overlay-stage" : "camera-overlay-stage"}>{groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}</div>

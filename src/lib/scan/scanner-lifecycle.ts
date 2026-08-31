@@ -43,6 +43,16 @@ export function transitionScannerLifecycle(
   return transitions[state][event] ?? state;
 }
 
+/**
+ * States that still sit on top of a running camera stream. The failure prompts
+ * are an overlay, not a replacement: the framed viewfinder must keep painting
+ * behind them, or the scene falls back to the raw full-bleed video and stops
+ * looking like the same screen.
+ */
+export function shouldShowLiveViewfinder(state: ScannerLifecycleState): boolean {
+  return state === "live_searching" || state === "no_scene" || state === "error";
+}
+
 /** Only the live state may sample and send preflight frames. */
 export function shouldRunScannerScheduler(state: ScannerLifecycleState): boolean {
   return state === "live_searching";

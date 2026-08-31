@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   shouldRunScannerScheduler,
+  shouldShowLiveViewfinder,
   shouldStopCameraTracks,
   transitionScannerLifecycle,
   type ScannerLifecycleState,
@@ -54,4 +55,21 @@ test("ignores lifecycle events that are invalid for the current state", () => {
   assert.equal(transitionScannerLifecycle("camera_off", "CAPTURED"), "camera_off");
   assert.equal(transitionScannerLifecycle("live_searching", "START"), "live_searching");
   assert.equal(transitionScannerLifecycle("results", "ANALYZE_SUCCESS"), "results");
+});
+
+test("the framed viewfinder survives the failure prompts but not the states without a stream", () => {
+  // The prompts overlay a running camera, so the frame must keep painting.
+  assert.equal(shouldShowLiveViewfinder("live_searching"), true);
+  assert.equal(shouldShowLiveViewfinder("no_scene"), true);
+  assert.equal(shouldShowLiveViewfinder("error"), true);
+  // These own the scene themselves: the home screen, the analysis copy over a
+  // frozen capture, and the result sheet.
+  assert.equal(shouldShowLiveViewfinder("camera_off"), false);
+  assert.equal(shouldShowLiveViewfinder("captured_analyzing"), false);
+  assert.equal(shouldShowLiveViewfinder("results"), false);
+});
+
+test("only the live state may burn preflight requests, prompts included", () => {
+  assert.equal(shouldRunScannerScheduler("no_scene"), false);
+  assert.equal(shouldRunScannerScheduler("error"), false);
 });
