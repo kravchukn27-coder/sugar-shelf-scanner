@@ -88,6 +88,38 @@ Reopen the investigation only if one of these inputs changes:
 3. Product design explicitly accepts the 3:4 box's idle space in exchange for
    its ~33% wider live field of view.
 
+## Camera access failures
+
+Permission belongs to the browser and the OS, not to the app. Nothing here can
+grant, persist or suppress the prompt, so the only thing under our control is
+what the user is told when the request fails.
+
+`getUserMedia` rejections are mapped by the error's `name`:
+
+| Rejection | What the user sees | Retry offered |
+| --- | --- | --- |
+| `NotAllowedError`, `PermissionDeniedError`, `SecurityError` | "Camera access is off" plus the instruction to allow the camera for this site in browser settings | yes |
+| `NotFoundError`, `DevicesNotFoundError`, `OverconstrainedError` | "No camera available", pointing at the gallery | no |
+| `NotReadableError`, `TrackStartError`, `AbortError` | "Camera is in use", asking to close whatever holds it | yes |
+| anything else | the previous generic copy | yes |
+
+A blocked permission keeps its retry button even though the browser will not
+prompt again: the user allows the camera in settings and comes back through it.
+A device with no camera loses the button, because nothing the user does on that
+screen changes the answer.
+
+The Permissions API is deliberately unused. Safari exposes no `camera` entry,
+so `navigator.permissions.query` would be blind on the one platform this
+matters most on, while the rejection's `name` is available everywhere.
+
+Persisting the grant is a packaging decision, not a code one. In a Safari tab
+the permission is re-requested on later visits unless the user sets it per-site;
+installed to the Home Screen the origin becomes a standalone app and iOS keeps
+the grant in system settings. `manifest.webmanifest` already declares
+`display: standalone`, but the install is not yet finished: there are no icons
+and no apple-specific meta tags, so an installed instance would take a page
+screenshot as its icon.
+
 ## Privacy-safe local diagnostics
 
 Open the scanner with `?cameraDebug=1`. The overlay shows only opaque
@@ -109,6 +141,8 @@ labels, raw device IDs, frames, images or OCR.
    stable; record a screen recording and diagnostics if they change.
 6. Test Gallery with the same original photo: spinner immediately, copy only
    after candidate, then aligned results or a clear error.
+7. Deny the camera once: the prompt must name the setting to change rather than
+   only inviting another retry, and Gallery must stay reachable.
 
 The longer operational checklist remains in
 [iphone-camera-verification.md](iphone-camera-verification.md).

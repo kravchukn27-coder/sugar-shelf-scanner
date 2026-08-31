@@ -7,8 +7,8 @@ For a local demo quickstart, current scope, and privacy caveats, start at the
 
 | Need | Document |
 | --- | --- |
-| Scanner states, UI rules and recovery | [product-ux.md](product-ux.md) |
-| iPhone/Safari camera decisions and regression checks | [camera.md](camera.md) |
+| First-visit intro, scanner states, UI rules and recovery | [product-ux.md](product-ux.md) |
+| iPhone/Safari camera decisions, permission failures and regression checks | [camera.md](camera.md) |
 | Reviewed SKU data, matching, PostgreSQL and contribution policy | [catalog-data.md](catalog-data.md) |
 | Review-pending catalog proposal handling | [catalog-proposals.md](catalog-proposals.md) |
 | Railway activation, deploy and observability operations | [operations.md](operations.md) |

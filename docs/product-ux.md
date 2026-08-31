@@ -1,5 +1,22 @@
 # Scanner product and UX contract
 
+## First visit
+
+The onboarding story at `/onboarding/sugar-investor-demo.html` plays once per
+browser, before the scanner. It runs four auto-advancing scenes and ends on a
+screen whose **Start scanning** hands control back to the app; the story is
+never dismissed on a timer, so the last scene waits.
+
+Completion is remembered in `localStorage` under `sugar:onboarding-seen:v1`.
+A storage failure — private mode, blocked site data — falls through to showing
+the story rather than swallowing it, so a first-time visitor is never dropped
+straight into a camera prompt with no context. The idle home screen keeps a
+**Replay intro** entry point, which does not clear the stored flag.
+
+Because the flag is per browser and per origin, someone who has already opened
+the production link will not see the story again. Forcing it back for everyone
+means bumping the key, not clearing state at runtime.
+
 ## Main flow
 
 1. **Start** opens the live rear-camera scanner.
