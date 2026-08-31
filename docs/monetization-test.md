@@ -32,20 +32,41 @@ to which event. **The pass/fail number for each one does not exist yet.**
 > warning.
 
 1. **Wall-to-purchase conversion.**
-   Counts, per browser session that reaches the paywall: the fraction of
-   `paywall_shown` events followed by an `access_granted` event with
-   `grantSource: "checkout"` from the same browser. This is "shown the wall,
-   ended up with paid access via a fresh purchase" — it does not include
-   restores, which are a different browser recovering access it already paid
-   for elsewhere.
+   The ratio of two aggregate event counts over the test period: the count of
+   `access_granted` events with `grantSource: "checkout"` divided by the count
+   of `paywall_shown` events. This is "shown the wall, ended up with paid
+   access via a fresh purchase" — it does not include restores, which are a
+   different browser recovering access it already paid for elsewhere.
+   This is an event ratio, not a per-person rate. `paywall_shown` and
+   `access_granted` carry no session id, browser id, or any other
+   identifier — the telemetry contract forbids one by design (see
+   `src/lib/observability/result-metrics.ts`) — so nothing links one event to
+   another, and no per-browser or per-person figure can ever be computed from
+   this data. The ratio is also biased low: `paywall_shown` fires on every
+   press of Start once the free allowance is exhausted (see `openPaywall` in
+   `src/app/page.tsx`), not once per person, so one undecided visitor who taps
+   Start five times contributes five to the denominator and none to the
+   numerator. The measured number is a **floor** on the true per-person
+   conversion, not an estimate of it, and by an unknown factor that depends on
+   how much people hesitate. The threshold agreed with the business owner
+   must be a threshold on this event ratio — the quantity that will actually
+   exist — not on an imagined per-person conversion rate.
    - **Threshold: `[AGREE BEFORE LAUNCH — NOT SET]`**
 
 2. **Wall-to-checkout-start conversion.**
-   Counts, per browser session that reaches the paywall: the fraction of
-   `paywall_shown` events followed by a `paywall_checkout_started` event from
-   the same browser. This isolates "clicked buy" from "finished paying," so a
-   gap between this metric and the one above points at the Stripe checkout
-   step itself rather than at the wall's copy or price.
+   The ratio of two aggregate event counts over the test period: the count of
+   `paywall_checkout_started` events divided by the count of `paywall_shown`
+   events. This isolates "clicked buy" from "finished paying," so a gap
+   between this metric and the one above points at the Stripe checkout step
+   itself rather than at the wall's copy or price.
+   As with metric 1, this is an event ratio, not a per-person rate — the
+   funnel events carry no identifier of any kind, by design, so no per-browser
+   or per-person figure can be computed. The same bias applies in the same
+   direction: `paywall_shown` fires on every Start press, not once per
+   person, so repeated presses from undecided visitors inflate the
+   denominator and the measured number is a floor on the true per-person
+   rate. The threshold agreed with the business owner must be set on this
+   event ratio, not on an imagined per-person rate.
    - **Threshold: `[AGREE BEFORE LAUNCH — NOT SET]`**
 
 3. **Cost per payer, in US dollars.**
