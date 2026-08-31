@@ -1,0 +1,122 @@
+/* Full-screen paid-access wall. It sits above the scanner the same way the
+   onboarding story does, and uses the brand's dark ground with the coral
+   accent so it does not read as a third-party payment interstitial. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 24px 20px calc(28px + env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, rgba(10, 10, 12, 0.72) 0%, rgba(10, 10, 12, 0.97) 46%, #0a0a0c 100%);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  color: #f2f1f6;
+}
+
+.close {
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top));
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(242, 241, 246, 0.12);
+  color: #f2f1f6;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.title {
+  margin: 0 0 10px;
+  font-size: 26px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.body {
+  margin: 0 0 22px;
+  font-size: 15px;
+  line-height: 1.45;
+  color: #cfccd8;
+}
+
+.checkout {
+  width: 100%;
+  padding: 17px 20px;
+  border: 0;
+  border-radius: 16px;
+  background: #ff5a45;
+  color: #ffffff;
+  font-size: 17px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.checkout:disabled {
+  background: rgba(255, 90, 69, 0.4);
+  cursor: default;
+}
+
+.fineprint {
+  margin: 12px 0 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #a19cad;
+  text-align: center;
+}
+
+.restoreToggle {
+  display: block;
+  width: 100%;
+  margin-top: 18px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #cfccd8;
+  font-size: 14px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.restore {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.restore input {
+  padding: 14px 16px;
+  border: 1px solid rgba(242, 241, 246, 0.22);
+  border-radius: 14px;
+  background: rgba(242, 241, 246, 0.06);
+  color: #f2f1f6;
+  font-size: 16px;
+}
+
+.restore button {
+  padding: 14px 16px;
+  border: 1px solid rgba(242, 241, 246, 0.28);
+  border-radius: 14px;
+  background: none;
+  color: #f2f1f6;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.restoreNote {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #a19cad;
+}
+
+.restoreError {
+  color: #ff7b68;
+}
