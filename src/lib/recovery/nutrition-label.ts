@@ -134,7 +134,7 @@ export async function extractNutritionLabelWithGemini(input: NutritionLabelRecov
       let release: (() => Promise<void>) | undefined;
       try {
         release = await acquireGeminiPermit("nutrition_label");
-        await reserveGeminiRequest();
+        await reserveGeminiRequest("nutrition_label");
       } catch {
         if (release) await release();
         throw new NutritionLabelRequestError("Scan protection is temporarily unavailable.", 503, "rate_limiter_unavailable");

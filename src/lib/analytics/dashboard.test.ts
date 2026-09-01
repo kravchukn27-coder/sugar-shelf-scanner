@@ -22,11 +22,12 @@ test("dashboard overview fills missing metrics and returns aggregate-only event 
       if (calls === 12) return { rows: [{ day: "2026-08-31T00:00:00Z", operation: "preflight", requests: "8", successes: "6", timeout_errors: "1", p50_latency_ms: "400", p95_latency_ms: "900", p95_queue_ms: "40" }] };
       if (calls === 13) return { rows: [{ route: "preflight", requests: "7", errors: "1", p95_duration_ms: "1050", p95_vision_ms: "900", p95_catalog_ms: "60" }] };
       if (calls === 14) return { rows: [{ completions: "6", p95_capture_ready_ms: "250", p95_first_preflight_dispatch_ms: "330", p95_preflight_rtt_ms: "1100", p95_analyze_rtt_ms: "1600", p95_render_ms: "90" }] };
-      return { rows: [{ day: "2026-08-31T00:00:00Z", completions: "6", p95_first_preflight_dispatch_ms: "330", p95_preflight_rtt_ms: "1100", p95_analyze_rtt_ms: "1600" }] };
+      if (calls === 15) return { rows: [{ day: "2026-08-31T00:00:00Z", completions: "6", p95_first_preflight_dispatch_ms: "330", p95_preflight_rtt_ms: "1100", p95_analyze_rtt_ms: "1600" }] };
+      return { rows: [{ scope: "analyze", guard: "request_rate_limit", dimension: "installation", current_value: "3", previous_value: "1" }] };
     },
   };
   const overview = await readDashboardOverview(db as unknown as SqlQueryExecutor, new Date("2026-08-31T12:00:00.000Z"));
-  assert.equal(calls, 15);
+  assert.equal(calls, 16);
   assert.equal(overview.metrics.find((metric) => metric.key === "scan_started")?.value, 12);
   assert.equal(overview.metrics.find((metric) => metric.key === "vision_errors")?.value, 0);
   assert.equal(overview.metrics.find((metric) => metric.key === "gemini_estimated_cost_usd")?.value, null);
@@ -44,4 +45,5 @@ test("dashboard overview fills missing metrics and returns aggregate-only event 
   assert.deepEqual(overview.geminiHealth.routes, [{ route: "preflight", requests: 7, errors: 1, p95DurationMs: 1050, p95VisionMs: 900, p95CatalogMs: 60 }]);
   assert.deepEqual(overview.geminiHealth.experience, { completions: 6, p95CaptureReadyMs: 250, p95FirstPreflightDispatchMs: 330, p95PreflightRttMs: 1100, p95AnalyzeRttMs: 1600, p95RenderMs: 90 });
   assert.deepEqual(overview.geminiHealth.dailyExperience, [{ day: "2026-08-31", completions: 6, p95FirstPreflightDispatchMs: 330, p95PreflightRttMs: 1100, p95AnalyzeRttMs: 1600 }]);
+  assert.deepEqual(overview.guardRejections, [{ scope: "analyze", guard: "request_rate_limit", dimension: "installation", current: 3, previous: 1 }]);
 });

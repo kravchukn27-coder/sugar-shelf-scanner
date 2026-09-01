@@ -316,7 +316,7 @@ async function guardedGeminiFetch(operation: GeminiOperation, input: RequestInfo
   let release: (() => Promise<void>) | undefined;
   try {
     release = await acquireGeminiPermit(operation);
-    await reserveGeminiRequest();
+    await reserveGeminiRequest(operation);
   } catch {
     if (release) await release();
     throw new VisionRequestError("Scan protection is temporarily unavailable.", 503, "rate_limiter_unavailable");

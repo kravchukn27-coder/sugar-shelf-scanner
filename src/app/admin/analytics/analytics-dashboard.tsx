@@ -45,6 +45,18 @@ function formatEventName(value: string) {
   return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function formatGuardName(value: string) {
+  const labels: Record<string, string> = {
+    request_rate_limit: "Endpoint rate limit",
+    redis_unavailable: "Redis unavailable",
+    gemini_global_concurrency: "Gemini global concurrency",
+    gemini_operation_concurrency: "Gemini operation concurrency",
+    gemini_minute_budget: "Gemini minute budget",
+    gemini_day_budget: "Gemini daily budget",
+  };
+  return labels[value] ?? formatEventName(value);
+}
+
 function formatPercent(value: number | null) {
   return value === null ? "—" : new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 }).format(value);
 }
@@ -220,6 +232,7 @@ export default function AnalyticsDashboard() {
     {view === "gemini" && <section className={styles.geminiHealth} aria-label="Gemini Health">
       <div className={styles.healthHeading}><div><p className={styles.eyebrow}>Gemini Health</p><h2>Seven-day speed and reliability</h2><p>Separate Gemini time from server work and the user’s actual scanner experience.</p></div><span>{coverageLabel(geminiDaysCovered)}</span></div>
       <div className={styles.metrics}><article className={styles.metricCard}><p>Requests</p><strong>{geminiTotals.requests}</strong><span className={styles.neutral}>All operations</span></article><article className={styles.metricCard}><p>Error rate</p><strong>{formatPercent(geminiTotals.requests ? geminiTotals.errors / geminiTotals.requests : null)}</strong><span className={styles.neutral}>{geminiTotals.errors} failed</span></article><article className={styles.metricCard}><p>Provider tokens</p><strong>{formatValue(geminiTotals.tokens, "count")}</strong><span className={styles.neutral}>Usage-reported only</span></article><article className={styles.metricCard}><p>Estimated cost</p><strong>{formatBilling(geminiTotals.cost, "USD")}</strong><span className={styles.neutral}>Application estimate</span></article></div>
+      <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Protection limits</p><h2>Where requests were blocked</h2></div><span>{RANGE_LABELS[range]}</span></div>{overview.guardRejections.length === 0 ? <p className={styles.empty}>No protection limit has blocked work in this window.</p> : <div className={styles.guardTable}><div className={styles.comparisonHeader}><span>Scope</span><span>Protection</span><span>Dimension</span><span>Blocked</span><span>Prior window</span></div>{overview.guardRejections.map((item) => <div key={`${item.scope}-${item.guard}-${item.dimension ?? "none"}`}><strong>{formatEventName(item.scope)}</strong><span>{formatGuardName(item.guard)}</span><span>{item.dimension ? formatEventName(item.dimension) : "—"}</span><strong className={styles.negative}>{item.current}</strong><span>{item.previous}</span></div>)}</div>}<p className={styles.panelNote}>Counts begin with this deployment. They are aggregate safety decisions only: no IP addresses, installation IDs, images, or request payloads are stored.</p></article>
       <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Historical Railway logs</p><h2>Baseline and incident comparison</h2></div><span>Archived aggregates</span></div><div className={styles.comparisonScroll}><div className={styles.historyTable}><div className={styles.comparisonHeader}><span>Window</span><span>Requests</span><span>Success</span><span>Pre-screen p50</span><span>Pre-screen timeout</span><span>Confidence</span></div>{overview.geminiHealth.historicalComparisons.map((item) => <div key={item.period}><strong>{item.period}</strong><span>{item.requests}</span><span>{formatPercent(item.successRate)}</span><span>{item.preflightP50Ms}</span><span>{formatPercent(item.preflightTimeoutRate)}</span><small>{item.note}</small></div>)}</div></div><p className={styles.panelNote}>These are verified aggregates from the August Railway investigation. Individual logs have expired, so p95, queue and Analyze splits are deliberately not inferred.</p></article>
       <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Day-to-day comparison</p><h2>Gemini speed by operation</h2></div><span>UTC · newest first</span></div>{overview.geminiHealth.dailyOperations.length === 0 ? <p className={styles.empty}>No persisted Gemini events in this window yet.</p> : <div className={styles.comparisonScroll}><div className={styles.comparisonTable}><div className={styles.comparisonHeader}><span>Day</span><span>Stage</span><span>Requests</span><span>Success</span><span>Timeout</span><span>p50 Gemini</span><span>p95 Gemini</span><span>p95 queue</span></div>{overview.geminiHealth.dailyOperations.map((item) => {
                 const successRate = item.requests ? item.successes / item.requests : null;

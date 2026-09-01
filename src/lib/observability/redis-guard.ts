@@ -1,5 +1,6 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { createClient } from "redis";
+import { queueAnalyticsEvent } from "@/lib/analytics/events";
 
 export type GuardScope = "preflight" | "analyze" | "recovery_label" | "recovery_barcode" | "access_restore" | "access_redeem";
 export type GeminiOperation = "preflight" | "analyze" | "nutrition_label";
@@ -26,7 +27,8 @@ return {count, ttl}
 const ACQUIRE_SCRIPT = `
 local total = tonumber(redis.call('GET', KEYS[1]) or '0')
 local operation = tonumber(redis.call('GET', KEYS[2]) or '0')
-if total >= tonumber(ARGV[1]) or operation >= tonumber(ARGV[2]) then return 0 end
+if total >= tonumber(ARGV[1]) then return 'global' end
+if operation >= tonumber(ARGV[2]) then return 'operation' end
 redis.call('INCR', KEYS[1])
 redis.call('INCR', KEYS[2])
 redis.call('PEXPIRE', KEYS[1], ARGV[3])
@@ -45,7 +47,8 @@ return 1
 const RESERVE_REQUEST_SCRIPT = `
 local minute = tonumber(redis.call('GET', KEYS[1]) or '0')
 local day = tonumber(redis.call('GET', KEYS[2]) or '0')
-if minute >= tonumber(ARGV[1]) or day >= tonumber(ARGV[2]) then return 0 end
+if minute >= tonumber(ARGV[1]) then return 'minute' end
+if day >= tonumber(ARGV[2]) then return 'day' end
 redis.call('INCR', KEYS[1])
 redis.call('INCR', KEYS[2])
 redis.call('PEXPIRE', KEYS[1], ARGV[3])
@@ -61,6 +64,23 @@ const developmentSecret = randomUUID();
 
 export class RedisGuardUnavailableError extends Error {
   constructor() { super("Shared rate limiter is unavailable."); this.name = "RedisGuardUnavailableError"; }
+}
+
+/**
+ * This is intentionally an aggregate-only event. It records which safety
+ * boundary rejected work, never the IP, installation ID, image, or request
+ * payload that led to the decision.
+ */
+function recordGuardRejection(scope: GuardScope | GeminiOperation, guard: "request_rate_limit" | "redis_unavailable" | "gemini_global_concurrency" | "gemini_operation_concurrency" | "gemini_minute_budget" | "gemini_day_budget", dimension?: "ip" | "installation" | "both") {
+  queueAnalyticsEvent({
+    eventName: "guard_rejection",
+    source: "system",
+    properties: { scope, guard, ...(dimension ? { dimension } : {}) },
+  });
+}
+
+export function recordRateLimiterUnavailable(scope: GuardScope) {
+  recordGuardRejection(scope, "redis_unavailable");
 }
 
 function production(environment: NodeJS.ProcessEnv) { return environment.NODE_ENV === "production"; }
@@ -133,6 +153,10 @@ export async function checkSharedRateLimit(request: Request, scope: GuardScope, 
       return { ...item, limit };
     }));
     const denied = results.filter((result) => result.count > result.limit.limit);
+    if (denied.length) {
+      const dimensions = denied.map((result) => results.indexOf(result) === 0 ? "ip" : "installation");
+      recordGuardRejection(scope, "request_rate_limit", dimensions.length === 2 ? "both" : dimensions[0]);
+    }
     return denied.length === 0
       ? { allowed: true, retryAfterSeconds: 0 }
       : { allowed: false, retryAfterSeconds: Math.max(...denied.map((result) => Math.max(1, Math.ceil(result.ttlMs / 1_000)))) };
@@ -162,11 +186,13 @@ export async function acquireGeminiPermit(operation: GeminiOperation, environmen
   const operationLimit = positiveInteger(operationEnv[operation], environment);
   const leaseMs = 35_000;
   const keys = ["sugar:v1:gemini:inflight", `sugar:v1:gemini:inflight:${operation}`];
-  try {
-    const acquired = await client.eval(ACQUIRE_SCRIPT, { keys, arguments: [String(globalLimit), String(operationLimit), String(leaseMs)] });
-    if (acquired !== 1) throw new RedisGuardUnavailableError();
-  } catch (error) {
-    if (error instanceof RedisGuardUnavailableError) throw error;
+  let acquired: unknown;
+  try { acquired = await client.eval(ACQUIRE_SCRIPT, { keys, arguments: [String(globalLimit), String(operationLimit), String(leaseMs)] }); }
+  catch { recordGuardRejection(operation, "redis_unavailable"); throw new RedisGuardUnavailableError(); }
+  if (acquired !== 1) {
+    // The Lua script checks the global counter first, so a rejection here is
+    // attributable without exposing a counter value to the browser.
+    recordGuardRejection(operation, acquired === "global" ? "gemini_global_concurrency" : "gemini_operation_concurrency");
     throw new RedisGuardUnavailableError();
   }
   return async () => {
@@ -175,21 +201,22 @@ export async function acquireGeminiPermit(operation: GeminiOperation, environmen
 }
 
 /** Counts provider invocations (not browser requests), including hedges/retries. */
-export async function reserveGeminiRequest(environment: NodeJS.ProcessEnv = process.env, redis?: RedisEval): Promise<void> {
+export async function reserveGeminiRequest(operation: GeminiOperation, environment: NodeJS.ProcessEnv = process.env, redis?: RedisEval): Promise<void> {
   if (!environment.REDIS_URL && !production(environment)) return;
   const client = redis ?? await redisFor(environment);
   const minuteLimit = positiveInteger("GEMINI_REQUESTS_PER_MINUTE_LIMIT", environment);
   const dayLimit = positiveInteger("GEMINI_REQUESTS_PER_DAY_LIMIT", environment);
   const minuteBucket = Math.floor(Date.now() / 60_000);
   const pacificDay = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  let reserved: unknown;
   try {
-    const reserved = await client.eval(RESERVE_REQUEST_SCRIPT, {
+    reserved = await client.eval(RESERVE_REQUEST_SCRIPT, {
       keys: [`sugar:v1:gemini:requests:minute:${minuteBucket}`, `sugar:v1:gemini:requests:day:${pacificDay}`],
       arguments: [String(minuteLimit), String(dayLimit), "120000", "172800000"],
     });
-    if (reserved !== 1) throw new RedisGuardUnavailableError();
-  } catch (error) {
-    if (error instanceof RedisGuardUnavailableError) throw error;
+  } catch { recordGuardRejection(operation, "redis_unavailable"); throw new RedisGuardUnavailableError(); }
+  if (reserved !== 1) {
+    recordGuardRejection(operation, reserved === "minute" ? "gemini_minute_budget" : "gemini_day_budget");
     throw new RedisGuardUnavailableError();
   }
 }

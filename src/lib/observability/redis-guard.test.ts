@@ -48,7 +48,7 @@ test("production fails closed when the rate-limit secret is missing", async () =
 test("production request budget is rejected when Redis cannot reserve it", async () => {
   const redis = { eval: async () => 0 };
   await assert.rejects(
-    reserveGeminiRequest({ NODE_ENV: "production", REDIS_URL: "redis://example", GEMINI_REQUESTS_PER_MINUTE_LIMIT: "120", GEMINI_REQUESTS_PER_DAY_LIMIT: "10000" } as NodeJS.ProcessEnv, redis),
+    reserveGeminiRequest("analyze", { NODE_ENV: "production", REDIS_URL: "redis://example", GEMINI_REQUESTS_PER_MINUTE_LIMIT: "120", GEMINI_REQUESTS_PER_DAY_LIMIT: "10000" } as NodeJS.ProcessEnv, redis),
     RedisGuardUnavailableError,
   );
 });

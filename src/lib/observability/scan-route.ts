@@ -2,7 +2,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { queueAnalyticsEvent } from "@/lib/analytics/events";
 import { isScannerMetricsEnabled } from "@/lib/env";
-import { checkSharedRateLimit, type GuardScope } from "@/lib/observability/redis-guard";
+import { checkSharedRateLimit, recordRateLimiterUnavailable, type GuardScope } from "@/lib/observability/redis-guard";
 
 // `access_restore` is an email-guessing surface, so it is rate limited by the
 // same keyed digest as the scan routes. `access_redeem` makes an outbound
@@ -96,6 +96,7 @@ export async function checkScanRateLimit(request: Request, config: RateLimitConf
     try {
       return await checkSharedRateLimit(request, config.scope, process.env);
     } catch {
+      recordRateLimiterUnavailable(config.scope);
       return { allowed: false, retryAfterSeconds: 1, unavailable: true };
     }
   }

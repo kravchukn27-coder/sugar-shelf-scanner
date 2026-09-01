@@ -280,6 +280,15 @@ cost. It is not a customer-facing route and its
 API returns `Cache-Control: no-store` responses only after a valid bearer
 secret.
 
+The **Gemini Health → Where requests were blocked** panel records every
+production refusal from the shared request limit and Gemini safeguards. It
+breaks totals down by scope (`analyze`, `preflight`, recovery, access) and by
+reason: endpoint quota, Redis unavailable, global/operation concurrency, and
+Gemini minute/day budget. These are aggregate events only—no IP address,
+installation ID, request body, or image is persisted. Counts start when the
+feature is deployed; use the selected window and prior-window comparison to
+decide whether a limit needs changing.
+
 ### First activation
 
 1. Apply migrations in numeric order against the Railway PostgreSQL service:

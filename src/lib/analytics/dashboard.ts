@@ -33,6 +33,7 @@ export type DashboardOverview = {
   recentEvents: { occurredAt: string; eventName: string; source: string }[];
   cloudBilling: CloudBillingSummary;
   geminiHealth: GeminiHealth;
+  guardRejections: GuardRejection[];
 };
 
 export type DashboardFunnelStep = {
@@ -72,6 +73,8 @@ export type ScannerExperiencePerformance = { completions: number; p95CaptureRead
 export type ScannerExperienceDay = { day: string; completions: number; p95FirstPreflightDispatchMs: number | null; p95PreflightRttMs: number | null; p95AnalyzeRttMs: number | null };
 export type HistoricalGeminiComparison = { period: string; requests: number; successRate: number; preflightP50Ms: string; preflightTimeoutRate: number; note: string };
 export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[]; operations: GeminiHealthOperation[]; dailyOperations: GeminiHealthDayOperation[]; historicalComparisons: HistoricalGeminiComparison[]; routes: ScannerRoutePerformance[]; experience: ScannerExperiencePerformance; dailyExperience: ScannerExperienceDay[] };
+/** Aggregate protection decisions only; no client identity or request contents. */
+export type GuardRejection = { scope: string; guard: string; dimension: string | null; current: number; previous: number };
 
 type MetricRow = { key: DashboardMetricKey; current_value: number | string | null; previous_value: number | string | null };
 type QualityRow = { label: string; value: number | string | null };
@@ -88,6 +91,7 @@ type GeminiDayOperationRow = { day: string | Date; operation: string | null; req
 type ScannerRouteRow = { route: string | null; requests: number | string | null; errors: number | string | null; p95_duration_ms: number | string | null; p95_vision_ms: number | string | null; p95_catalog_ms: number | string | null };
 type ScannerExperienceRow = { completions: number | string | null; p95_capture_ready_ms: number | string | null; p95_first_preflight_dispatch_ms: number | string | null; p95_preflight_rtt_ms: number | string | null; p95_analyze_rtt_ms: number | string | null; p95_render_ms: number | string | null };
 type ScannerExperienceDayRow = { day: string | Date; completions: number | string | null; p95_first_preflight_dispatch_ms: number | string | null; p95_preflight_rtt_ms: number | string | null; p95_analyze_rtt_ms: number | string | null };
+type GuardRejectionRow = { scope: string | null; guard: string | null; dimension: string | null; current_value: number | string | null; previous_value: number | string | null };
 
 const METRICS: { key: DashboardMetricKey; label: string; unit: DashboardMetric["unit"] }[] = [
   { key: "scan_started", label: "Scans started", unit: "count" },
@@ -236,7 +240,7 @@ export async function readDashboardOverview(
   `, [startsAt.toISOString(), endsAt.toISOString(), new Date(endsAt.getTime() - 7 * 86_400_000).toISOString(), new Date(endsAt.getTime() - 30 * 86_400_000).toISOString()]);
 
   const weekStartsAt = new Date(endsAt.getTime() - 7 * 86_400_000);
-  const [geminiRequestDays, geminiUsageDays, geminiRequestModels, geminiUsageModels, geminiOperations, geminiDailyOperations, scannerRoutes, scannerExperience, scannerDailyExperience] = await Promise.all([
+  const [geminiRequestDays, geminiUsageDays, geminiRequestModels, geminiUsageModels, geminiOperations, geminiDailyOperations, scannerRoutes, scannerExperience, scannerDailyExperience, guardRejections] = await Promise.all([
     db.query<GeminiRequestDayRow>(`
       SELECT date_trunc('day', occurred_at) AS day, COUNT(*)::bigint AS requests,
         COUNT(*) FILTER (WHERE COALESCE(properties->>'outcome', 'success') <> 'success')::bigint AS errors,
@@ -310,6 +314,16 @@ export async function readDashboardOverview(
       FROM analytics_events WHERE event_name = 'scanner_completed' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
       GROUP BY 1 ORDER BY day DESC
     `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    db.query<GuardRejectionRow>(`
+      SELECT COALESCE(NULLIF(properties->>'scope', ''), 'unknown') AS scope,
+        COALESCE(NULLIF(properties->>'guard', ''), 'unknown') AS guard,
+        NULLIF(properties->>'dimension', '') AS dimension,
+        COUNT(*) FILTER (WHERE occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz)::bigint AS current_value,
+        COUNT(*) FILTER (WHERE occurred_at >= $3::timestamptz AND occurred_at < $1::timestamptz)::bigint AS previous_value
+      FROM analytics_events
+      WHERE event_name = 'guard_rejection' AND occurred_at >= $3::timestamptz AND occurred_at < $2::timestamptz
+      GROUP BY 1, 2, 3 ORDER BY current_value DESC, scope ASC, guard ASC
+    `, [startsAt.toISOString(), endsAt.toISOString(), previousStartsAt.toISOString()]),
   ]);
 
   const byKey = new Map(metrics.rows.map((row) => [row.key, row]));
@@ -350,6 +364,7 @@ export async function readDashboardOverview(
     quality: quality.rows.map((row) => ({ label: row.label, value: numeric(row.value) })),
     recentEvents: recent.rows.map((row) => ({ occurredAt: new Date(row.occurred_at).toISOString(), eventName: row.event_name, source: row.source })),
     cloudBilling,
+    guardRejections: guardRejections.rows.map((row) => ({ scope: row.scope ?? "unknown", guard: row.guard ?? "unknown", dimension: row.dimension, current: numeric(row.current_value), previous: numeric(row.previous_value) })),
     geminiHealth: {
       days: geminiDays,
       models: geminiModels,
