@@ -101,11 +101,68 @@ function formatDeltaPoints(current: number | null, baseline: number | null) {
   return `${points > 0 ? "+" : ""}${points.toFixed(0)}pp vs baseline`;
 }
 
-function deltaPointsTone(current: number | null, baseline: number | null) {
+function deltaPointsTone(current: number | null, baseline: number | null, lowerIsBetter = false) {
   if (current === null || baseline === null) return styles.neutral;
   const points = current - baseline;
   if (Math.abs(points) < 0.01) return styles.neutral;
-  return points > 0 ? styles.positive : styles.negative;
+  const improving = lowerIsBetter ? points < 0 : points > 0;
+  return improving ? styles.positive : styles.negative;
+}
+
+// For latency (ms), a percentage-point difference is meaningless — "+2200pp"
+// vs a 5s baseline says nothing. Relative % change reads naturally instead:
+// "+90% vs avg" for a day that took nearly double the typical time.
+function formatRelativeDelta(current: number | null, baseline: number | null) {
+  if (current === null || baseline === null || baseline === 0) return null;
+  const percentage = ((current - baseline) / baseline) * 100;
+  if (Math.abs(percentage) < 3) return "≈ avg";
+  return `${percentage > 0 ? "+" : ""}${percentage.toFixed(0)}% vs avg`;
+}
+
+function relativeDeltaTone(current: number | null, baseline: number | null, lowerIsBetter = true) {
+  if (current === null || baseline === null || baseline === 0) return styles.neutral;
+  const percentage = (current - baseline) / baseline;
+  if (Math.abs(percentage) < 0.03) return styles.neutral;
+  const improving = lowerIsBetter ? percentage < 0 : percentage > 0;
+  return improving ? styles.positive : styles.negative;
+}
+
+/**
+ * Per-operation averages across every day currently shown in the day-to-day
+ * table, so each row can say "better/worse than typical" instead of only
+ * "better/worse than the archived Aug 26-27 window" — useful even once
+ * today's numbers no longer resemble late August at all. Rate metrics
+ * (success, timeout) are pooled (sum of counts, not mean of daily %s) so a
+ * high-volume day is not diluted by a low-volume one; latency figures are a
+ * simple mean of the daily p50/p95/queue values, which is the standard,
+ * if approximate, way to summarize percentiles across days.
+ */
+function useOperationAverages(dailyOperations: { operation: string; requests: number; successes: number; timeoutErrors: number; p50LatencyMs: number | null; p95LatencyMs: number | null; p95QueueMs: number | null }[] | undefined) {
+  return useMemo(() => {
+    const byOperation = new Map<string, { requests: number; successes: number; timeoutErrors: number; p50s: number[]; p95s: number[]; queues: number[] }>();
+    for (const day of dailyOperations ?? []) {
+      const bucket = byOperation.get(day.operation) ?? { requests: 0, successes: 0, timeoutErrors: 0, p50s: [], p95s: [], queues: [] };
+      bucket.requests += day.requests;
+      bucket.successes += day.successes;
+      bucket.timeoutErrors += day.timeoutErrors;
+      if (day.p50LatencyMs !== null) bucket.p50s.push(day.p50LatencyMs);
+      if (day.p95LatencyMs !== null) bucket.p95s.push(day.p95LatencyMs);
+      if (day.p95QueueMs !== null) bucket.queues.push(day.p95QueueMs);
+      byOperation.set(day.operation, bucket);
+    }
+    const mean = (values: number[]) => values.length ? values.reduce((total, value) => total + value, 0) / values.length : null;
+    const averages = new Map<string, { successRate: number | null; timeoutRate: number | null; p50LatencyMs: number | null; p95LatencyMs: number | null; p95QueueMs: number | null }>();
+    for (const [operation, bucket] of byOperation) {
+      averages.set(operation, {
+        successRate: bucket.requests ? bucket.successes / bucket.requests : null,
+        timeoutRate: bucket.requests ? bucket.timeoutErrors / bucket.requests : null,
+        p50LatencyMs: mean(bucket.p50s),
+        p95LatencyMs: mean(bucket.p95s),
+        p95QueueMs: mean(bucket.queues),
+      });
+    }
+    return averages;
+  }, [dailyOperations]);
 }
 
 export default function AnalyticsDashboard() {
@@ -143,6 +200,7 @@ export default function AnalyticsDashboard() {
   const geminiTotals = useMemo(() => overview?.geminiHealth.days.reduce((total, day) => ({ requests: total.requests + day.requests, errors: total.errors + day.errors, tokens: total.tokens + day.totalTokens, cost: total.cost === null || day.estimatedCostUsd === null ? null : total.cost + day.estimatedCostUsd }), { requests: 0, errors: 0, tokens: 0, cost: 0 as number | null }) ?? { requests: 0, errors: 0, tokens: 0, cost: null }, [overview]);
   const geminiDaysCovered = overview?.geminiHealth.days.length ?? 0;
   const healthyBaselineSuccessRate = overview?.geminiHealth.historicalComparisons.find((item) => item.period.includes("healthy baseline"))?.successRate ?? null;
+  const operationAverages = useOperationAverages(overview?.geminiHealth.dailyOperations);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -243,11 +301,13 @@ export default function AnalyticsDashboard() {
       <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Historical Railway logs</p><h2>Baseline and incident comparison</h2></div><span>Archived aggregates</span></div><div className={styles.comparisonScroll}><div className={styles.historyTable}><div className={styles.comparisonHeader}><span>Window</span><span>Requests</span><span>Success</span><span>Pre-screen p50</span><span>Pre-screen timeout</span><span>Confidence</span></div>{overview.geminiHealth.historicalComparisons.map((item) => <div key={item.period}><strong>{item.period}</strong><span>{item.requests}</span><span>{formatPercent(item.successRate)}</span><span>{item.preflightP50Ms}</span><span>{formatPercent(item.preflightTimeoutRate)}</span><small>{item.note}</small></div>)}</div></div><p className={styles.panelNote}>These are verified aggregates from the August Railway investigation. Individual logs have expired, so p95, queue and Analyze splits are deliberately not inferred.</p></article>
       <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Day-to-day comparison</p><h2>Gemini speed by operation</h2></div><span>UTC · newest first</span></div>{overview.geminiHealth.dailyOperations.length === 0 ? <p className={styles.empty}>No persisted Gemini events in this window yet.</p> : <div className={styles.comparisonScroll}><div className={styles.comparisonTable}><div className={styles.comparisonHeader}><span>Day</span><span>Stage</span><span>Requests</span><span>Success</span><span>Timeout</span><span>p50 Gemini</span><span>p95 Gemini</span><span>p95 queue</span></div>{overview.geminiHealth.dailyOperations.map((item) => {
                 const successRate = item.requests ? item.successes / item.requests : null;
-                // The archived baseline is a preflight-only measurement (see
-                // the Historical Railway logs panel above), so the delta
-                // badge only makes sense on preflight rows.
-                const showBaselineDelta = item.operation === "preflight";
-                return <div key={`${item.day}-${item.operation}`}><time>{new Intl.DateTimeFormat("en", { month: "short", day: "numeric", weekday: "short" }).format(new Date(`${item.day}T00:00:00Z`))}</time><strong>{formatEventName(item.operation)}</strong><span>{item.requests}</span><span>{formatPercent(successRate)}{showBaselineDelta && <small className={deltaPointsTone(successRate, healthyBaselineSuccessRate)}>{formatDeltaPoints(successRate, healthyBaselineSuccessRate)}</small>}</span><span>{formatPercent(item.requests ? item.timeoutErrors / item.requests : null)}</span><span>{formatMs(item.p50LatencyMs)}</span><span>{formatMs(item.p95LatencyMs)}</span><span>{formatMs(item.p95QueueMs)}</span></div>;
+                const timeoutRate = item.requests ? item.timeoutErrors / item.requests : null;
+                // "Average" here means across every day this table currently
+                // shows for the same operation — not the fixed Aug 26-27
+                // archived window above, which stays as a separate, dated
+                // reference point rather than a moving target.
+                const average = operationAverages.get(item.operation);
+                return <div key={`${item.day}-${item.operation}`}><time>{new Intl.DateTimeFormat("en", { month: "short", day: "numeric", weekday: "short" }).format(new Date(`${item.day}T00:00:00Z`))}</time><strong>{formatEventName(item.operation)}</strong><span>{item.requests}</span><span>{formatPercent(successRate)}{average && <small className={deltaPointsTone(successRate, average.successRate)}>{formatDeltaPoints(successRate, average.successRate)}</small>}</span><span>{formatPercent(timeoutRate)}{average && <small className={deltaPointsTone(timeoutRate, average.timeoutRate, true)}>{formatDeltaPoints(timeoutRate, average.timeoutRate)}</small>}</span><span>{formatMs(item.p50LatencyMs)}{average && <small className={relativeDeltaTone(item.p50LatencyMs, average.p50LatencyMs)}>{formatRelativeDelta(item.p50LatencyMs, average.p50LatencyMs)}</small>}</span><span>{formatMs(item.p95LatencyMs)}{average && <small className={relativeDeltaTone(item.p95LatencyMs, average.p95LatencyMs)}>{formatRelativeDelta(item.p95LatencyMs, average.p95LatencyMs)}</small>}</span><span>{formatMs(item.p95QueueMs)}{average && <small className={relativeDeltaTone(item.p95QueueMs, average.p95QueueMs)}>{formatRelativeDelta(item.p95QueueMs, average.p95QueueMs)}</small>}</span></div>;
               })}</div></div>}</article>
       <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Day-to-day user experience</p><h2>What scanner users wait for</h2></div><span>p95 · client RTT</span></div>{overview.geminiHealth.dailyExperience.length === 0 ? <p className={styles.empty}>No completed scanner sessions in this window yet.</p> : <div className={styles.comparisonScroll}><div className={styles.experienceTable}><div className={styles.comparisonHeader}><span>Day</span><span>Completed scans</span><span>First pre-screen dispatch</span><span>Pre-screen RTT</span><span>Analysis RTT</span></div>{overview.geminiHealth.dailyExperience.map((item) => <div key={item.day}><time>{new Intl.DateTimeFormat("en", { month: "short", day: "numeric", weekday: "short" }).format(new Date(`${item.day}T00:00:00Z`))}</time><span>{item.completions}</span><span>{formatMs(item.p95FirstPreflightDispatchMs)}</span><span>{formatMs(item.p95PreflightRttMs)}</span><span>{formatMs(item.p95AnalyzeRttMs)}</span></div>)}</div></div>}</article>
       <section className={styles.performanceGrid} aria-label="Scanner end-to-end performance"><article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>User experience</p><h2>Scanner end-to-end</h2></div><span>{overview.geminiHealth.experience.completions} completions</span></div><div className={styles.operationGrid}><div><span>Capture ready p95</span><strong>{formatMs(overview.geminiHealth.experience.p95CaptureReadyMs)}</strong></div><div><span>First pre-screen dispatch p95</span><strong>{formatMs(overview.geminiHealth.experience.p95FirstPreflightDispatchMs)}</strong></div><div><span>Pre-screen RTT p95</span><strong>{formatMs(overview.geminiHealth.experience.p95PreflightRttMs)}</strong></div><div><span>Analysis RTT p95</span><strong>{formatMs(overview.geminiHealth.experience.p95AnalyzeRttMs)}</strong></div><div><span>Render p95</span><strong>{formatMs(overview.geminiHealth.experience.p95RenderMs)}</strong></div></div><p className={styles.panelNote}>RTT includes network and application time measured in the browser; it is the closest view of what a scanner user feels.</p></article><article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Server route timings</p><h2>Where time is spent</h2></div><span>p95</span></div>{overview.geminiHealth.routes.length === 0 ? <p className={styles.empty}>No persisted scan-route events in this window yet.</p> : <div className={styles.routeList}>{overview.geminiHealth.routes.map((route) => <div key={route.route}><strong>{formatEventName(route.route)}</strong><span>{route.requests} requests · {route.errors} errors</span><small>Total {formatMs(route.p95DurationMs)} · Gemini {formatMs(route.p95VisionMs)} · catalog {formatMs(route.p95CatalogMs)}</small></div>)}</div>}</article></section>
