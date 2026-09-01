@@ -65,7 +65,10 @@ export type DashboardOperations = {
 
 export type GeminiHealthDay = { day: string; requests: number; errors: number; timeoutErrors: number; p95LatencyMs: number | null; p95QueueMs: number | null; totalTokens: number; estimatedCostUsd: number | null };
 export type GeminiHealthModel = { model: string; requests: number; errors: number; timeoutErrors: number; p95LatencyMs: number | null; totalTokens: number; estimatedCostUsd: number | null };
-export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[] };
+export type GeminiHealthOperation = { operation: string; requests: number; errors: number; timeoutErrors: number; p50LatencyMs: number | null; p95LatencyMs: number | null; p95QueueMs: number | null };
+export type ScannerRoutePerformance = { route: string; requests: number; errors: number; p95DurationMs: number | null; p95VisionMs: number | null; p95CatalogMs: number | null };
+export type ScannerExperiencePerformance = { completions: number; p95CaptureReadyMs: number | null; p95FirstPreflightDispatchMs: number | null; p95PreflightRttMs: number | null; p95AnalyzeRttMs: number | null; p95RenderMs: number | null };
+export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[]; operations: GeminiHealthOperation[]; routes: ScannerRoutePerformance[]; experience: ScannerExperiencePerformance };
 
 type MetricRow = { key: DashboardMetricKey; current_value: number | string | null; previous_value: number | string | null };
 type QualityRow = { label: string; value: number | string | null };
@@ -77,6 +80,9 @@ type GeminiRequestDayRow = { day: string | Date; requests: number | string | nul
 type GeminiUsageDayRow = { day: string | Date; total_tokens: number | string | null; estimated_cost_usd: number | string | null };
 type GeminiRequestModelRow = { model: string | null; requests: number | string | null; errors: number | string | null; timeout_errors: number | string | null; p95_latency_ms: number | string | null };
 type GeminiUsageModelRow = { model: string | null; total_tokens: number | string | null; estimated_cost_usd: number | string | null };
+type GeminiOperationRow = { operation: string | null; requests: number | string | null; errors: number | string | null; timeout_errors: number | string | null; p50_latency_ms: number | string | null; p95_latency_ms: number | string | null; p95_queue_ms: number | string | null };
+type ScannerRouteRow = { route: string | null; requests: number | string | null; errors: number | string | null; p95_duration_ms: number | string | null; p95_vision_ms: number | string | null; p95_catalog_ms: number | string | null };
+type ScannerExperienceRow = { completions: number | string | null; p95_capture_ready_ms: number | string | null; p95_first_preflight_dispatch_ms: number | string | null; p95_preflight_rtt_ms: number | string | null; p95_analyze_rtt_ms: number | string | null; p95_render_ms: number | string | null };
 
 const METRICS: { key: DashboardMetricKey; label: string; unit: DashboardMetric["unit"] }[] = [
   { key: "scan_started", label: "Scans started", unit: "count" },
@@ -212,7 +218,7 @@ export async function readDashboardOverview(
   `, [startsAt.toISOString(), endsAt.toISOString(), new Date(endsAt.getTime() - 7 * 86_400_000).toISOString(), new Date(endsAt.getTime() - 30 * 86_400_000).toISOString()]);
 
   const weekStartsAt = new Date(endsAt.getTime() - 7 * 86_400_000);
-  const [geminiRequestDays, geminiUsageDays, geminiRequestModels, geminiUsageModels] = await Promise.all([
+  const [geminiRequestDays, geminiUsageDays, geminiRequestModels, geminiUsageModels, geminiOperations, scannerRoutes, scannerExperience] = await Promise.all([
     db.query<GeminiRequestDayRow>(`
       SELECT date_trunc('day', occurred_at) AS day, COUNT(*)::bigint AS requests,
         COUNT(*) FILTER (WHERE COALESCE(properties->>'outcome', 'success') <> 'success')::bigint AS errors,
@@ -238,6 +244,34 @@ export async function readDashboardOverview(
         COALESCE(SUM(NULLIF(properties->>'totalTokenCount', '')::numeric), 0) AS total_tokens,
         SUM(NULLIF(properties->>'estimatedCostUsd', '')::numeric) AS estimated_cost_usd
       FROM analytics_events WHERE event_name = 'vision_usage' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1
+    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    db.query<GeminiOperationRow>(`
+      SELECT COALESCE(NULLIF(properties->>'operation', ''), 'unknown') AS operation, COUNT(*)::bigint AS requests,
+        COUNT(*) FILTER (WHERE COALESCE(properties->>'outcome', 'success') <> 'success')::bigint AS errors,
+        COUNT(*) FILTER (WHERE properties->>'outcome' = 'provider_timeout')::bigint AS timeout_errors,
+        percentile_cont(0.50) WITHIN GROUP (ORDER BY (properties->>'durationMs')::numeric) FILTER (WHERE properties->>'durationMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p50_latency_ms,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'durationMs')::numeric) FILTER (WHERE properties->>'durationMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_latency_ms,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'queueMs')::numeric) FILTER (WHERE properties->>'queueMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_queue_ms
+      FROM analytics_events WHERE event_name = 'vision_request' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
+      GROUP BY 1 ORDER BY requests DESC, operation ASC
+    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    db.query<ScannerRouteRow>(`
+      SELECT COALESCE(NULLIF(properties->>'route', ''), 'unknown') AS route, COUNT(*)::bigint AS requests,
+        COUNT(*) FILTER (WHERE properties->>'status' ~ '^[0-9]+$' AND (properties->>'status')::integer >= 400)::bigint AS errors,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'durationMs')::numeric) FILTER (WHERE properties->>'durationMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_duration_ms,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'visionMs')::numeric) FILTER (WHERE properties->>'visionMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_vision_ms,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'catalogMs')::numeric) FILTER (WHERE properties->>'catalogMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_catalog_ms
+      FROM analytics_events WHERE event_name = 'scan_request' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
+      GROUP BY 1 ORDER BY requests DESC, route ASC
+    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    db.query<ScannerExperienceRow>(`
+      SELECT COUNT(*)::bigint AS completions,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'captureReadyMs')::numeric) FILTER (WHERE properties->>'captureReadyMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_capture_ready_ms,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'timeToFirstPreflightDispatchMs')::numeric) FILTER (WHERE properties->>'timeToFirstPreflightDispatchMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_first_preflight_dispatch_ms,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'preflightLastRttMs')::numeric) FILTER (WHERE properties->>'preflightLastRttMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_preflight_rtt_ms,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'analyzeRttMs')::numeric) FILTER (WHERE properties->>'analyzeRttMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_analyze_rtt_ms,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'renderMs')::numeric) FILTER (WHERE properties->>'renderMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_render_ms
+      FROM analytics_events WHERE event_name = 'scanner_completed' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
     `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
   ]);
 
@@ -266,6 +300,8 @@ export async function readDashboardOverview(
   });
   const usageByModel = new Map(geminiUsageModels.rows.map((row) => [row.model ?? "unknown", row]));
   const geminiModels = geminiRequestModels.rows.map((row) => { const model = row.model ?? "unknown"; const usage = usageByModel.get(model); return { model, requests: numeric(row.requests), errors: numeric(row.errors), timeoutErrors: numeric(row.timeout_errors), p95LatencyMs: row.p95_latency_ms === null || row.p95_latency_ms === undefined ? null : numeric(row.p95_latency_ms), totalTokens: numeric(usage?.total_tokens ?? null), estimatedCostUsd: usage?.estimated_cost_usd === null || usage?.estimated_cost_usd === undefined ? null : numeric(usage.estimated_cost_usd) }; });
+  const optional = (value: number | string | null | undefined) => value === null || value === undefined ? null : numeric(value);
+  const experienceRow = scannerExperience.rows[0];
   return {
     generatedAt: now.toISOString(),
     window: { startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), previousStartsAt: previousStartsAt.toISOString() },
@@ -277,6 +313,12 @@ export async function readDashboardOverview(
     quality: quality.rows.map((row) => ({ label: row.label, value: numeric(row.value) })),
     recentEvents: recent.rows.map((row) => ({ occurredAt: new Date(row.occurred_at).toISOString(), eventName: row.event_name, source: row.source })),
     cloudBilling,
-    geminiHealth: { days: geminiDays, models: geminiModels },
+    geminiHealth: {
+      days: geminiDays,
+      models: geminiModels,
+      operations: geminiOperations.rows.map((row) => ({ operation: row.operation ?? "unknown", requests: numeric(row.requests), errors: numeric(row.errors), timeoutErrors: numeric(row.timeout_errors), p50LatencyMs: optional(row.p50_latency_ms), p95LatencyMs: optional(row.p95_latency_ms), p95QueueMs: optional(row.p95_queue_ms) })),
+      routes: scannerRoutes.rows.map((row) => ({ route: row.route ?? "unknown", requests: numeric(row.requests), errors: numeric(row.errors), p95DurationMs: optional(row.p95_duration_ms), p95VisionMs: optional(row.p95_vision_ms), p95CatalogMs: optional(row.p95_catalog_ms) })),
+      experience: { completions: numeric(experienceRow?.completions ?? null), p95CaptureReadyMs: optional(experienceRow?.p95_capture_ready_ms), p95FirstPreflightDispatchMs: optional(experienceRow?.p95_first_preflight_dispatch_ms), p95PreflightRttMs: optional(experienceRow?.p95_preflight_rtt_ms), p95AnalyzeRttMs: optional(experienceRow?.p95_analyze_rtt_ms), p95RenderMs: optional(experienceRow?.p95_render_ms) },
+    },
   };
 }
