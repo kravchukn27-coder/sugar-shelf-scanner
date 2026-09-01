@@ -806,7 +806,7 @@ export default function HomePage() {
     {!recoveryActive && <><header className={`camera-controls ${state === "live_searching" && torchAvailable ? "" : "end"}`}><div>{state === "live_searching" && torchAvailable ? <button className={`round-control torch-control ${torchOn ? "active" : ""}`} onClick={() => void toggleTorch()} aria-label={torchOn ? "Turn flashlight off" : "Turn flashlight on"} aria-pressed={torchOn}><TorchIcon /></button> : null}</div><button className={`round-control ${state === "camera_off" ? "flat" : ""}`} onClick={close} aria-label="Close camera"><CloseIcon /></button></header>
     <div className={frozen && !uploadUrl && !recoveryActive ? "camera-result-overlay-stage" : "camera-overlay-stage"}>{groups.map((group) => <ProductOverlay key={group.detection.id} group={group} selected={selected === group.detection.id} onSelect={() => { reportResultInteraction("product_opened"); setSelected(group.detection.id); setSheet(true); }} />)}</div>
     {showAnalysisSpinner && <span className="scan-spinner" aria-label="Checking product details" />}
-    {state === "camera_off" && <ScannerHome onStart={() => void start()} onReplayIntro={() => setShowIntro(true)} />}{accessBanner && state === "camera_off" ? <p className="access-granted-banner" role="status">{accessBanner}</p> : null}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action={failureCanRetry ? "Try again" : undefined} onAction={retry} failure />}
+    {state === "camera_off" && <ScannerHome onStart={() => void start()} onReplayIntro={() => setShowIntro(true)} banner={accessBanner} />}{failed && <Prompt title={failure ?? "Couldn’t scan this scene"} action={failureCanRetry ? "Try again" : undefined} onAction={retry} failure />}
     {state === "captured_analyzing" && <CameraCopy>{analysisPhase === "many" ? "Full shelf detected — this may take a moment" : analysisPhase === "identifying" ? "Calculating Your Fit" : analysisPhase === "catalog" ? "Personalizing your result" : analysisPhase === "slow" ? "Still working on your result" : "This one's taking a bit longer than usual"}</CameraCopy>}
     {state !== "camera_off" && state !== "captured_analyzing" && state !== "results" ? <label className={`gallery-button ${uploadBusy ? "busy" : ""}`} aria-label="Choose a product photo" aria-disabled={uploadBusy}><input type="file" accept="image/*" disabled={uploadBusy} onChange={(e) => { upload(e.target.files?.[0]); e.currentTarget.value = ""; }} /><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM7 15l3-3 2.5 2.5 2-2 2.5 2.5M8 9h.01" /></svg></label> : null}
     {state === "live_searching" && !uploadUrl ? <button className="analyze-now-button" type="button" disabled={!canvasPreviewActive} onClick={analyzeNow}>Analyze now</button> : null}
@@ -850,7 +850,7 @@ function SugarNoWordmark() {
   </svg>;
 }
 
-function ScannerHome({ onStart, onReplayIntro }: { onStart: () => void; onReplayIntro: () => void }) {
+function ScannerHome({ onStart, onReplayIntro, banner }: { onStart: () => void; onReplayIntro: () => void; banner: string | null }) {
   return <div className="scanner-home">
     <div className="scanner-home-visual">
       <div className="scanner-home-orbit">
@@ -863,6 +863,7 @@ function ScannerHome({ onStart, onReplayIntro }: { onStart: () => void; onReplay
     <div className="scanner-home-copy">
       <h1>See the shelf differently.</h1>
       <p>Point. Scan. Know what fits.</p>
+      {banner && <p className="access-granted-banner" role="status">{banner}</p>}
       <button className="scanner-home-primary" type="button" onClick={onStart}>Start scanning</button>
       <button className="scanner-home-replay" type="button" onClick={onReplayIntro}>Watch the intro again</button>
     </div>
