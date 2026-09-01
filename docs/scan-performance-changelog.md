@@ -173,3 +173,78 @@ yet, but shows no failure pattern.
 external Gemini-side degradation identified on 08-28 appears to have
 cleared on its own by 08-29. Worth a larger-sample re-check later in the day
 on 08-30 once more traffic accumulates, but nothing actionable right now.
+
+### 2026-09-01 — [`de2a30f`](../../commit/de2a30f) — Preflight dropped to Gemini 3's "minimal" thinking level
+
+**Change:** `src/lib/vision/gemini.ts` — `thinkingConfigFor` now takes a
+level argument; `preflightWithGemini` passes `"minimal"` instead of the
+previous hardcoded `"low"`. `analyzeWithGemini` is unchanged (still `"low"`).
+
+**Why:** research turned up that Gemini 3.x actually has a 4-tier
+`thinkingLevel` scale (minimal/low/medium/high), not the 2-tier low/high
+this code assumed — `gemini-3.6-flash`'s own default is `"medium"`.
+`"minimal"` is the level Google's docs recommend for classification-shaped
+calls and the closest analog to 2.5's full `thinkingBudget: 0` disable.
+Preflight is pure candidate/none/uncertain + count classification, explicitly
+forbidden from identifying brands or estimating nutrition, so it has nothing
+to lose from less reasoning. Triggered by today's preflight success rate
+badly degraded (see the 09-01 investigation entry below) and 50%+ timeout
+hours — a real lever worth trying alongside, not instead of, chasing the
+external incident.
+
+**Rollback:** pass `"low"` (or omit the second argument) at the preflight
+call site.
+
+**Result:** _(pending — needs a same-day before/after read once traffic
+accumulates past the day's external-incident noise)_
+
+### 2026-09-01 — [`ebae071`](../../commit/ebae071) — `MEDIA_RESOLUTION_MEDIUM` for preflight
+
+**Change:** `src/lib/vision/gemini.ts` — added `mediaResolution:
+"MEDIA_RESOLUTION_MEDIUM"` to preflight's `generationConfig`. Previously no
+value was set (provider default). Analyze is unchanged.
+
+**Why:** a full low-resolution preflight tier was tried once before (see
+the standing comment in the code) and rolled back for regressing
+recognition of small packaged products. `MEDIUM` is a documented middle
+ground (560 image tokens vs the unspecified default) rather than that same
+low tier — not assumed equivalent, so it gets its own before/after read.
+
+**Rollback:** delete the `mediaResolution` line.
+
+**Result:** _(pending — same as above, needs traffic past today's incident
+noise)_
+
+### 2026-09-01 — [`c139b13`](../../commit/c139b13) — Concurrent 50/50 preflight model A/B test: `gemini-3.6-flash` vs `gemini-3.5-flash-lite`
+
+**Change:** `src/lib/env.ts` adds `GEMINI_PREFLIGHT_MODEL_VARIANT_B`
+(optional). `src/lib/vision/gemini.ts`'s `preflightWithGemini` now resolves
+the model once per call — a 50/50 random pick between `GEMINI_PREFLIGHT_MODEL`
+(model A) and `GEMINI_PREFLIGHT_MODEL_VARIANT_B` (model B) when the variant
+is set, otherwise always model A (no-op, matches prior behavior exactly).
+The chosen model is threaded through the fetch URL and every log line, so a
+single request's telemetry never mixes two model names.
+
+**Why concurrent, not sequential:** the earlier `gemini-2.5-flash` /
+`gemini-3.6-flash` comparisons and the incident investigations above were
+all sequential (deploy A, wait, deploy B) and got confounded by Gemini's own
+latency drifting hour to hour — see the 09-01 hourly preflight table in the
+investigation entry below (67% success at 07:00 UTC → 20-25% by 10:00-12:00,
+same day, same code). A concurrent split puts both models under identical
+external conditions in the same window, which the sequential approach
+cannot do.
+
+**Live since:** 2026-09-01, ~15:00 UTC (Railway variables:
+`GEMINI_PREFLIGHT_MODEL_VARIANT_B=gemini-3.5-flash-lite`,
+`GEMINI_VISION_MODEL=gemini-3.6-flash` as model A).
+
+**Rollback:** unset `GEMINI_PREFLIGHT_MODEL_VARIANT_B` on Railway — the split
+code becomes fully inert, same as before this commit.
+
+**Where to check results:** `/admin/analytics` → Gemini Health → Models
+panel — will show both model rows once each has accumulated live traffic
+(zero data at deploy time; the panel's "Seven-day breakdown" only reflects
+persisted events from before the split went live until fresh scans happen).
+
+**Result:** _(pending — needs real traffic on both models before either the
+dashboard or this entry can say anything)_
