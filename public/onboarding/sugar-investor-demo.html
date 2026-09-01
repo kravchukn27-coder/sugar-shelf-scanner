@@ -292,8 +292,12 @@
     .context-chip {
       position: absolute;
       z-index: 4;
-      min-width: 122px;
-      padding: 11px 14px;
+      display: grid;
+      grid-template-columns: 34px auto;
+      align-items: center;
+      gap: 9px;
+      min-width: 154px;
+      padding: 10px 13px 10px 10px;
       border: 1px solid rgba(255,255,255,.76);
       border-radius: 22px;
       background: rgba(255,255,255,.82);
@@ -306,14 +310,32 @@
     .context-chip.goal { left: 4%; top: 24%; transform: rotate(-7deg) translateY(16px) scale(.9); }
     .context-chip.sleep { right: 3%; top: 18%; transform: rotate(6deg) translateY(16px) scale(.9); }
     .context-chip.score { right: 6%; bottom: 11%; transform: rotate(-4deg) translateY(16px) scale(.9); }
+    .context-icon {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      opacity: 0;
+      transform: scale(.55) rotate(-14deg);
+    }
+    .context-icon svg { width: 21px; height: 21px; }
+    .goal .context-icon { color: #e9aa13; background: #fff3c6; }
+    .sleep .context-icon { color: #7657d9; background: #eee9ff; }
+    .score .context-icon { color: #25a75e; background: #e4f7eb; }
+    .context-copy { min-width: 0; }
     .context-label { color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: .01em; }
     .context-value { margin-top: 2px; font-size: 14px; font-weight: 750; letter-spacing: -.025em; }
     .context-value strong { color: var(--blue-deep); }
+    .sleep .context-value strong { color: #7657d9; }
+    .score .context-value strong { color: #25a75e; }
     .active .context-chip { animation: chipIn .72s var(--chip-delay) var(--ease) both; }
+    .active .context-icon { animation: contextIconIn .5s calc(var(--chip-delay) + .16s) cubic-bezier(.22,1.3,.36,1) both; }
     .active .context-chip.goal { --chip-delay: 1.16s; }
     .active .context-chip.sleep { --chip-delay: 1.34s; }
     .active .context-chip.score { --chip-delay: 1.52s; }
     @keyframes chipIn { to { opacity: 1; transform: rotate(0) translateY(0) scale(1); } }
+    @keyframes contextIconIn { to { opacity: 1; transform: scale(1) rotate(0); } }
 
     /* Scene 2: scan */
     .scene-scan {
@@ -1051,18 +1073,17 @@
     .main-logo .mark { inset: 19%; }
     .main-logo .mark * { opacity: 1; }
 
-    .main-brand-card {
+    .main-brand-lockup {
       position: relative;
       display: grid;
       place-items: center;
-      width: 76%;
-      min-height: 128px;
-      padding: 26px 18px;
-      overflow: hidden;
-      border-radius: 38px;
-      background: rgba(255,255,255,.88);
-      border: 1px solid rgba(255,255,255,.92);
-      box-shadow: 0 24px 60px rgba(31,32,37,.13);
+      gap: 18px;
+    }
+    .main-app-icon {
+      width: min(31vw, 138px);
+      aspect-ratio: 1;
+      border-radius: 29%;
+      box-shadow: 0 28px 60px rgba(244,63,85,.27), 0 0 0 1px rgba(255,255,255,.74);
     }
     .main-wordmark {
       position: relative;
@@ -1082,20 +1103,6 @@
       max-width: calc(100% - 28px);
       overflow: visible;
     }
-    .main-wave {
-      position: absolute;
-      left: 12%;
-      right: 12%;
-      bottom: 22px;
-      height: 3px;
-      border-radius: 99px;
-      background: linear-gradient(90deg, transparent, var(--blue), var(--coral), transparent);
-      transform: scaleX(.2);
-      opacity: .35;
-      animation: mainWave 1.5s ease-in-out infinite alternate;
-    }
-    @keyframes mainWave { to { transform: scaleX(1); opacity: .9; } }
-
     .cta {
       width: min(100%, 520px);
       margin: 26px auto 0;
@@ -1114,23 +1121,23 @@
     .cta:active { transform: scale(.98); }
 
     .replay {
-      position: absolute;
-      z-index: 100;
-      right: 18px;
-      bottom: max(18px, env(safe-area-inset-bottom));
-      padding: 9px 13px;
-      border: 1px solid rgba(23,23,29,.09);
-      border-radius: 99px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      margin: 14px auto 0;
+      padding: 8px 10px;
+      border: 0;
       color: rgba(23,23,29,.58);
-      background: rgba(255,255,255,.66);
-      backdrop-filter: blur(12px);
-      font-size: 12px;
-      font-weight: 700;
+      background: transparent;
+      font-size: 13px;
+      font-weight: 600;
       cursor: pointer;
       opacity: 0;
       transform: translateY(8px);
       transition: .3s ease;
     }
+    .replay svg { width: 15px; height: 15px; }
     .replay.show { opacity: 1; transform: none; }
 
     @media (min-width: 700px) {
@@ -1173,7 +1180,6 @@
       .why-fit { padding-top: 12px; }
       .why-row { font-size: 11px; }
       .detail-action { margin-top: 12px; }
-      .main-brand-card { width: 82%; min-height: 118px; padding: 24px 18px; }
       .main-wordmark .exact-logo { width: 124px; }
     }
 
@@ -1212,16 +1218,16 @@
           <div class="wordmark" aria-label="#sugarno"><svg class="exact-logo" viewBox="0 0 103 20"><use href="#sugarno-wordmark"/></svg></div>
         </div>
         <div class="context-chip goal">
-          <div class="context-label">YOUR GOAL</div>
-          <div class="context-value">Steady energy</div>
+          <span class="context-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13.4 1.8 5.2 13.6h6.2l-1 8.6 8.4-13.4h-6.1l.7-7Z" fill="currentColor"/></svg></span>
+          <div class="context-copy"><div class="context-label">YOUR GOAL</div><div class="context-value">Steady energy</div></div>
         </div>
         <div class="context-chip sleep">
-          <div class="context-label">LAST NIGHT</div>
-          <div class="context-value">Sleep <strong>7h 42m</strong></div>
+          <span class="context-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20.8 15.1A8.8 8.8 0 0 1 8.9 3.2 9.2 9.2 0 1 0 20.8 15Z" fill="currentColor"/></svg></span>
+          <div class="context-copy"><div class="context-label">LAST NIGHT</div><div class="context-value">Sleep <strong>7h 42m</strong></div></div>
         </div>
         <div class="context-chip score">
-          <div class="context-label">TODAY</div>
-          <div class="context-value"><strong>78%</strong> Wellness Score</div>
+          <span class="context-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.5" opacity=".35"/><path d="M12 3.5a8.5 8.5 0 0 1 8.4 7.3" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M12 16.8s-4.1-2.4-4.1-5.1c0-2.5 3-3.2 4.1-1.3 1.1-1.9 4.1-1.2 4.1 1.3 0 2.7-4.1 5.1-4.1 5.1Z" fill="currentColor"/></svg></span>
+          <div class="context-copy"><div class="context-label">TODAY</div><div class="context-value"><strong>78%</strong> Wellness Score</div></div>
         </div>
       </div>
       <div class="copy">
@@ -1244,23 +1250,24 @@
           <div class="phone-ray"></div>
           <div class="found-pill">Product found</div>
           <svg class="walker" viewBox="0 0 220 300" aria-label="A woman walking through a store and scanning products">
+            <defs><clipPath id="phone-screen"><rect x="5" y="6" width="24" height="37" rx="4"/></clipPath></defs>
             <g class="hair-tail"><path d="M58 89c-24 5-38 24-36 48 1 16 8 28 20 36l22-22-6-62z" fill="#1f2025"/></g>
             <g class="leg-b"><path d="M119 224l34 57" stroke="#1f2025" stroke-width="19" stroke-linecap="round"/><path d="M151 280h29" stroke="#f14e58" stroke-width="14" stroke-linecap="round"/></g>
             <g class="leg-a"><path d="M98 222l-7 61" stroke="#1f2025" stroke-width="19" stroke-linecap="round"/><path d="M88 283H60" stroke="#f14e58" stroke-width="14" stroke-linecap="round"/></g>
             <path d="M72 129c7-18 47-20 59-2 11 18 12 72 4 104-20 10-55 10-76-1 0-39 2-80 13-101z" fill="#379bff" stroke="#1f2025" stroke-width="5"/>
             <circle cx="91" cy="83" r="32" fill="#ffd1b3" stroke="#1f2025" stroke-width="5"/>
             <path d="M57 88c-2-38 48-59 71-22 8 12 6 30 0 41-3-21-11-32-20-42-7 13-25 24-51 23z" fill="#1f2025"/>
-            <circle cx="83" cy="88" r="3.5" fill="#1f2025"/><path d="M78 102c8 7 18 7 26 0" fill="none" stroke="#1f2025" stroke-width="4" stroke-linecap="round"/>
+            <circle cx="82" cy="88" r="3.5" fill="#1f2025"/><circle cx="101" cy="88" r="3.5" fill="#1f2025"/><path d="M78 102c8 7 18 7 26 0" fill="none" stroke="#1f2025" stroke-width="4" stroke-linecap="round"/>
             <path d="M66 145c-18 20-24 36-26 53" fill="none" stroke="#ffd1b3" stroke-width="17" stroke-linecap="round"/>
             <g class="scan-arm">
               <path d="M126 145c17 7 30 1 42-13" fill="none" stroke="#ffd1b3" stroke-width="17" stroke-linecap="round"/>
               <g transform="translate(160 104) rotate(-14)">
                 <rect width="34" height="54" rx="8" fill="#1f2025"/>
                 <rect x="5" y="6" width="24" height="37" rx="4" fill="#e9f4fe"/>
+                <image href="/icons/icon-512.png" x="5" y="6" width="24" height="37" preserveAspectRatio="xMidYMid slice" clip-path="url(#phone-screen)"/>
                 <circle cx="17" cy="48" r="2.5" fill="white"/>
               </g>
             </g>
-            <circle cx="72" cy="151" r="17" fill="#f14e58" stroke="#1f2025" stroke-width="5"/>
           </svg>
         </div>
       </div>
@@ -1334,9 +1341,9 @@
     <section class="scene scene-main" data-duration="0">
       <div class="visual">
         <div class="main-orbit">
-          <div class="main-brand-card">
+          <div class="main-brand-lockup">
+            <img class="main-app-icon" src="/icons/icon-512.png" alt="">
             <div class="main-wordmark" aria-label="#sugarno"><svg class="exact-logo" viewBox="0 0 103 20"><use href="#sugarno-wordmark"/></svg></div>
-            <div class="main-wave"></div>
           </div>
         </div>
       </div>
@@ -1344,10 +1351,9 @@
         <h1>See the shelf differently.</h1>
         <p>Point. Scan. Know what fits.</p>
         <button class="cta" type="button">Start scanning</button>
+        <button class="replay" id="replay" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 9A8 8 0 1 1 4 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M4.5 4v5h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Watch the intro again</button>
       </div>
     </section>
-
-    <button class="replay" id="replay" type="button">↻ Replay</button>
   </main>
 
   <script>
@@ -1402,7 +1408,7 @@
         showScene(0);
         return;
       }
-      window.parent.postMessage({ type: 'sugar-onboarding-finish' }, window.location.origin);
+      window.parent.postMessage({ type: 'sugar-onboarding-start' }, window.location.origin);
     });
     document.addEventListener('keydown', event => {
       if (event.key === 'ArrowRight' && current < scenes.length - 1) showScene(current + 1);

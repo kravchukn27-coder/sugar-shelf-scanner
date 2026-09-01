@@ -610,6 +610,10 @@ export default function HomePage() {
     }
     catch (error) { if (id === session.current) { const failed = describeCameraAccessFailure(error); setFailure(failed.message); setFailureCanRetry(failed.canRetry); setState((current) => transitionScannerLifecycle(current, "ANALYZE_FAILURE")); } }
   }, [clearResult, openPaywall, resetScanMetrics, sampleLiveFrame, stopStream]);
+  const startFromIntro = useCallback(() => {
+    finishIntro();
+    void start();
+  }, [finishIntro, start]);
   const close = useCallback(() => { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); scannerMetricsEnabled.current = false; scannerMetrics.current.discard(); stopStream(); clearResult(); setUploadUrl(null); dispatch("CLOSE_CAMERA"); }, [clearResult, dispatch, stopStream]);
   const toggleTorch = useCallback(async () => { const track = streamRef.current?.getVideoTracks()[0]; const next = !torchOn; if (!track || !supportsTorch(track)) return setTorchAvailable(false); try { await track.applyConstraints({ advanced: [{ torch: next } as unknown as MediaTrackConstraintSet] }); setTorchOn(next); } catch { setTorchAvailable(false); setTorchOn(false); } }, [torchOn]);
   const retry = useCallback(() => { if (!uploadUrl) void start(); else { session.current += 1; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); clearResult(); resetScanMetrics("upload"); setUploadBusy(true); dispatch("RETRY"); } }, [clearResult, dispatch, resetScanMetrics, start, uploadUrl]);
@@ -795,7 +799,7 @@ export default function HomePage() {
   const showAnalysisSpinner = state === "captured_analyzing" || (uploadUrl !== null && uploadBusy && state === "live_searching");
   const recoveryActive = recoveryCamera !== null;
 
-  return <>{introResolved && showIntro && !recoveryActive && <OnboardingStory onFinish={finishIntro} />}{paywallEnabled && paywallOpen && !recoveryActive && <Paywall checkoutAvailable={checkoutUrl.length > 0} restoreState={restoreState} onCheckout={startCheckout} onRestore={(email) => void restoreAccess(email)} onClose={() => setPaywallOpen(false)} />}<main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""} ${recoveryActive ? "recovery-active" : ""}`} aria-label={recoveryActive ? "Recovery camera" : "Sugar product scanner"}>
+  return <>{introResolved && showIntro && !recoveryActive && <OnboardingStory onFinish={finishIntro} onStart={startFromIntro} />}{paywallEnabled && paywallOpen && !recoveryActive && <Paywall checkoutAvailable={checkoutUrl.length > 0} restoreState={restoreState} onCheckout={startCheckout} onRestore={(email) => void restoreAccess(email)} onClose={() => setPaywallOpen(false)} />}<main className="scanner-shell"><section className={`camera-scene ${state === "camera_off" ? "idle" : ""} ${recoveryActive ? "recovery-active" : ""}`} aria-label={recoveryActive ? "Recovery camera" : "Sugar product scanner"}>
     {uploadUrl ? <img ref={uploadPreviewRef} className="camera-preview" src={uploadUrl} alt="Selected products" /> : <video key={cameraKey} ref={videoRef} className={`camera-preview ${!recoveryActive && (canvasPreviewActive || frozen) ? "technical-camera-source" : ""}`} muted playsInline />}
     {viewfinderVisible && !frozen && !uploadUrl && !recoveryActive && <div className={`camera-live-preview ${canvasPreviewActive ? "active" : ""}`}><canvas ref={liveCanvasRef} className="camera-canvas-foreground" aria-hidden="true" /><div ref={livePreviewRef} className="camera-capture-frame"><span className="viewfinder-guide" aria-hidden="true" />{!failed && <p className="live-hint" aria-live="polite">{liveHint ?? LIVE_HINT_DEFAULT}</p>}</div></div>}
     {frozen && !recoveryActive && <>{!uploadUrl && <div className="camera-result-preview"><img className="frozen-preview camera-result-image" src={frozen} alt="Captured products" /><span className="viewfinder-guide" aria-hidden="true" /></div>}{uploadUrl && <img className="camera-preview frozen-preview" src={frozen} alt="Captured products" />}</>}{state !== "camera_off" && <div className="camera-vignette" />}
@@ -860,7 +864,7 @@ function ScannerHome({ onStart, onReplayIntro }: { onStart: () => void; onReplay
       <h1>See the shelf differently.</h1>
       <p>Point. Scan. Know what fits.</p>
       <button className="scanner-home-primary" type="button" onClick={onStart}>Start scanning</button>
-      <button className="scanner-home-replay" type="button" onClick={onReplayIntro}>Replay intro</button>
+      <button className="scanner-home-replay" type="button" onClick={onReplayIntro}>Watch the intro again</button>
     </div>
   </div>;
 }
