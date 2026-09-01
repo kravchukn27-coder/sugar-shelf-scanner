@@ -142,6 +142,24 @@ function relativeDeltaTone(current: number | null, baseline: number | null, lowe
  * p50/p95/queue values, the standard, if approximate, way to summarize
  * percentiles across days.
  */
+// The persisted analytics DB (this dashboard's own data source) only started
+// recording vision_request rows the day this feature shipped (2026-09-01) —
+// there is no real "yesterday" to average yet, not because of a bug, but
+// because the table is brand new. Rather than show no comparison at all
+// until a real prior day accumulates, fall back to the figures already
+// hand-verified from raw Railway logs during the healthy 2026-08-26/27
+// window (see the Historical Railway logs table above and
+// docs/scan-performance-changelog.md). analyze's success/timeout split
+// wasn't cleanly isolated in that investigation (only the overall
+// scan_request rate was, and "timeouts concentrated in preflight" was noted
+// qualitatively) — p50 is the one number solid enough to carry over as-is,
+// so analyze's fallback deliberately leaves the rate fields null rather than
+// guess at a number this file cannot back up.
+const ARCHIVED_OPERATION_BASELINE: Record<string, { successRate: number | null; timeoutRate: number | null; p50LatencyMs: number | null }> = {
+  preflight: { successRate: 0.811, timeoutRate: 0.124, p50LatencyMs: 2700 },
+  analyze: { successRate: null, timeoutRate: null, p50LatencyMs: 3300 },
+};
+
 function useOperationAverages(dailyOperations: { day: string; operation: string; requests: number; successes: number; timeoutErrors: number; p50LatencyMs: number | null; p95LatencyMs: number | null; p95QueueMs: number | null }[] | undefined) {
   return useMemo(() => {
     const latestDayByOperation = new Map<string, string>();
@@ -163,13 +181,16 @@ function useOperationAverages(dailyOperations: { day: string; operation: string;
     }
     const mean = (values: number[]) => values.length ? values.reduce((total, value) => total + value, 0) / values.length : null;
     const averages = new Map<string, { successRate: number | null; timeoutRate: number | null; p50LatencyMs: number | null; p95LatencyMs: number | null; p95QueueMs: number | null }>();
-    for (const [operation, bucket] of byOperation) {
+    const operations = new Set([...byOperation.keys(), ...latestDayByOperation.keys()]);
+    for (const operation of operations) {
+      const bucket = byOperation.get(operation);
+      const archived = ARCHIVED_OPERATION_BASELINE[operation];
       averages.set(operation, {
-        successRate: bucket.requests ? bucket.successes / bucket.requests : null,
-        timeoutRate: bucket.requests ? bucket.timeoutErrors / bucket.requests : null,
-        p50LatencyMs: mean(bucket.p50s),
-        p95LatencyMs: mean(bucket.p95s),
-        p95QueueMs: mean(bucket.queues),
+        successRate: bucket?.requests ? bucket.successes / bucket.requests : archived?.successRate ?? null,
+        timeoutRate: bucket?.requests ? bucket.timeoutErrors / bucket.requests : archived?.timeoutRate ?? null,
+        p50LatencyMs: mean(bucket?.p50s ?? []) ?? archived?.p50LatencyMs ?? null,
+        p95LatencyMs: mean(bucket?.p95s ?? []),
+        p95QueueMs: mean(bucket?.queues ?? []),
       });
     }
     return averages;
