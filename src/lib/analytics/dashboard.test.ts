@@ -16,8 +16,8 @@ test("dashboard overview fills missing metrics and returns aggregate-only event 
       if (calls === 6) return { rows: [{ day: "4", week: "12", month: "28" }] };
       if (calls === 7) return { rows: [{ day: "2026-08-31T00:00:00Z", requests: "8", errors: "2", timeout_errors: "1", p95_latency_ms: "900", p95_queue_ms: "40" }] };
       if (calls === 8) return { rows: [{ day: "2026-08-31T00:00:00Z", total_tokens: "1200", estimated_cost_usd: "0.02" }] };
-      if (calls === 9) return { rows: [{ model: "gemini-3.6-flash", requests: "8", errors: "2", timeout_errors: "1", p95_latency_ms: "900" }] };
-      if (calls === 10) return { rows: [{ model: "gemini-3.6-flash", total_tokens: "1200", estimated_cost_usd: "0.02" }] };
+      if (calls === 9) return { rows: [{ model: "gemini-3.6-flash", operation: "preflight", requests: "8", errors: "2", timeout_errors: "1", p50_latency_ms: "400", p95_latency_ms: "900" }] };
+      if (calls === 10) return { rows: [{ model: "gemini-3.6-flash", operation: "preflight", total_tokens: "1200", estimated_cost_usd: "0.02" }] };
       if (calls === 11) return { rows: [{ operation: "preflight", requests: "8", errors: "2", timeout_errors: "1", p50_latency_ms: "400", p95_latency_ms: "900", p95_queue_ms: "40" }] };
       if (calls === 12) return { rows: [{ day: "2026-08-31T00:00:00Z", operation: "preflight", requests: "8", successes: "6", timeout_errors: "1", p50_latency_ms: "400", p95_latency_ms: "900", p95_queue_ms: "40" }] };
       if (calls === 13) return { rows: [{ route: "preflight", requests: "7", errors: "1", p95_duration_ms: "1050", p95_vision_ms: "900", p95_catalog_ms: "60" }] };
@@ -38,7 +38,7 @@ test("dashboard overview fills missing metrics and returns aggregate-only event 
   assert.deepEqual(overview.users, { day: 4, week: 12, month: 28 });
   assert.deepEqual(overview.recentEvents, [{ occurredAt: "2026-08-31T10:15:00.000Z", eventName: "vision_usage", source: "server" }]);
   assert.equal(overview.geminiHealth.days.at(-1)?.requests, 8);
-  assert.deepEqual(overview.geminiHealth.models, [{ model: "gemini-3.6-flash", requests: 8, errors: 2, timeoutErrors: 1, p95LatencyMs: 900, totalTokens: 1200, estimatedCostUsd: 0.02 }]);
+  assert.deepEqual(overview.geminiHealth.models, [{ model: "gemini-3.6-flash", operation: "preflight", requests: 8, errors: 2, timeoutErrors: 1, successRate: 0.75, p50LatencyMs: 400, p95LatencyMs: 900, totalTokens: 1200, estimatedCostUsd: 0.02 }]);
   assert.deepEqual(overview.geminiHealth.operations, [{ operation: "preflight", requests: 8, errors: 2, timeoutErrors: 1, p50LatencyMs: 400, p95LatencyMs: 900, p95QueueMs: 40 }]);
   assert.deepEqual(overview.geminiHealth.dailyOperations, [{ day: "2026-08-31", operation: "preflight", requests: 8, successes: 6, timeoutErrors: 1, p50LatencyMs: 400, p95LatencyMs: 900, p95QueueMs: 40 }]);
   assert.deepEqual(overview.geminiHealth.historicalComparisons[0], { period: "Aug 26–27 · healthy baseline", requests: 291, successRate: 0.811, preflightP50Ms: "2.7 s", preflightTimeoutRate: 0.124, note: "Archived Railway summary" });

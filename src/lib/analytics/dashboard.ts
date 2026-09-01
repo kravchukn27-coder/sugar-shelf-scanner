@@ -65,7 +65,7 @@ export type DashboardOperations = {
 };
 
 export type GeminiHealthDay = { day: string; requests: number; errors: number; timeoutErrors: number; p95LatencyMs: number | null; p95QueueMs: number | null; totalTokens: number; estimatedCostUsd: number | null };
-export type GeminiHealthModel = { model: string; requests: number; errors: number; timeoutErrors: number; p95LatencyMs: number | null; totalTokens: number; estimatedCostUsd: number | null };
+export type GeminiHealthModel = { model: string; operation: string; requests: number; errors: number; timeoutErrors: number; successRate: number | null; p50LatencyMs: number | null; p95LatencyMs: number | null; totalTokens: number; estimatedCostUsd: number | null };
 export type GeminiHealthOperation = { operation: string; requests: number; errors: number; timeoutErrors: number; p50LatencyMs: number | null; p95LatencyMs: number | null; p95QueueMs: number | null };
 export type GeminiHealthDayOperation = { day: string; operation: string; requests: number; successes: number; timeoutErrors: number; p50LatencyMs: number | null; p95LatencyMs: number | null; p95QueueMs: number | null };
 export type ScannerRoutePerformance = { route: string; requests: number; errors: number; p95DurationMs: number | null; p95VisionMs: number | null; p95CatalogMs: number | null };
@@ -84,8 +84,8 @@ type OperationsRow = { vision_requests: number | string | null; vision_errors: n
 type UniqueUsersRow = { day: number | string | null; week: number | string | null; month: number | string | null };
 type GeminiRequestDayRow = { day: string | Date; requests: number | string | null; errors: number | string | null; timeout_errors: number | string | null; p95_latency_ms: number | string | null; p95_queue_ms: number | string | null };
 type GeminiUsageDayRow = { day: string | Date; total_tokens: number | string | null; estimated_cost_usd: number | string | null };
-type GeminiRequestModelRow = { model: string | null; requests: number | string | null; errors: number | string | null; timeout_errors: number | string | null; p95_latency_ms: number | string | null };
-type GeminiUsageModelRow = { model: string | null; total_tokens: number | string | null; estimated_cost_usd: number | string | null };
+type GeminiRequestModelRow = { model: string | null; operation: string | null; requests: number | string | null; errors: number | string | null; timeout_errors: number | string | null; p50_latency_ms: number | string | null; p95_latency_ms: number | string | null };
+type GeminiUsageModelRow = { model: string | null; operation: string | null; total_tokens: number | string | null; estimated_cost_usd: number | string | null };
 type GeminiOperationRow = { operation: string | null; requests: number | string | null; errors: number | string | null; timeout_errors: number | string | null; p50_latency_ms: number | string | null; p95_latency_ms: number | string | null; p95_queue_ms: number | string | null };
 type GeminiDayOperationRow = { day: string | Date; operation: string | null; requests: number | string | null; successes: number | string | null; timeout_errors: number | string | null; p50_latency_ms: number | string | null; p95_latency_ms: number | string | null; p95_queue_ms: number | string | null };
 type ScannerRouteRow = { route: string | null; requests: number | string | null; errors: number | string | null; p95_duration_ms: number | string | null; p95_vision_ms: number | string | null; p95_catalog_ms: number | string | null };
@@ -255,17 +255,20 @@ export async function readDashboardOverview(
       FROM analytics_events WHERE event_name = 'vision_usage' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1 ORDER BY 1 ASC
     `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<GeminiRequestModelRow>(`
-      SELECT COALESCE(NULLIF(properties->>'model', ''), 'unknown') AS model, COUNT(*)::bigint AS requests,
+      SELECT COALESCE(NULLIF(properties->>'model', ''), 'unknown') AS model,
+        COALESCE(NULLIF(properties->>'operation', ''), 'unknown') AS operation, COUNT(*)::bigint AS requests,
         COUNT(*) FILTER (WHERE COALESCE(properties->>'outcome', 'success') <> 'success')::bigint AS errors,
         COUNT(*) FILTER (WHERE properties->>'outcome' = 'provider_timeout')::bigint AS timeout_errors,
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY (properties->>'durationMs')::numeric) FILTER (WHERE properties->>'durationMs' ~ '^[0-9]+$') AS p50_latency_ms,
         percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'durationMs')::numeric) FILTER (WHERE properties->>'durationMs' ~ '^[0-9]+$') AS p95_latency_ms
-      FROM analytics_events WHERE event_name = 'vision_request' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1 ORDER BY requests DESC, model ASC
+      FROM analytics_events WHERE event_name = 'vision_request' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1, 2 ORDER BY requests DESC, model ASC, operation ASC
     `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<GeminiUsageModelRow>(`
       SELECT COALESCE(NULLIF(properties->>'model', ''), 'unknown') AS model,
+        COALESCE(NULLIF(properties->>'operation', ''), 'unknown') AS operation,
         COALESCE(SUM(NULLIF(properties->>'totalTokenCount', '')::numeric), 0) AS total_tokens,
         SUM(NULLIF(properties->>'estimatedCostUsd', '')::numeric) AS estimated_cost_usd
-      FROM analytics_events WHERE event_name = 'vision_usage' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1
+      FROM analytics_events WHERE event_name = 'vision_usage' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1, 2
     `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<GeminiOperationRow>(`
       SELECT COALESCE(NULLIF(properties->>'operation', ''), 'unknown') AS operation, COUNT(*)::bigint AS requests,
@@ -349,8 +352,30 @@ export async function readDashboardOverview(
     const request = requestByDay.get(day); const usage = usageByDay.get(day);
     return { day, requests: numeric(request?.requests ?? null), errors: numeric(request?.errors ?? null), timeoutErrors: numeric(request?.timeout_errors ?? null), p95LatencyMs: request?.p95_latency_ms === null || request?.p95_latency_ms === undefined ? null : numeric(request.p95_latency_ms), p95QueueMs: request?.p95_queue_ms === null || request?.p95_queue_ms === undefined ? null : numeric(request.p95_queue_ms), totalTokens: numeric(usage?.total_tokens ?? null), estimatedCostUsd: usage?.estimated_cost_usd === null || usage?.estimated_cost_usd === undefined ? null : numeric(usage.estimated_cost_usd) };
   });
-  const usageByModel = new Map(geminiUsageModels.rows.map((row) => [row.model ?? "unknown", row]));
-  const geminiModels = geminiRequestModels.rows.map((row) => { const model = row.model ?? "unknown"; const usage = usageByModel.get(model); return { model, requests: numeric(row.requests), errors: numeric(row.errors), timeoutErrors: numeric(row.timeout_errors), p95LatencyMs: row.p95_latency_ms === null || row.p95_latency_ms === undefined ? null : numeric(row.p95_latency_ms), totalTokens: numeric(usage?.total_tokens ?? null), estimatedCostUsd: usage?.estimated_cost_usd === null || usage?.estimated_cost_usd === undefined ? null : numeric(usage.estimated_cost_usd) }; });
+  // Keyed by model+operation, not just model: the same model has very
+  // different latency/success characteristics on a cheap preflight gate vs a
+  // full analyze call, and averaging them together hid exactly the signal an
+  // A/B split (see GEMINI_PREFLIGHT_MODEL_VARIANT_B / _ANALYZE_) exists to show.
+  const usageByModel = new Map(geminiUsageModels.rows.map((row) => [`${row.model ?? "unknown"}:${row.operation ?? "unknown"}`, row]));
+  const geminiModels = geminiRequestModels.rows.map((row) => {
+    const model = row.model ?? "unknown";
+    const operation = row.operation ?? "unknown";
+    const usage = usageByModel.get(`${model}:${operation}`);
+    const requests = numeric(row.requests);
+    const errors = numeric(row.errors);
+    return {
+      model,
+      operation,
+      requests,
+      errors,
+      timeoutErrors: numeric(row.timeout_errors),
+      successRate: requests ? (requests - errors) / requests : null,
+      p50LatencyMs: row.p50_latency_ms === null || row.p50_latency_ms === undefined ? null : numeric(row.p50_latency_ms),
+      p95LatencyMs: row.p95_latency_ms === null || row.p95_latency_ms === undefined ? null : numeric(row.p95_latency_ms),
+      totalTokens: numeric(usage?.total_tokens ?? null),
+      estimatedCostUsd: usage?.estimated_cost_usd === null || usage?.estimated_cost_usd === undefined ? null : numeric(usage.estimated_cost_usd),
+    };
+  });
   const optional = (value: number | string | null | undefined) => value === null || value === undefined ? null : numeric(value);
   const experienceRow = scannerExperience.rows[0];
   return {
