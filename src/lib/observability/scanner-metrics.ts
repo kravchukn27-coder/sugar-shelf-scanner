@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { queueAnalyticsEvent } from "@/lib/analytics/events";
 
 export const scannerCompletionSchema = z.enum([
   "analysis_completed",
@@ -37,4 +38,5 @@ export type ScannerMetrics = z.infer<typeof scannerMetricsSchema>;
 /** This is intentionally the only payload written to stdout by metrics. */
 export function logScannerMetrics(metric: ScannerMetrics) {
   console.info(JSON.stringify({ event: "scanner_completed", ...metric }));
+  queueAnalyticsEvent({ eventName: "scanner_completed", source: "browser", properties: metric });
 }

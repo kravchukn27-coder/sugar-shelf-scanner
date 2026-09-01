@@ -65,8 +65,22 @@ test("result metrics route logs one allowlisted aggregate event when enabled", a
     const entries: string[] = [];
     console.info = (entry: string) => entries.push(entry);
     try {
-      const response = await POST(request(metric));
+      const response = await POST(request({ metric, anonymousId: "a".repeat(32) }));
       assert.equal(response.status, 204);
+    } finally {
+      console.info = previousInfo;
+    }
+    assert.deepEqual(JSON.parse(entries[0]), { event: "scan_result_metric", ...metric });
+  });
+});
+
+test("result metrics route accepts the legacy metric envelope during rollout", async () => {
+  await withMetricsFlag("true", async () => {
+    const previousInfo = console.info;
+    const entries: string[] = [];
+    console.info = (entry: string) => entries.push(entry);
+    try {
+      assert.equal((await POST(request(metric))).status, 204);
     } finally {
       console.info = previousInfo;
     }

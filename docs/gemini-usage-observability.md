@@ -2,9 +2,9 @@
 
 ## Purpose
 
-For a short measurement period, determine the real Gemini token use, latency and
-request count for scanner preflight and full analysis. This is a cost and
-performance diagnostic, not product analytics and not a camera telemetry system.
+Determine Gemini token use, latency and request count for scanner preflight,
+full analysis and consented nutrition-label recovery. These are operational
+cost metrics for the internal dashboard, not a camera telemetry system.
 
 The camera can now provide a higher-quality source frame (`1920×1440` was
 observed on the tested iPhone), but the browser still sends resized JPEGs:
@@ -17,12 +17,13 @@ observed on the tested iPhone), but the browser still sends resized JPEGs:
 The source camera resolution is therefore not itself the billed image size. The
 number of preflight attempts and full analyses is the main controllable cost.
 
-## Proposed temporary measurement
+## Token measurement and cost estimate
 
 `VISION_USAGE_METRICS_ENABLED=true` is an opt-in, server-only flag. When it is
 off, the application must behave exactly as it does today. Existing
 `vision_request` timing/outcome events remain available independently; this
-flag controls only the temporary provider-token event below.
+flag controls only provider-token events and the dashboard's token-derived
+cost estimate.
 
 When it is on, after a completed Gemini response log one structured event with
 only:
@@ -30,7 +31,7 @@ only:
 ```ts
 {
   event: "vision_usage",
-  operation: "preflight" | "analyze",
+  operation: "preflight" | "analyze" | "nutrition_label",
   model: string,
   durationMs: number,
   status: number,
@@ -38,13 +39,17 @@ only:
   candidatesTokenCount?: number,
   thoughtsTokenCount?: number,
   totalTokenCount?: number,
+  pricingVersion?: string,
+  estimatedCostUsd?: number,
 }
 ```
 
-Read these values from Gemini's response `usageMetadata`; tolerate missing
+Read token values from Gemini's response `usageMetadata`; tolerate missing
 fields because providers and model versions can differ. Do not estimate tokens
 from JPEG bytes and do not alter Gemini's media-resolution setting as part of
-this measurement.
+this measurement. Dollar values are emitted only when the model has an audited
+pricing entry and both directional input/output counters exist. Unknown models
+are intentionally **unpriced**, not treated as free.
 
 Never log or store: image/base64 data, raw frames, OCR text, product names,
 GTINs, prompts, Gemini output, IP address, user ID, `deviceId`, camera label,
@@ -103,11 +108,14 @@ timestamp, or error-text data.
 2. Review aggregate daily totals only: count of `preflight` and `analyze`,
    p50/p95 duration, average/p95 input tokens, output/thinking tokens, and
    full-analysis-to-preflight ratio.
-3. Calculate cost from the then-current price of the **actual Railway model**:
-   `input tokens × current input rate + output/thinking tokens × current output rate`.
-   Prices and token handling are model-dependent, so do not hard-code a dollar
-   estimate in application code. Gemini documents image token allocation and
-   media-resolution behaviour at <https://ai.google.dev/gemini-api/docs/media-resolution>.
+3. Review the versioned application estimate against the current price of the
+   **actual Railway model**: `input tokens × current input rate +
+   output/thinking tokens × current output rate`. The current Gemini 3.6 Flash
+   rate and expiry are recorded in `src/lib/analytics/gemini-cost.ts` with a
+   regression test. Before a model/rate change, update that module and test;
+   do not silently relabel an old price as current. Gemini documents image
+   token allocation and media-resolution behaviour at
+   <https://ai.google.dev/gemini-api/docs/media-resolution>.
 4. Review scanner-stage aggregates separately by completion: count, p50/p95
    of each timing stage, p50/p95 preflight attempts, and daily motion/quality
    skip counts. Browser summaries are a lower bound because a backgrounded

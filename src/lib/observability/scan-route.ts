@@ -1,5 +1,6 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
+import { queueAnalyticsEvent } from "@/lib/analytics/events";
 import { isScannerMetricsEnabled } from "@/lib/env";
 
 // `access_restore` is an email-guessing surface, so it is rate limited by the
@@ -90,12 +91,15 @@ export function checkScanRateLimit(request: Request, config: RateLimitConfig) {
  * payment and restore payloads never reach this call.
  */
 export function logAccessRequest(route: "access_restore" | "access_redeem", startedAt: number, status: number) {
-  console.info(JSON.stringify({
+  const metric = {
     event: "access_request",
     route,
     durationMs: Math.round(performance.now() - startedAt),
     status,
-  }));
+  };
+  console.info(JSON.stringify(metric));
+  const { event: eventName, ...properties } = metric;
+  queueAnalyticsEvent({ eventName, source: "server", properties });
 }
 
 export function scanJsonResponse(body: unknown, init: ResponseInit, timing: ScanRouteTiming) {
@@ -118,7 +122,7 @@ export function scanJsonResponse(body: unknown, init: ResponseInit, timing: Scan
   }
   // Route metrics deliberately contain only duration/status/component names;
   // no client IDs, frame IDs, products, image data, or provider payloads.
-  console.info(JSON.stringify({
+  const metric = {
     event: "scan_request",
     route: timing.route,
     durationMs,
@@ -127,6 +131,9 @@ export function scanJsonResponse(body: unknown, init: ResponseInit, timing: Scan
     catalogMs: timing.catalogMs === undefined ? undefined : Math.round(timing.catalogMs),
     dbProbeMs: timing.dbProbeMs === undefined ? undefined : Math.round(timing.dbProbeMs),
     catalogResolutionMs: timing.catalogResolutionMs === undefined ? undefined : Math.round(timing.catalogResolutionMs),
-  }));
+  };
+  console.info(JSON.stringify(metric));
+  const { event: eventName, ...properties } = metric;
+  queueAnalyticsEvent({ eventName, source: "server", properties });
   return response;
 }

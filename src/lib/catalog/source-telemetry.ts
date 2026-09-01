@@ -1,3 +1,5 @@
+import { queueAnalyticsEvent } from "@/lib/analytics/events";
+
 export type CatalogSource = "open_food_facts" | "usda_food_data_central";
 export type CatalogSourceOperation = "search" | "barcode";
 export type CatalogSourceOutcome = "success" | "http_error" | "timeout" | "invalid_payload" | "disabled";
@@ -17,7 +19,7 @@ type CatalogSourceTelemetry = {
  * here: Railway logs are not a product-data store.
  */
 export function logCatalogSourceTelemetry(event: CatalogSourceTelemetry) {
-  console.info(JSON.stringify({
+  const metric = {
     event: "catalog_source_request",
     source: event.source,
     operation: event.operation,
@@ -25,5 +27,8 @@ export function logCatalogSourceTelemetry(event: CatalogSourceTelemetry) {
     durationMs: Math.max(0, Math.round(event.durationMs)),
     candidateCount: Math.max(0, Math.round(event.candidateCount)),
     cacheHit: event.cacheHit,
-  }));
+  };
+  console.info(JSON.stringify(metric));
+  const { event: eventName, ...properties } = metric;
+  queueAnalyticsEvent({ eventName, source: "server", properties });
 }

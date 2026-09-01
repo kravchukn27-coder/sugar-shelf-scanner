@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { queueAnalyticsEvent } from "@/lib/analytics/events";
 
 export const resultQualitySchema = z.enum([
   "no_detection",
@@ -65,7 +66,15 @@ export const resultMetricsSchema = z.discriminatedUnion("action", [
 
 export type ResultMetrics = z.infer<typeof resultMetricsSchema>;
 
+export const resultMetricsEnvelopeSchema = z.object({
+  anonymousId: z.string().regex(/^[a-f0-9]{32}$/i).optional(),
+  metric: resultMetricsSchema,
+}).strict();
+
+export type ResultMetricsEnvelope = z.infer<typeof resultMetricsEnvelopeSchema>;
+
 /** This is intentionally the only payload written to stdout by this endpoint. */
-export function logResultMetrics(metric: ResultMetrics) {
+export function logResultMetrics(metric: ResultMetrics, subjectHash?: string | null) {
   console.info(JSON.stringify({ event: "scan_result_metric", ...metric }));
+  queueAnalyticsEvent({ eventName: "scan_result_metric", source: "browser", properties: metric, subjectHash });
 }

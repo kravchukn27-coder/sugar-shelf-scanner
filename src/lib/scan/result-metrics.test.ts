@@ -45,7 +45,7 @@ test("falls back to keepalive fetch and suppresses telemetry errors", async () =
     await Promise.resolve();
     assert.equal(init?.method, "POST");
     assert.equal(init?.keepalive, true);
-    assert.deepEqual(JSON.parse(String(init?.body)), metric);
+    assert.deepEqual(JSON.parse(String(init?.body)), { metric });
   } finally {
     globalThis.fetch = previousFetch;
     if (navigatorDescriptor) Object.defineProperty(globalThis, "navigator", navigatorDescriptor);

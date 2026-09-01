@@ -1,5 +1,6 @@
+import { anonymizeAnalyticsSubject } from "@/lib/analytics/subjects";
 import { isScannerMetricsEnabled } from "@/lib/env";
-import { logResultMetrics, resultMetricsSchema } from "@/lib/observability/result-metrics";
+import { logResultMetrics, resultMetricsEnvelopeSchema, resultMetricsSchema } from "@/lib/observability/result-metrics";
 
 export const runtime = "nodejs";
 
@@ -8,9 +9,9 @@ function noStore(status = 204) {
 }
 
 /**
- * Receives one privacy-safe aggregate funnel interaction. The endpoint stores
- * no rows and does not log a request identifier; only a schema-validated
- * allowlisted event can reach stdout.
+ * Receives one allowlisted funnel interaction. Browser installations are
+ * represented only by a server-side HMAC digest; the raw local identifier is
+ * neither logged nor written to PostgreSQL.
  */
 export async function POST(request: Request) {
   // A stale browser bundle may post after a rollout is disabled. Make this a
@@ -21,9 +22,16 @@ export async function POST(request: Request) {
   if (contentLength && (!/^\d+$/.test(contentLength) || Number(contentLength) > 2_048)) return noStore(400);
 
   const body = await request.json().catch(() => null);
-  const parsed = resultMetricsSchema.safeParse(body);
-  if (!parsed.success) return noStore(400);
+  const envelope = resultMetricsEnvelopeSchema.safeParse(body);
+  if (envelope.success) {
+    logResultMetrics(envelope.data.metric, anonymizeAnalyticsSubject(envelope.data.anonymousId, process.env.ANALYTICS_SUBJECT_SECRET));
+    return noStore();
+  }
 
-  logResultMetrics(parsed.data);
+  // Accept the pre-installation-id contract during a rolling deploy. Those
+  // events still contribute to counts, but cannot contribute to unique users.
+  const legacyMetric = resultMetricsSchema.safeParse(body);
+  if (!legacyMetric.success) return noStore(400);
+  logResultMetrics(legacyMetric.data);
   return noStore();
 }

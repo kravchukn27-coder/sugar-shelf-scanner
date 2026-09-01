@@ -6,7 +6,8 @@ import {
   type NutritionLabelRecoveryResponse,
 } from "@/lib/contracts/scan";
 import type { ServerEnv } from "@/lib/env";
-import { logVisionTelemetry, type VisionOutcome } from "@/lib/observability/vision";
+import { estimateGeminiCost } from "@/lib/analytics/gemini-cost";
+import { logVisionTelemetry, logVisionUsageTelemetry, type VisionOutcome } from "@/lib/observability/vision";
 
 const LABEL_TIMEOUT_MS = 30_000;
 const MAX_LABEL_IMAGE_BYTES = 6 * 1024 * 1024;
@@ -31,6 +32,13 @@ const providerResponseSchema = z.discriminatedUnion("outcome", [
   z.object({ outcome: z.literal("nutrition_label"), draft: providerDraftSchema }).strict(),
   z.object({ outcome: z.literal("unreadable") }).strict(),
 ]);
+
+const usageSchema = z.object({
+  promptTokenCount: z.number().finite().int().min(0).optional(),
+  candidatesTokenCount: z.number().finite().int().min(0).optional(),
+  thoughtsTokenCount: z.number().finite().int().min(0).optional(),
+  totalTokenCount: z.number().finite().int().min(0).optional(),
+});
 
 function imageByteLength(base64: string) {
   const encoded = base64.replace(/^data:[^;]+;base64,/, "").replace(/\s/g, "");
@@ -132,7 +140,20 @@ export async function extractNutritionLabelWithGemini(input: NutritionLabelRecov
         }),
       });
       if (!response.ok) throw new NutritionLabelRequestError("Nutrition label reading is temporarily unavailable. Take another photo and try again.", response.status >= 400 && response.status < 500 ? 422 : 502, "provider_error");
-      const parsed = parseProviderResponse(await response.json());
+      const payload = await response.json();
+      const usage = z.object({ usageMetadata: usageSchema.optional() }).passthrough().safeParse(payload).data?.usageMetadata;
+      if (usage && process.env.VISION_USAGE_METRICS_ENABLED === "true") {
+        const estimate = estimateGeminiCost(env.GEMINI_VISION_MODEL, usage);
+        logVisionUsageTelemetry({
+          operation: "nutrition_label",
+          model: env.GEMINI_VISION_MODEL,
+          durationMs: Math.round(performance.now() - startedAt),
+          status: 200,
+          ...usage,
+          ...(estimate ? { pricingVersion: estimate.pricingVersion, estimatedCostUsd: estimate.estimatedCostUsd } : {}),
+        });
+      }
+      const parsed = parseProviderResponse(payload);
       logAttempt(env, receivedAt, startedAt);
       return parsed;
     } finally {

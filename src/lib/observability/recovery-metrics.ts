@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { queueAnalyticsEvent } from "@/lib/analytics/events";
 
 /**
  * The full browser-to-server telemetry contract. Do not add identifiers,
@@ -14,4 +15,5 @@ export type RecoveryMetrics = z.infer<typeof recoveryMetricsSchema>;
 /** This is intentionally the only payload written to stdout by metrics. */
 export function logRecoveryMetrics(metric: RecoveryMetrics) {
   console.info(JSON.stringify({ event: "recovery_barcode_decode", ...metric }));
+  queueAnalyticsEvent({ eventName: "recovery_barcode_decode", source: "browser", properties: metric });
 }

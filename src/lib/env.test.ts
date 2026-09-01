@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isVisionUsageMetricsEnabled, getAccessPassConfig } from "./env";
+import { getAccessPassConfig, getStripeWebhookConfig, isVisionUsageMetricsEnabled } from "./env";
 
 test("vision usage metrics flag fails closed", () => {
   assert.equal(isVisionUsageMetricsEnabled({ ...process.env, VISION_USAGE_METRICS_ENABLED: undefined }), false);
@@ -26,4 +26,15 @@ test("access pass config fails closed when anything is missing", () => {
   assert.equal(getAccessPassConfig({ ...completeAccessEnv, DATABASE_URL: undefined }), null);
   // A short secret would weaken the email digest, so it is treated as absent.
   assert.equal(getAccessPassConfig({ ...completeAccessEnv, ACCESS_PASS_SECRET: "tooshort" }), null);
+});
+
+test("Stripe webhook config requires its independent signing secret", () => {
+  const completeWebhookEnv = { ...completeAccessEnv, STRIPE_WEBHOOK_SECRET: "whsec_example" };
+  assert.deepEqual(getStripeWebhookConfig(completeWebhookEnv), {
+    stripeWebhookSecret: "whsec_example",
+    accessPassSecret: "0123456789abcdef01",
+    databaseUrl: "postgres://localhost:5432/sugar",
+  });
+  assert.equal(getStripeWebhookConfig({ ...completeWebhookEnv, STRIPE_WEBHOOK_SECRET: undefined }), null);
+  assert.equal(getStripeWebhookConfig({ ...completeWebhookEnv, ACCESS_PASS_SECRET: "short" }), null);
 });

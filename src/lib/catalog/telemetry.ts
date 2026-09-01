@@ -1,4 +1,5 @@
 import type { Detection } from "@/lib/contracts/scan";
+import { queueAnalyticsEvent } from "@/lib/analytics/events";
 
 type CatalogOutcome = "confirmed" | "estimate" | "unknown";
 
@@ -16,11 +17,14 @@ export function logCatalogResolutionTelemetry(detections: readonly Detection[], 
     if (source) sources[source] = (sources[source] ?? 0) + 1;
   }
 
-  console.info(JSON.stringify({
+  const metric = {
     event: "catalog_resolution",
     durationMs: Math.max(0, Math.round(durationMs)),
     detections: detections.length,
     outcomes,
     sources,
-  }));
+  };
+  console.info(JSON.stringify(metric));
+  const { event: eventName, ...properties } = metric;
+  queueAnalyticsEvent({ eventName, source: "server", properties });
 }

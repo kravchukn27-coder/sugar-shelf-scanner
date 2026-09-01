@@ -49,18 +49,27 @@ substitute for the package label.
 ## Privacy and telemetry
 
 Raw camera frames are processed for the active scan and are not retained by the
-application. Privacy-safe observability and P0 funnel/quality telemetry are
-implemented as opt-in structured logs. They do not include images, OCR text,
-barcodes/GTINs, product names, user identifiers, IP addresses, or device and
-camera identifiers.
+application. Operational telemetry and P0 funnel/quality analytics are opt-in;
+when durable analytics is enabled, safe event summaries are stored in the
+existing PostgreSQL service and are available on the protected internal
+dashboard. They do not include images, OCR text, Gemini prompt/output content,
+payment-card data, or readable buyer email addresses.
 
-Telemetry stays disabled until both `SCANNER_METRICS_ENABLED=true` on the
-server and `NEXT_PUBLIC_SCANNER_METRICS_ENABLED=true` in the browser build are
-set. The public variable is evaluated during the build, so changing it requires
-a new deployment. Gemini token-usage logging is a separate, server-only
-temporary flag. Details and verification requirements are in
-[gemini-usage-observability.md](docs/gemini-usage-observability.md) and
-[p0-funnel-quality-telemetry-verification.md](docs/p0-funnel-quality-telemetry-verification.md).
+The dashboard's DAU/WAU/MAU values count distinct pseudonymous browser
+installations, rather than verified people. A random value stays in browser
+storage and is HMAC-hashed on the server before persistence; the raw value is
+never logged or stored. Clearing browser storage or switching device/browser
+creates a new installation.
+
+Browser funnel data stays disabled until both `SCANNER_METRICS_ENABLED=true` on
+the server and `NEXT_PUBLIC_SCANNER_METRICS_ENABLED=true` in the browser build
+are set. Durable storage also requires server-only `ANALYTICS_ENABLED=true` and
+`ANALYTICS_ADMIN_SECRET`; Gemini token usage additionally requires
+`VISION_USAGE_METRICS_ENABLED=true`. Unique-installation counts additionally
+require durable server-only `ANALYTICS_SUBJECT_SECRET`. The public variable is evaluated during
+the build, so changing it requires a new deployment. Details, migrations and
+the dashboard launch checklist are in [operations.md](docs/operations.md) and
+[gemini-usage-observability.md](docs/gemini-usage-observability.md).
 
 ## Verify
 

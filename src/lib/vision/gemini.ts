@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { estimateGeminiCost } from "@/lib/analytics/gemini-cost";
 import type { AnalyzeScanRequest, AnalyzeScanResponse, Detection, PreflightScanRequest, PreflightScanResponse } from "@/lib/contracts/scan";
 import type { NormalizedBox, ScoreBand } from "@/lib/contracts/product";
 import { isVisionUsageMetricsEnabled, type ServerEnv } from "@/lib/env";
@@ -176,12 +177,14 @@ function logGeminiUsage(
 ) {
   if (!isVisionUsageMetricsEnabled()) return;
   const usage = extractGeminiUsageMetadata(payload);
+  const estimate = usage ? estimateGeminiCost(model, usage) : null;
   logVisionUsageTelemetry({
     operation,
     model,
     durationMs: Math.round(performance.now() - startedAt),
     status: 200,
     ...(usage ?? {}),
+    ...(estimate ? { pricingVersion: estimate.pricingVersion, estimatedCostUsd: estimate.estimatedCostUsd } : {}),
   });
 }
 

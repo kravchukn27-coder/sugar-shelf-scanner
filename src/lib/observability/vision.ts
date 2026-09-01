@@ -1,3 +1,5 @@
+import { queueAnalyticsEvent } from "@/lib/analytics/events";
+
 /**
  * Minimal, privacy-safe timing telemetry for the vision provider.
  *
@@ -29,7 +31,7 @@ type VisionTelemetry = {
 };
 
 export type VisionUsageTelemetry = {
-  operation: Extract<VisionOperation, "preflight" | "analyze">;
+  operation: VisionOperation;
   model: string;
   durationMs: number;
   status: 200;
@@ -37,15 +39,19 @@ export type VisionUsageTelemetry = {
   candidatesTokenCount?: number;
   thoughtsTokenCount?: number;
   totalTokenCount?: number;
+  pricingVersion?: string;
+  estimatedCostUsd?: number;
 };
 
 export function logVisionTelemetry(metric: VisionTelemetry) {
   // JSON makes this easy to query in Railway logs without relying on text
   // parsing. `model` is configuration, not customer or product data.
   console.info(JSON.stringify({ event: "vision_request", ...metric }));
+  queueAnalyticsEvent({ eventName: "vision_request", source: "server", properties: metric });
 }
 
 /** Provider-supplied counters only; callers gate this temporary event. */
 export function logVisionUsageTelemetry(metric: VisionUsageTelemetry) {
   console.info(JSON.stringify({ event: "vision_usage", ...metric }));
+  queueAnalyticsEvent({ eventName: "vision_usage", source: "server", properties: metric });
 }

@@ -16,10 +16,20 @@ const serverEnvSchema = z.object({
   // Monetization test. Server-only: the secret key must never be inlined into
   // a browser bundle, so it is deliberately not a NEXT_PUBLIC_ variable.
   STRIPE_SECRET_KEY: z.string().min(1).optional(),
+  // Server-only signing secret for Stripe's webhook endpoint. It is distinct
+  // from STRIPE_SECRET_KEY and begins with whsec_ in Stripe's dashboard.
+  STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
   // Keys the buyer-email digest stored with an access pass. Rotating it makes
   // every existing pass unrestorable by email, so treat the value as durable
   // for the life of the test.
   ACCESS_PASS_SECRET: z.string().min(16).optional(),
+  // Durable server-only key used to turn a browser-local random installation
+  // ID into an irreversible analytics subject digest. Do not rotate it while
+  // historical DAU/WAU/MAU comparisons matter.
+  ANALYTICS_SUBJECT_SECRET: z.string().min(16).optional(),
+  GOOGLE_CLOUD_BILLING_PROJECT_ID: z.string().min(6).optional(),
+  GOOGLE_CLOUD_BILLING_DATASET_ID: z.string().min(1).optional(),
+  GOOGLE_CLOUD_BILLING_SERVICE_ACCOUNT_JSON_BASE64: z.string().min(1).optional(),
 });
 
 export type ServerEnv = Omit<z.infer<typeof serverEnvSchema>, "GEMINI_PREFLIGHT_MODEL"> & {
@@ -43,6 +53,11 @@ export function isScannerMetricsEnabled(environment: NodeJS.ProcessEnv = process
   return environment.SCANNER_METRICS_ENABLED === "true";
 }
 
+/** Durable dashboard event storage is server-only and requires PostgreSQL. */
+export function isAnalyticsEnabled(environment: NodeJS.ProcessEnv = process.env) {
+  return environment.ANALYTICS_ENABLED === "true" && Boolean(environment.DATABASE_URL);
+}
+
 /**
  * Provider token counters are a temporary, server-only diagnostic. Keep this
  * separate from browser scanner summaries so a public build flag can never
@@ -54,6 +69,12 @@ export function isVisionUsageMetricsEnabled(environment: NodeJS.ProcessEnv = pro
 
 export type AccessPassConfig = {
   stripeSecretKey: string;
+  accessPassSecret: string;
+  databaseUrl: string;
+};
+
+export type StripeWebhookConfig = {
+  stripeWebhookSecret: string;
   accessPassSecret: string;
   databaseUrl: string;
 };
@@ -71,4 +92,20 @@ export function getAccessPassConfig(environment: NodeJS.ProcessEnv = process.env
   if (!accessPassSecret || accessPassSecret.length < 16) return null;
   if (!databaseUrl) return null;
   return { stripeSecretKey, accessPassSecret, databaseUrl };
+}
+
+/**
+ * The webhook authenticates with its own Stripe signing secret, then needs the
+ * same durable storage and email-digest secret as the browser redemption path.
+ * A partial setup returns 503 so Stripe retries instead of silently losing a
+ * completed payment.
+ */
+export function getStripeWebhookConfig(environment: NodeJS.ProcessEnv = process.env): StripeWebhookConfig | null {
+  const stripeWebhookSecret = environment.STRIPE_WEBHOOK_SECRET;
+  const accessPassSecret = environment.ACCESS_PASS_SECRET;
+  const databaseUrl = environment.DATABASE_URL;
+  if (!stripeWebhookSecret) return null;
+  if (!accessPassSecret || accessPassSecret.length < 16) return null;
+  if (!databaseUrl) return null;
+  return { stripeWebhookSecret, accessPassSecret, databaseUrl };
 }
