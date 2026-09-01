@@ -3,7 +3,7 @@ import { estimateGeminiCost } from "@/lib/analytics/gemini-cost";
 import type { AnalyzeScanRequest, AnalyzeScanResponse, Detection, PreflightScanRequest, PreflightScanResponse } from "@/lib/contracts/scan";
 import type { NormalizedBox, ScoreBand } from "@/lib/contracts/product";
 import { isVisionUsageMetricsEnabled, type ServerEnv } from "@/lib/env";
-import { logVisionTelemetry, logVisionUsageTelemetry, type VisionOperation, type VisionOutcome } from "@/lib/observability/vision";
+import { logUnbrandedDetectionNameForReview, logVisionTelemetry, logVisionUsageTelemetry, type VisionOperation, type VisionOutcome } from "@/lib/observability/vision";
 import { acquireGeminiPermit, reserveGeminiRequest, type GeminiOperation } from "@/lib/observability/redis-guard";
 
 // Multimodal detection on a full shelf can take longer than a text response.
@@ -378,6 +378,19 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, model: 
     logGeminiUsage("analyze", model, attemptStartedAt, payload);
     const parsed = parseGeminiText(payload, geminiResponseSchema);
     const detections = normalizeGeminiDetections(parsed.detections);
+    // TEMPORARY (see the function's own doc comment, remove by ~2026-09-16):
+    // sample real `name`-without-`brand` text to decide, from actual
+    // examples, whether the "Glass Bottled Drink"-style generic-guess bug
+    // is common enough to change the eligibility filter for.
+    for (const detection of detections) {
+      if (!detection.visualCandidate.name || detection.visualCandidate.brand) continue;
+      logUnbrandedDetectionNameForReview({
+        operation: "analyze",
+        name: detection.visualCandidate.name,
+        confidence: detection.confidence,
+        hasSugarEstimate: detection.score.sugarPer100g !== null,
+      });
+    }
     return {
       scanId: `gemini-${crypto.randomUUID()}`,
       clientFrameId: input.clientFrameId,

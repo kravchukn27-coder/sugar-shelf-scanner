@@ -55,3 +55,23 @@ export function logVisionUsageTelemetry(metric: VisionUsageTelemetry) {
   console.info(JSON.stringify({ event: "vision_usage", ...metric }));
   queueAnalyticsEvent({ eventName: "vision_usage", source: "server", properties: metric });
 }
+
+/**
+ * TEMPORARY, deliberate exception to this file's own "never log product
+ * candidates or OCR text" rule above — added 2026-09-01 to investigate a
+ * real bug (Gemini returning a generic container description, e.g. "Glass
+ * Bottled Drink", as `name` with no `brand`, which then passed the
+ * eligibility filter). We need to actually read the `name` text on a sample
+ * of these to tell "garbage generic guess" from "a real product Gemini just
+ * didn't split into a separate brand field" before changing any filtering
+ * logic — a decision from real examples, not a guess.
+ *
+ * Delete this function, its call site in gemini.ts, and the accumulated
+ * `detection_unbranded_name` rows (analytics_events table) by ~2026-09-16
+ * (15 days). Do not let this become a permanent logging path — the name
+ * text is exactly what the rule above exists to keep out of retained logs.
+ */
+export function logUnbrandedDetectionNameForReview(input: { operation: "analyze"; name: string; confidence: number; hasSugarEstimate: boolean }) {
+  console.info(JSON.stringify({ event: "detection_unbranded_name", ...input }));
+  queueAnalyticsEvent({ eventName: "detection_unbranded_name", source: "server", properties: input });
+}
