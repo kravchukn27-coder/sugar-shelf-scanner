@@ -248,3 +248,52 @@ persisted events from before the split went live until fresh scans happen).
 
 **Result:** _(pending — needs real traffic on both models before either the
 dashboard or this entry can say anything)_
+
+### 2026-09-01 (update) — Preflight A/B: early data, and analyze A/B added
+
+**Preflight A/B result so far:** first ~15 minutes after the split went
+live (~15:00 UTC), 12 preflight requests split 5/7 between the two models:
+
+| Model | n | Outcome |
+| --- | --- | --- |
+| `gemini-3.6-flash` | 5 | 5/5 `provider_timeout`, all at 5001-5005ms (the exact ceiling) |
+| `gemini-3.5-flash-lite` | 7 | 5 success (1.2-2.3s), 1 timeout, 1 client_cancelled |
+
+Same window, `analyze` (still `gemini-3.6-flash` only at that point): 4
+requests, 0 successes (3 timeout, 1 client_cancelled). Sample is small, but
+the contrast is qualitative, not marginal — `gemini-3.6-flash` looked
+completely non-responsive in this window on both operations, while
+`gemini-3.5-flash-lite` mostly worked and fast. Not enough data yet to
+close this entry; logged here so the pattern is on record before more
+traffic accumulates and possibly muddies it.
+
+### 2026-09-01 — [`279b5da`](../../commit/279b5da) — Concurrent 50/50 analyze model A/B: `gemini-3.6-flash` vs `gemini-3.5-flash-lite`
+
+**Change:** same mechanism as the preflight split (`c139b13`), applied to
+`analyzeWithGemini`. New env var `GEMINI_ANALYZE_MODEL_VARIANT_B`. The
+chosen model is threaded through the primary attempt, its hedge duplicate,
+and the one transport-failure retry, so one logical scan never mixes two
+models and a hedge race never crosses model A with model B.
+
+**Why:** triggered directly by the preflight A/B result above — with
+`gemini-3.6-flash` looking non-responsive on `analyze` too (0/4 that
+window), it was worth measuring analyze the same concurrent way instead of
+guessing from preflight's numbers or switching analyze over blind.
+
+**Live since:** 2026-09-01, ~17:15 UTC (Railway variable:
+`GEMINI_ANALYZE_MODEL_VARIANT_B=gemini-3.5-flash-lite`). Preflight's split
+(`GEMINI_PREFLIGHT_MODEL_VARIANT_B`) has been live since ~15:00 UTC.
+
+**Rollback:** unset `GEMINI_ANALYZE_MODEL_VARIANT_B` on Railway.
+
+**Caveat:** `gemini-3.5-flash-lite` was not designed for analyze's task
+(detailed multi-product detection with bounding boxes, brand/name, sugar
+estimates) the way it was for preflight's simple classification — this A/B
+needs to be read for *both* speed and detection quality, not speed alone,
+before considering it a real candidate for analyze specifically.
+
+**Where to check results:** `/admin/analytics` → Gemini Health → Models —
+both rows will show once each model has live analyze traffic.
+
+**Result:** _(pending — needs real traffic on both models for both
+operations)_
