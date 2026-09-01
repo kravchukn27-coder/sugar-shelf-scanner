@@ -70,8 +70,15 @@ function formatBilling(value: number | null, currency: string | null) {
   return value === null ? "—" : new Intl.NumberFormat("en-US", { style: "currency", currency: currency || "USD", maximumFractionDigits: 2 }).format(value);
 }
 
+// Sub-second values (queue time, render time) stay in milliseconds, where
+// "94 ms" is a precise, meaningful number — rounding that to "0.1 s" loses
+// exactly the "this is basically nothing" read it's meant to give. Anything
+// a full second or slower switches to seconds, matching the "2.7 s" style
+// already used in the Historical Railway logs table above.
 function formatMs(value: number | null) {
-  return value === null ? "—" : `${Math.round(value)} ms`;
+  if (value === null) return "—";
+  if (value < 1000) return `${Math.round(value)} ms`;
+  return `${(value / 1000).toFixed(1)} s`;
 }
 
 // The "Last 7 days" heading is a request window, not a coverage guarantee —
@@ -253,7 +260,7 @@ export default function AnalyticsDashboard() {
           (confirmed live during the 09-01 A/B — gemini-3.6-flash was ~0%
           success on preflight the same hour it was 100% on analyze), and an
           averaged single row hid exactly that. */}
-      <details className={styles.widePanel} open={overview.geminiHealth.models.length > 1}><summary className={styles.panelHeading}><div><p className={styles.eyebrow}>Models</p><h2>Seven-day breakdown, by operation</h2></div><span>{new Set(overview.geminiHealth.models.map((model) => model.model)).size} model(s) seen</span></summary>{overview.geminiHealth.models.length === 0 ? <p className={styles.empty}>No Gemini provider events in this window yet.</p> : <div className={`${styles.comparisonScroll} ${styles.modelsScroll}`}><div className={styles.comparisonTable}><div className={styles.comparisonHeader}><span>Model</span><span>Operation</span><span>Requests</span><span>Success</span><span>Timeout</span><span>p50</span><span>p95</span><span>Tokens · cost</span></div>{overview.geminiHealth.models.map((model) => <div key={`${model.model}-${model.operation}`}><strong>{model.model}</strong><span>{formatEventName(model.operation)}</span><span>{model.requests}</span><span>{formatPercent(model.successRate)}</span><span>{model.requests ? formatPercent(model.timeoutErrors / model.requests) : "—"}</span><span>{model.p50LatencyMs === null ? "—" : `${Math.round(model.p50LatencyMs)}ms`}</span><span>{model.p95LatencyMs === null ? "—" : `${Math.round(model.p95LatencyMs)}ms`}</span><span>{formatValue(model.totalTokens, "count")} · {formatBilling(model.estimatedCostUsd, "USD")}</span></div>)}</div></div>}</details>
+      <details className={styles.widePanel} open={overview.geminiHealth.models.length > 1}><summary className={styles.panelHeading}><div><p className={styles.eyebrow}>Models</p><h2>Seven-day breakdown, by operation</h2></div><span>{new Set(overview.geminiHealth.models.map((model) => model.model)).size} model(s) seen</span></summary>{overview.geminiHealth.models.length === 0 ? <p className={styles.empty}>No Gemini provider events in this window yet.</p> : <div className={`${styles.comparisonScroll} ${styles.modelsScroll}`}><div className={styles.comparisonTable}><div className={styles.comparisonHeader}><span>Model</span><span>Operation</span><span>Requests</span><span>Success</span><span>Timeout</span><span>p50</span><span>p95</span><span>Tokens · cost</span></div>{overview.geminiHealth.models.map((model) => <div key={`${model.model}-${model.operation}`}><strong>{model.model}</strong><span>{formatEventName(model.operation)}</span><span>{model.requests}</span><span>{formatPercent(model.successRate)}</span><span>{model.requests ? formatPercent(model.timeoutErrors / model.requests) : "—"}</span><span>{formatMs(model.p50LatencyMs)}</span><span>{formatMs(model.p95LatencyMs)}</span><span>{formatValue(model.totalTokens, "count")} · {formatBilling(model.estimatedCostUsd, "USD")}</span></div>)}</div></div>}</details>
       <p className={styles.note}>The panel reads aggregate telemetry only. Provider usage metadata can be absent for failed or cancelled calls; Cloud Billing remains the reconciliation source for actual spend.</p>
     </section>}
   </main>;
