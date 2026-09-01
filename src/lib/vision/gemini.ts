@@ -239,12 +239,19 @@ Return none for people, faces, hands, documents, books, receipts, nutrition labe
 Set reasonCode exactly to: packaged_food_or_drink for candidate; person_or_document for people/documents/labels; screen for screens; blur_or_distance for uncertain; or no_packaged_product for every other negative scene. Set packagedProductCount to 0 unless decision is candidate. This step must not identify products, estimate nutrition, return boxes, or infer facts. Return JSON only matching the supplied schema.`;
 }
 
-function thinkingConfigFor(model: string) {
+// Gemini 3's four-tier scale (minimal/low/medium/high) has no literal "off"
+// the way 2.5's thinkingBudget:0 did; "minimal" is the closest analog and is
+// what the docs recommend for classification-shaped calls. Preflight is pure
+// classification (candidate/none/uncertain + a count) with no need to reason
+// about brand, text, or nutrition, so it gets that floor; analyze still
+// benefits from some reasoning over what it's actually detecting, so it
+// stays at "low" rather than dropping further without its own evaluation.
+function thinkingConfigFor(model: string, gemini3Level: "minimal" | "low" = "low") {
   // Gemini 3 uses thinkingLevel while Gemini 2.5 uses thinkingBudget. Keeping
   // this branch server-side makes a Railway model change safe.
   return model.startsWith("gemini-2.5-")
     ? { thinkingBudget: 0 }
-    : { thinkingLevel: "low" };
+    : { thinkingLevel: gemini3Level };
 }
 
 function parseGeminiText<T>(payload: unknown, schema: z.ZodType<T>) {
@@ -488,7 +495,7 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
           // Keep Gemini's default media resolution here. The lower preflight
           // tier was rolled back because it regressed recognition of small
           // packaged products before they could reach full analysis.
-          thinkingConfig: thinkingConfigFor(env.GEMINI_PREFLIGHT_MODEL),
+          thinkingConfig: thinkingConfigFor(env.GEMINI_PREFLIGHT_MODEL, "minimal"),
           responseMimeType: "application/json",
           responseSchema: {
             type: "OBJECT",
