@@ -492,9 +492,12 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
       body: JSON.stringify({
         contents: [{ parts: [{ text: preflightPrompt() }, { inline_data: { mime_type: input.mimeType, data: input.imageBase64.replace(/^data:[^;]+;base64,/, "") } }] }],
         generationConfig: {
-          // Keep Gemini's default media resolution here. The lower preflight
-          // tier was rolled back because it regressed recognition of small
-          // packaged products before they could reach full analysis.
+          // A full low-resolution preflight tier was tried once and rolled
+          // back — it regressed recognition of small packaged products.
+          // MEDIUM is a documented middle ground (560 image tokens vs the
+          // unspecified default) rather than that same low tier, worth its
+          // own before/after read rather than assumed equivalent.
+          mediaResolution: "MEDIA_RESOLUTION_MEDIUM",
           thinkingConfig: thinkingConfigFor(env.GEMINI_PREFLIGHT_MODEL, "minimal"),
           responseMimeType: "application/json",
           responseSchema: {
