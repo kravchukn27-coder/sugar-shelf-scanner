@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { queueAnalyticsEvent } from "@/lib/analytics/events";
 import { isScannerMetricsEnabled } from "@/lib/env";
 import { checkSharedRateLimit, recordRateLimiterUnavailable, type GuardScope } from "@/lib/observability/redis-guard";
+import { queueOperationalIncident } from "@/lib/observability/telegram-alert";
 
 // `access_restore` is an email-guessing surface, so it is rate limited by the
 // same keyed digest as the scan routes. `access_redeem` makes an outbound
@@ -118,6 +119,7 @@ export function logAccessRequest(route: "access_restore" | "access_redeem", star
   console.info(JSON.stringify(metric));
   const { event: eventName, ...properties } = metric;
   queueAnalyticsEvent({ eventName, source: "server", properties });
+  if (status >= 500) queueOperationalIncident({ kind: "access_failure", route, status });
 }
 
 export function scanJsonResponse(body: unknown, init: ResponseInit, timing: ScanRouteTiming) {
@@ -153,5 +155,9 @@ export function scanJsonResponse(body: unknown, init: ResponseInit, timing: Scan
   console.info(JSON.stringify(metric));
   const { event: eventName, ...properties } = metric;
   queueAnalyticsEvent({ eventName, source: "server", properties });
+  if (timing.status >= 500) {
+    const code = body && typeof body === "object" && "code" in body && typeof body.code === "string" ? body.code : undefined;
+    queueOperationalIncident({ kind: "scan_failure", route: timing.route, status: timing.status, code });
+  }
   return response;
 }

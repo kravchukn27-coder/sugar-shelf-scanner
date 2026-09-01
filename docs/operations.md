@@ -8,6 +8,50 @@
 - Required server credentials remain server-only. Never expose Gemini keys,
   database URLs or source identifiers to the browser.
 
+## Free incident alerts
+
+Telegram is the primary incident channel during the public test. Configure a
+bot and add it to the private operator group, then set these Railway variables
+on `sugar-api` (never use `NEXT_PUBLIC_`):
+
+```text
+TELEGRAM_ALERTS_ENABLED=true
+TELEGRAM_ALERT_BOT_TOKEN=<BotFather token>
+TELEGRAM_ALERT_CHAT_ID=<negative numeric group chat id>
+```
+
+The application sends one best-effort message per incident key every 15
+minutes. Messages include only incident kind, route, HTTP status and safe error
+code; they never include raw exception text, URL query values, IP addresses,
+email, tokens, images, OCR, or request bodies. The Telegram delivery failure
+must never delay or change a customer response.
+
+Alert on 5xx from scan/access flows, Stripe webhook processing, catalog
+proposal persistence, health failures, and uncaught server errors. Do not page
+for validation errors (4xx) or normal 429 quotas. Owner for the test is the
+operator who acknowledges the Telegram message; SEV1 health/payment-wide
+outages are acted on immediately, while repeated Gemini/Redis or database 5xx
+are SEV2 and investigated within one hour.
+
+Free external checks:
+
+1. Create an UptimeRobot Free HTTP monitor for
+   `https://sugar-api-production.up.railway.app/api/health`; it checks every
+   five minutes and sends email as an independent fallback.
+2. Create a Sentry Developer project for the Next.js service and add its DSN
+   only after the project exists. The free tier is a secondary stack-trace
+   inbox; Telegram remains the primary paging channel.
+3. Create Google Cloud Budget email alerts at 50%, 80% and 100% of the monthly
+   Gemini/Google Cloud spend. Budgets are alerts, not an automatic spend cap.
+
+### Incident drill
+
+After every alert setup change, use the bot's test message and temporarily set
+an invalid health dependency in a staging deployment. Confirm that Telegram
+receives one redacted alert, UptimeRobot marks the endpoint down and recovery,
+and the customer response stays controlled. Revert the staging change and add
+the timestamp/outcome to the release notes.
+
 ## Shared Redis rate limits and Gemini budget
 
 Public traffic requires a Railway Redis service connected through private

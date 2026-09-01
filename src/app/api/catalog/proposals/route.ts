@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import { createProposalRateLimiter } from "@/lib/catalog/catalog-proposals";
 import { handleCatalogProposal } from "@/lib/catalog/catalog-proposal-handler";
+import { queueOperationalIncident } from "@/lib/observability/telegram-alert";
 
 export const runtime = "nodejs";
 
@@ -18,9 +19,11 @@ function getProposalPool(databaseUrl: string): Pool {
 export async function POST(request: Request) {
   const databaseUrl = process.env.DATABASE_URL;
   const limiter = globalProposalPool.__sugarProposalRateLimit ??= createProposalRateLimiter();
-  return handleCatalogProposal(request, {
+  const response = await handleCatalogProposal(request, {
     databaseUrl,
     pool: databaseUrl ? getProposalPool(databaseUrl) : undefined,
     allowRequest: limiter,
   });
+  if (response.status >= 500) queueOperationalIncident({ kind: "catalog_failure", route: "/api/catalog/proposals", status: response.status });
+  return response;
 }

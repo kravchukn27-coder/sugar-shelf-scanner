@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import { handleStripeWebhook } from "@/lib/access/stripe-webhook-handler";
 import { getStripeWebhookConfig } from "@/lib/env";
+import { queueOperationalIncident } from "@/lib/observability/telegram-alert";
 
 export const runtime = "nodejs";
 
@@ -24,9 +25,11 @@ function getWebhookPool(databaseUrl: string): Pool {
  * asks Stripe to retry safely.
  */
 export async function POST(request: Request) {
-  return handleStripeWebhook(request, {
+  const response = await handleStripeWebhook(request, {
     getConfig: getStripeWebhookConfig,
     getPool: getWebhookPool,
     now: () => new Date(),
   });
+  if (response.status >= 500) queueOperationalIncident({ kind: "stripe_webhook_failure", route: "/api/webhooks/stripe", status: response.status });
+  return response;
 }
