@@ -474,6 +474,13 @@ export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEn
  */
 export async function preflightWithGemini(input: PreflightScanRequest, env: ServerEnv, receivedAt: number, requestSignal?: AbortSignal): Promise<PreflightScanResponse> {
   const startedAt = performance.now();
+  // A/B split: only branches away from the configured model when a variant
+  // is actually set, so this is a no-op everywhere the env var is absent.
+  // Chosen once and reused for the fetch URL and every log line below, so a
+  // single request's telemetry never mixes two model names.
+  const model = env.GEMINI_PREFLIGHT_MODEL_VARIANT_B && Math.random() < 0.5
+    ? env.GEMINI_PREFLIGHT_MODEL_VARIANT_B
+    : env.GEMINI_PREFLIGHT_MODEL;
   let abort: AttemptAbort | undefined;
   try {
     if (!env.GEMINI_API_KEY) throw new VisionRequestError("Gemini is not configured.", 503, "provider_error");
@@ -485,7 +492,7 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
     abort = createAttemptAbort(requestSignal, GEMINI_PREFLIGHT_TIMEOUT_MS);
     try {
     if (abort.signal.aborted) throw abortVisionError(abort.reason());
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.GEMINI_PREFLIGHT_MODEL)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`, {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       signal: abort.signal,
@@ -498,7 +505,7 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
           // unspecified default) rather than that same low tier, worth its
           // own before/after read rather than assumed equivalent.
           mediaResolution: "MEDIA_RESOLUTION_MEDIUM",
-          thinkingConfig: thinkingConfigFor(env.GEMINI_PREFLIGHT_MODEL, "minimal"),
+          thinkingConfig: thinkingConfigFor(model, "minimal"),
           responseMimeType: "application/json",
           responseSchema: {
             type: "OBJECT",
@@ -518,12 +525,12 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
       await throwGeminiProviderError(response, "preflight");
     }
     const payload = await response.json();
-    logGeminiUsage("preflight", env.GEMINI_PREFLIGHT_MODEL, startedAt, payload);
+    logGeminiUsage("preflight", model, startedAt, payload);
     const parsed = parseGeminiText(payload, geminiPreflightResponseSchema);
     // Keep the invariant meaningful even if a model returns internally
     // inconsistent fields despite the schema instructions.
     const isCandidate = parsed.decision === "candidate" && parsed.packagedProductCount > 0;
-    logAttempt("preflight", env.GEMINI_PREFLIGHT_MODEL, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS);
+    logAttempt("preflight", model, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS);
     return {
       clientFrameId: input.clientFrameId,
       provider: "gemini",
@@ -538,16 +545,16 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
     }
   } catch (error) {
     if (error instanceof VisionRequestError) {
-      logAttempt("preflight", env.GEMINI_PREFLIGHT_MODEL, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, error);
+      logAttempt("preflight", model, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, error);
       throw error;
     }
     if (abort?.reason() || (error instanceof Error && error.name === "AbortError")) {
       const timeoutError = abortVisionError(abort?.reason() ?? null);
-      logAttempt("preflight", env.GEMINI_PREFLIGHT_MODEL, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, timeoutError);
+      logAttempt("preflight", model, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, timeoutError);
       throw timeoutError;
     }
     const providerError = new VisionRequestError("Unable to reach the vision provider.", 502, "provider_error");
-    logAttempt("preflight", env.GEMINI_PREFLIGHT_MODEL, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, providerError);
+    logAttempt("preflight", model, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, providerError);
     throw providerError;
   }
 }

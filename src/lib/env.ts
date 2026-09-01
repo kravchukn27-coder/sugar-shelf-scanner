@@ -7,6 +7,12 @@ const serverEnvSchema = z.object({
   // Optional override. By default preflight uses the known-working full model
   // configured for this Railway service.
   GEMINI_PREFLIGHT_MODEL: z.string().min(1).optional(),
+  // Setting this turns on a 50/50 random split per preflight call between
+  // GEMINI_PREFLIGHT_MODEL and this one, so both models see the same
+  // concurrent traffic and provider conditions instead of a before/after
+  // comparison confounded by Gemini's own latency drifting hour to hour.
+  // Unset (the default) disables the split entirely — no random branch runs.
+  GEMINI_PREFLIGHT_MODEL_VARIANT_B: z.string().min(1).optional(),
   DATABASE_URL: z.string().url().optional(),
   RATE_LIMIT_SECRET: z.string().min(16).optional(),
   // Optional: enables the free USDA Branded Foods fallback. Never expose it to iOS.
