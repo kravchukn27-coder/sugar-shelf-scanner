@@ -70,7 +70,8 @@ export type GeminiHealthDayOperation = { day: string; operation: string; request
 export type ScannerRoutePerformance = { route: string; requests: number; errors: number; p95DurationMs: number | null; p95VisionMs: number | null; p95CatalogMs: number | null };
 export type ScannerExperiencePerformance = { completions: number; p95CaptureReadyMs: number | null; p95FirstPreflightDispatchMs: number | null; p95PreflightRttMs: number | null; p95AnalyzeRttMs: number | null; p95RenderMs: number | null };
 export type ScannerExperienceDay = { day: string; completions: number; p95FirstPreflightDispatchMs: number | null; p95PreflightRttMs: number | null; p95AnalyzeRttMs: number | null };
-export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[]; operations: GeminiHealthOperation[]; dailyOperations: GeminiHealthDayOperation[]; routes: ScannerRoutePerformance[]; experience: ScannerExperiencePerformance; dailyExperience: ScannerExperienceDay[] };
+export type HistoricalGeminiComparison = { period: string; requests: number; successRate: number; preflightP50Ms: string; preflightTimeoutRate: number; note: string };
+export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[]; operations: GeminiHealthOperation[]; dailyOperations: GeminiHealthDayOperation[]; historicalComparisons: HistoricalGeminiComparison[]; routes: ScannerRoutePerformance[]; experience: ScannerExperiencePerformance; dailyExperience: ScannerExperienceDay[] };
 
 type MetricRow = { key: DashboardMetricKey; current_value: number | string | null; previous_value: number | string | null };
 type QualityRow = { label: string; value: number | string | null };
@@ -99,6 +100,18 @@ const METRICS: { key: DashboardMetricKey; label: string; unit: DashboardMetric["
   { key: "vision_errors", label: "Gemini errors", unit: "count" },
   { key: "gemini_total_tokens", label: "Gemini tokens", unit: "count" },
   { key: "gemini_estimated_cost_usd", label: "Estimated Gemini cost", unit: "usd" },
+];
+
+/**
+ * Aggregates transcribed from the Railway log investigation on 2026-08-30.
+ * Railway no longer retains the individual records for these windows, so p95
+ * values, queue time, and operation-level splits must remain unavailable.
+ */
+const HISTORICAL_GEMINI_COMPARISONS: HistoricalGeminiComparison[] = [
+  { period: "Aug 26–27 · healthy baseline", requests: 291, successRate: 0.811, preflightP50Ms: "2.7 s", preflightTimeoutRate: 0.124, note: "Archived Railway summary" },
+  { period: "Aug 27–28 · Gemini incident", requests: 103, successRate: 0.437, preflightP50Ms: "4.8 s", preflightTimeoutRate: 0.427, note: "Archived Railway summary" },
+  { period: "Aug 29", requests: 43, successRate: 0.79, preflightP50Ms: "2.4 s", preflightTimeoutRate: 0.074, note: "Archived Railway summary" },
+  { period: "Aug 30 · partial day", requests: 11, successRate: 0.91, preflightP50Ms: "4.0–4.5 s", preflightTimeoutRate: 1 / 6, note: "Small sample · archived summary" },
 ];
 
 function numeric(value: number | string | null): number {
@@ -341,6 +354,7 @@ export async function readDashboardOverview(
       models: geminiModels,
       operations: geminiOperations.rows.map((row) => ({ operation: row.operation ?? "unknown", requests: numeric(row.requests), errors: numeric(row.errors), timeoutErrors: numeric(row.timeout_errors), p50LatencyMs: optional(row.p50_latency_ms), p95LatencyMs: optional(row.p95_latency_ms), p95QueueMs: optional(row.p95_queue_ms) })),
       dailyOperations: geminiDailyOperations.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), operation: row.operation ?? "unknown", requests: numeric(row.requests), successes: numeric(row.successes), timeoutErrors: numeric(row.timeout_errors), p50LatencyMs: optional(row.p50_latency_ms), p95LatencyMs: optional(row.p95_latency_ms), p95QueueMs: optional(row.p95_queue_ms) })),
+      historicalComparisons: HISTORICAL_GEMINI_COMPARISONS,
       routes: scannerRoutes.rows.map((row) => ({ route: row.route ?? "unknown", requests: numeric(row.requests), errors: numeric(row.errors), p95DurationMs: optional(row.p95_duration_ms), p95VisionMs: optional(row.p95_vision_ms), p95CatalogMs: optional(row.p95_catalog_ms) })),
       experience: { completions: numeric(experienceRow?.completions ?? null), p95CaptureReadyMs: optional(experienceRow?.p95_capture_ready_ms), p95FirstPreflightDispatchMs: optional(experienceRow?.p95_first_preflight_dispatch_ms), p95PreflightRttMs: optional(experienceRow?.p95_preflight_rtt_ms), p95AnalyzeRttMs: optional(experienceRow?.p95_analyze_rtt_ms), p95RenderMs: optional(experienceRow?.p95_render_ms) },
       dailyExperience: scannerDailyExperience.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), completions: numeric(row.completions), p95FirstPreflightDispatchMs: optional(row.p95_first_preflight_dispatch_ms), p95PreflightRttMs: optional(row.p95_preflight_rtt_ms), p95AnalyzeRttMs: optional(row.p95_analyze_rtt_ms) })),

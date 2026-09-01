@@ -40,6 +40,7 @@ test("dashboard overview fills missing metrics and returns aggregate-only event 
   assert.deepEqual(overview.geminiHealth.models, [{ model: "gemini-3.6-flash", requests: 8, errors: 2, timeoutErrors: 1, p95LatencyMs: 900, totalTokens: 1200, estimatedCostUsd: 0.02 }]);
   assert.deepEqual(overview.geminiHealth.operations, [{ operation: "preflight", requests: 8, errors: 2, timeoutErrors: 1, p50LatencyMs: 400, p95LatencyMs: 900, p95QueueMs: 40 }]);
   assert.deepEqual(overview.geminiHealth.dailyOperations, [{ day: "2026-08-31", operation: "preflight", requests: 8, successes: 6, timeoutErrors: 1, p50LatencyMs: 400, p95LatencyMs: 900, p95QueueMs: 40 }]);
+  assert.deepEqual(overview.geminiHealth.historicalComparisons[0], { period: "Aug 26–27 · healthy baseline", requests: 291, successRate: 0.811, preflightP50Ms: "2.7 s", preflightTimeoutRate: 0.124, note: "Archived Railway summary" });
   assert.deepEqual(overview.geminiHealth.routes, [{ route: "preflight", requests: 7, errors: 1, p95DurationMs: 1050, p95VisionMs: 900, p95CatalogMs: 60 }]);
   assert.deepEqual(overview.geminiHealth.experience, { completions: 6, p95CaptureReadyMs: 250, p95FirstPreflightDispatchMs: 330, p95PreflightRttMs: 1100, p95AnalyzeRttMs: 1600, p95RenderMs: 90 });
   assert.deepEqual(overview.geminiHealth.dailyExperience, [{ day: "2026-08-31", completions: 6, p95FirstPreflightDispatchMs: 330, p95PreflightRttMs: 1100, p95AnalyzeRttMs: 1600 }]);
