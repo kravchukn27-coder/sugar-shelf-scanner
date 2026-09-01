@@ -7,6 +7,18 @@ import type { DashboardOverview } from "@/lib/analytics/dashboard";
 const REFRESH_MS = 30_000;
 type OverviewRange = "24h" | "3d" | "7d" | "all";
 const RANGE_LABELS: Record<OverviewRange, string> = { "24h": "Last 24 hours", "3d": "Last 3 days", "7d": "Last 7 days", all: "All time" };
+// The top metrics row mixed product/business counters with Gemini
+// reliability counters in one undifferentiated grid — split by this set so a
+// quick scan doesn't have to parse "is this a business or a technical
+// number" per card.
+const GEMINI_METRIC_KEYS = new Set(["vision_requests", "vision_errors", "gemini_total_tokens", "gemini_estimated_cost_usd"]);
+// Below this many attempts a conversion rate is noise, not a rate — e.g. 1
+// of 1 rendering as a confident "100%" next to a real 76% (19 of 25).
+const MIN_RATE_SAMPLE = 10;
+// "no_detection" (Gemini found nothing) is the one outcome in the quality
+// mix that means the scan just failed the user — worth a callout once it's
+// a meaningful share, not just another row in the list.
+const NO_DETECTION_ALERT_THRESHOLD = 0.2;
 
 function formatValue(value: number | null, unit: "count" | "usd") {
   if (value === null) return "Unpriced";
@@ -145,8 +157,16 @@ export default function AnalyticsDashboard() {
 
     {view === "overview" && <>
     <div className={styles.rangeTabs} aria-label="Product pulse date range">{(Object.keys(RANGE_LABELS) as OverviewRange[]).map((item) => <button key={item} className={range === item ? styles.rangeActive : undefined} onClick={() => setRange(item)}>{item === "all" ? "All time" : item}</button>)}</div>
-    <section aria-label="Current metrics" className={styles.metrics}>
-      {overview.metrics.map((metric) => <article className={styles.metricCard} key={metric.key}>
+    <p className={styles.metricsGroupLabel}>Product funnel</p>
+    <section aria-label="Product funnel metrics" className={styles.metrics}>
+      {overview.metrics.filter((metric) => !GEMINI_METRIC_KEYS.has(metric.key)).map((metric) => <article className={styles.metricCard} key={metric.key}>
+        <p>{metric.label}</p><strong>{formatValue(metric.value, metric.unit)}</strong>
+        <span className={overview.window.allTime ? styles.neutral : deltaTone(metric.value, metric.previousValue, metric.key)}>{overview.window.allTime ? "All recorded data" : formatDelta(metric.value, metric.previousValue)}</span>
+      </article>)}
+    </section>
+    <p className={styles.metricsGroupLabel}>Gemini reliability</p>
+    <section aria-label="Gemini reliability metrics" className={styles.metrics}>
+      {overview.metrics.filter((metric) => GEMINI_METRIC_KEYS.has(metric.key)).map((metric) => <article className={styles.metricCard} key={metric.key}>
         <p>{metric.label}</p><strong>{formatValue(metric.value, metric.unit)}</strong>
         <span className={overview.window.allTime ? styles.neutral : deltaTone(metric.value, metric.previousValue, metric.key)}>{overview.window.allTime ? "All recorded data" : formatDelta(metric.value, metric.previousValue)}</span>
       </article>)}
@@ -155,11 +175,21 @@ export default function AnalyticsDashboard() {
     <section className={styles.secondaryGrid}>
       <article className={styles.panel}>
         <div className={styles.panelHeading}><div><p className={styles.eyebrow}>Funnel</p><h2>Conversion rates</h2></div><span>{range === "all" ? "All time" : range}</span></div>
-        <div className={styles.funnelList}>{overview.funnel.map((step) => <div key={step.label}><div><span>{step.label}</span><strong>{formatPercent(step.rate)}</strong></div><small>{step.numerator} of {step.denominator} · {overview.window.allTime || step.previousRate === null || step.rate === null ? "No prior baseline" : `${step.rate >= step.previousRate ? "+" : ""}${((step.rate - step.previousRate) * 100).toFixed(1)}pp`}</small></div>)}</div>
+        <div className={styles.funnelList}>{overview.funnel.map((step) => {
+          const tooFewSamples = step.denominator < MIN_RATE_SAMPLE;
+          return <div key={step.label}><div><span>{step.label}</span><strong className={tooFewSamples ? styles.lowConfidence : undefined}>{formatPercent(step.rate)}</strong></div><small>{step.numerator} of {step.denominator} · {tooFewSamples ? "too few samples to trust yet" : overview.window.allTime || step.previousRate === null || step.rate === null ? "No prior baseline" : `${step.rate >= step.previousRate ? "+" : ""}${((step.rate - step.previousRate) * 100).toFixed(1)}pp`}</small></div>;
+        })}</div>
       </article>
       <article className={styles.panel}>
         <div className={styles.panelHeading}><div><p className={styles.eyebrow}>Quality</p><h2>Result quality mix</h2></div><span>{totalQuality} shown</span></div>
-        {overview.quality.length === 0 ? <p className={styles.empty}>No results in this window yet.</p> : <div className={styles.qualityList}>{overview.quality.map((item) => <div key={item.label}><div><span>{formatEventName(item.label)}</span><strong>{item.value}</strong></div><i><b style={{ width: `${Math.max(2, (item.value / totalQuality) * 100)}%` }} /></i></div>)}</div>}
+        {overview.quality.length === 0 ? <p className={styles.empty}>No results in this window yet.</p> : <>
+          {(() => {
+            const noDetection = overview.quality.find((item) => item.label === "no_detection");
+            const share = noDetection && totalQuality ? noDetection.value / totalQuality : 0;
+            return share >= NO_DETECTION_ALERT_THRESHOLD ? <p className={styles.qualityAlert}>{formatPercent(share)} of scans found nothing at all</p> : null;
+          })()}
+          <div className={styles.qualityList}>{overview.quality.map((item) => <div key={item.label}><div><span>{formatEventName(item.label)}</span><strong className={item.label === "no_detection" ? styles.negative : undefined}>{item.value}</strong></div><i><b className={item.label === "no_detection" ? styles.qualityBarWarning : undefined} style={{ width: `${Math.max(2, (item.value / totalQuality) * 100)}%` }} /></i></div>)}</div>
+        </>}
       </article>
       <article className={styles.panel}>
         <div className={styles.panelHeading}><div><p className={styles.eyebrow}>Audience</p><h2>Unique installations</h2></div><span>Pseudonymous</span></div>
