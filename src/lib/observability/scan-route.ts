@@ -2,6 +2,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { queueAnalyticsEvent } from "@/lib/analytics/events";
 import { isScannerMetricsEnabled } from "@/lib/env";
+import { checkSharedRateLimit, type GuardScope } from "@/lib/observability/redis-guard";
 
 // `access_restore` is an email-guessing surface, so it is rate limited by the
 // same keyed digest as the scan routes. `access_redeem` makes an outbound
@@ -9,7 +10,7 @@ import { isScannerMetricsEnabled } from "@/lib/env";
 // digest. Neither calls scanJsonResponse — its Server-Timing headers and
 // scanner-metrics gating are specific to the camera routes — so both log
 // through logAccessRequest below instead.
-type ScanRoute = "preflight" | "analyze" | "recovery_label" | "access_restore" | "access_redeem";
+type ScanRoute = GuardScope;
 
 type ScanRouteTiming = {
   route: ScanRoute;
@@ -60,7 +61,7 @@ function clearExpiredBuckets(store: Map<string, RateLimitBucket>, now: number) {
  * no claim to be a distributed Railway-wide limiter; use Redis/database
  * backing before production traffic spans several instances.
  */
-export function checkScanRateLimit(request: Request, config: RateLimitConfig) {
+function checkProcessRateLimit(request: Request, config: RateLimitConfig) {
   const now = Date.now();
   const store = rateLimitStore();
   // The store is capped at a small size, so eagerly purge expired keyed
@@ -83,6 +84,22 @@ export function checkScanRateLimit(request: Request, config: RateLimitConfig) {
 
   store.set(key, { count: 1, resetAt: now + config.windowMs });
   return { allowed: true, retryAfterSeconds: 0 };
+}
+
+/**
+ * Railway production always uses Redis so a replica or restart cannot reset a
+ * quota. The small process guard remains only for local development/tests
+ * without Redis, keeping mock UI work possible without weakening production.
+ */
+export async function checkScanRateLimit(request: Request, config: RateLimitConfig): Promise<{ allowed: boolean; retryAfterSeconds: number; unavailable?: boolean }> {
+  if (process.env.REDIS_URL || process.env.NODE_ENV === "production") {
+    try {
+      return await checkSharedRateLimit(request, config.scope, process.env);
+    } catch {
+      return { allowed: false, retryAfterSeconds: 1, unavailable: true };
+    }
+  }
+  return checkProcessRateLimit(request, config);
 }
 
 /**

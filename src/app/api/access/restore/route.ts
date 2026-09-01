@@ -44,13 +44,14 @@ export async function POST(request: Request) {
   const config = getAccessPassConfig();
   if (!config) return respond({ error: "unavailable" }, 503);
 
-  const rateLimit = checkScanRateLimit(request, {
+  const rateLimit = await checkScanRateLimit(request, {
     scope: "access_restore",
     limit: 10,
     windowMs: 60_000,
     secret: process.env.RATE_LIMIT_SECRET,
   });
   if (!rateLimit.allowed) {
+    if (rateLimit.unavailable) return respond({ error: "unavailable" }, 503);
     return respond({ error: "rate_limited" }, 429, { "Retry-After": String(rateLimit.retryAfterSeconds) });
   }
 

@@ -46,13 +46,14 @@ export async function POST(request: Request) {
 
   // Ahead of the Stripe call on purpose: a loop of junk session ids would
   // otherwise rate limit the Stripe account and break redemption for buyers.
-  const rateLimit = checkScanRateLimit(request, {
+  const rateLimit = await checkScanRateLimit(request, {
     scope: "access_redeem",
     limit: 10,
     windowMs: 60_000,
     secret: process.env.RATE_LIMIT_SECRET,
   });
   if (!rateLimit.allowed) {
+    if (rateLimit.unavailable) return respond({ error: "unavailable" }, 503);
     return respond({ error: "rate_limited" }, 429, { "Retry-After": String(rateLimit.retryAfterSeconds) });
   }
 

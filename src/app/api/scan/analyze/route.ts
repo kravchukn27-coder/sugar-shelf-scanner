@@ -19,13 +19,14 @@ export async function POST(request: Request) {
     dbProbeMs,
     catalogResolutionMs,
   });
-  const rateLimit = checkScanRateLimit(request, {
+  const rateLimit = await checkScanRateLimit(request, {
     scope: "analyze",
     limit: 25,
     windowMs: 60_000,
     secret: process.env.RATE_LIMIT_SECRET,
   });
   if (!rateLimit.allowed) {
+    if (rateLimit.unavailable) return respond({ error: "Scan protection is temporarily unavailable.", code: "rate_limiter_unavailable" }, 503);
     const response = respond({ error: "Too many scans. Please wait a moment and try again.", code: "rate_limited" }, 429);
     response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
     return response;

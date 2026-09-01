@@ -8,6 +8,7 @@ import {
 import type { ServerEnv } from "@/lib/env";
 import { estimateGeminiCost } from "@/lib/analytics/gemini-cost";
 import { logVisionTelemetry, logVisionUsageTelemetry, type VisionOutcome } from "@/lib/observability/vision";
+import { acquireGeminiPermit, reserveGeminiRequest } from "@/lib/observability/redis-guard";
 
 const LABEL_TIMEOUT_MS = 30_000;
 const MAX_LABEL_IMAGE_BYTES = 6 * 1024 * 1024;
@@ -20,7 +21,7 @@ export class NutritionLabelRequestError extends Error {
   constructor(
     message: string,
     public readonly status: number,
-    public readonly code: "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response",
+    public readonly code: "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response" | "rate_limiter_unavailable",
   ) {
     super(message);
     this.name = "NutritionLabelRequestError";
@@ -130,6 +131,14 @@ export async function extractNutritionLabelWithGemini(input: NutritionLabelRecov
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), LABEL_TIMEOUT_MS);
     try {
+      let release: (() => Promise<void>) | undefined;
+      try {
+        release = await acquireGeminiPermit("nutrition_label");
+        await reserveGeminiRequest();
+      } catch {
+        if (release) await release();
+        throw new NutritionLabelRequestError("Scan protection is temporarily unavailable.", 503, "rate_limiter_unavailable");
+      }
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.GEMINI_VISION_MODEL)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -139,23 +148,27 @@ export async function extractNutritionLabelWithGemini(input: NutritionLabelRecov
           generationConfig: { responseMimeType: "application/json", responseSchema: responseSchema() },
         }),
       });
-      if (!response.ok) throw new NutritionLabelRequestError("Nutrition label reading is temporarily unavailable. Take another photo and try again.", response.status >= 400 && response.status < 500 ? 422 : 502, "provider_error");
-      const payload = await response.json();
-      const usage = z.object({ usageMetadata: usageSchema.optional() }).passthrough().safeParse(payload).data?.usageMetadata;
-      if (usage && process.env.VISION_USAGE_METRICS_ENABLED === "true") {
-        const estimate = estimateGeminiCost(env.GEMINI_VISION_MODEL, usage);
-        logVisionUsageTelemetry({
-          operation: "nutrition_label",
-          model: env.GEMINI_VISION_MODEL,
-          durationMs: Math.round(performance.now() - startedAt),
-          status: 200,
-          ...usage,
-          ...(estimate ? { pricingVersion: estimate.pricingVersion, estimatedCostUsd: estimate.estimatedCostUsd } : {}),
-        });
+      try {
+        if (!response.ok) throw new NutritionLabelRequestError("Nutrition label reading is temporarily unavailable. Take another photo and try again.", response.status >= 400 && response.status < 500 ? 422 : 502, "provider_error");
+        const payload = await response.json();
+        const usage = z.object({ usageMetadata: usageSchema.optional() }).passthrough().safeParse(payload).data?.usageMetadata;
+        if (usage && process.env.VISION_USAGE_METRICS_ENABLED === "true") {
+          const estimate = estimateGeminiCost(env.GEMINI_VISION_MODEL, usage);
+          logVisionUsageTelemetry({
+            operation: "nutrition_label",
+            model: env.GEMINI_VISION_MODEL,
+            durationMs: Math.round(performance.now() - startedAt),
+            status: 200,
+            ...usage,
+            ...(estimate ? { pricingVersion: estimate.pricingVersion, estimatedCostUsd: estimate.estimatedCostUsd } : {}),
+          });
+        }
+        const parsed = parseProviderResponse(payload);
+        logAttempt(env, receivedAt, startedAt);
+        return parsed;
+      } finally {
+        await release();
       }
-      const parsed = parseProviderResponse(payload);
-      logAttempt(env, receivedAt, startedAt);
-      return parsed;
     } finally {
       clearTimeout(timeout);
     }

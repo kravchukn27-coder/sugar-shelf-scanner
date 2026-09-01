@@ -8,6 +8,46 @@
 - Required server credentials remain server-only. Never expose Gemini keys,
   database URLs or source identifiers to the browser.
 
+## Shared Redis rate limits and Gemini budget
+
+Public traffic requires a Railway Redis service connected through private
+networking. Set the API service's `REDIS_URL` as a Railway reference variable,
+and set a durable `RATE_LIMIT_SECRET` of at least 16 characters. In production
+the scanner fails closed with `503 rate_limiter_unavailable` if either Redis or
+the secret is unavailable; it must not fall back to the process-local limiter.
+
+The browser sends a random local `X-Sugar-Installation` value. Redis stores
+only HMAC digests of it and the forwarded IP address; installation limits make
+shared Wi-Fi fair, while IP limits remain the abuse boundary.
+
+| Route | Installation | IP |
+| --- | ---: | ---: |
+| `preflight` | 90/min | 180/min |
+| `analyze` | 10/min | 30/min |
+| nutrition-label recovery | 3/10 min | 10/10 min |
+| barcode recovery | 20/10 min | 60/10 min |
+| access restore/redeem | 5/15 min | 15/15 min |
+
+Every real Gemini call (including an analyze hedge/retry) also consumes the
+global Redis-backed request budget and a short concurrency lease. Before
+production deploy set these Railway variables; missing/invalid values fail
+closed before Gemini is called:
+
+```text
+GEMINI_GLOBAL_CONCURRENCY_LIMIT=15
+GEMINI_PREFLIGHT_CONCURRENCY_LIMIT=12
+GEMINI_ANALYZE_CONCURRENCY_LIMIT=5
+GEMINI_NUTRITION_LABEL_CONCURRENCY_LIMIT=2
+GEMINI_REQUESTS_PER_MINUTE_LIMIT=120
+GEMINI_REQUESTS_PER_DAY_LIMIT=10000
+```
+
+These are launch guardrails, not permanent capacity targets. Enable
+`VISION_USAGE_METRICS_ENABLED=true` for a time-bounded 24–48 hour observation,
+compare actual tokens/cost against the Gemini budget, then revise the global
+request caps with recorded evidence. Test Redis failure, exhausted analyze
+quota and an exhausted global Gemini quota in staging before sending traffic.
+
 ## Deploy gate
 
 Before each deploy run:

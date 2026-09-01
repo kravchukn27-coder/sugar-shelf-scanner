@@ -8,7 +8,7 @@ import { queueAnalyticsEvent } from "@/lib/analytics/events";
  * collects stdout, so every field must be safe to retain outside the request.
  */
 export type VisionOperation = "preflight" | "analyze" | "nutrition_label";
-export type VisionOutcome = "success" | "client_cancelled" | "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response" | "not_configured" | "unexpected_error";
+export type VisionOutcome = "success" | "client_cancelled" | "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response" | "rate_limiter_unavailable" | "not_configured" | "unexpected_error";
 
 type VisionTelemetry = {
   operation: VisionOperation;

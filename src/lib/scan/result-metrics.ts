@@ -3,7 +3,7 @@ import type { ResultMetrics } from "@/lib/observability/result-metrics";
 const RESULT_METRICS_URL = "/api/scan/result-metrics";
 const ANALYTICS_INSTALLATION_KEY = "sugar:analytics-installation:v1";
 
-function anonymousInstallationId(): string | undefined {
+export function anonymousInstallationId(): string | undefined {
   try {
     if (typeof window === "undefined") return undefined;
     const existing = window.localStorage.getItem(ANALYTICS_INSTALLATION_KEY);

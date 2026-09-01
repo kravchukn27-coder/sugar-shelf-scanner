@@ -28,7 +28,7 @@ import { applyCameraView, getCameraControls, getCameraDeviceId, preferCameraCapt
 import { shouldRunScannerScheduler, shouldShowLiveViewfinder, transitionScannerLifecycle, type ScannerLifecycleEvent, type ScannerLifecycleState } from "@/lib/scan/scanner-lifecycle";
 import { createScannerMetrics, type ScannerMetricsCompletion } from "@/lib/scan/scanner-metrics";
 import { classifyScanResultAnalytics } from "@/lib/scan/result-analytics";
-import { reportResultMetric } from "@/lib/scan/result-metrics";
+import { anonymousInstallationId, reportResultMetric } from "@/lib/scan/result-metrics";
 import { sampleLuma } from "@/lib/scan/frame-stillness";
 import { sampleFrameQuality } from "@/lib/scan/frame-quality";
 import { createInitialLiveFrameBaseline, decideLiveFrameSchedulerTick } from "@/lib/scan/live-frame-scheduler";
@@ -147,6 +147,12 @@ function browserStorage(): Storage | null {
   } catch {
     return null;
   }
+}
+
+/** A random local value only improves fair sharing behind a NAT; server code HMACs it. */
+function protectedJsonHeaders() {
+  const installation = anonymousInstallationId();
+  return { "content-type": "application/json", ...(installation ? { "x-sugar-installation": installation } : {}) };
 }
 
 function accessGrantedCopy(expiresAt: string): string {
@@ -292,7 +298,7 @@ export default function HomePage() {
       try {
         const response = await fetch("/api/access/redeem", {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: protectedJsonHeaders(),
           body: JSON.stringify({ checkoutSessionId }),
         });
         if (cancelled || !response.ok) return;
@@ -422,7 +428,7 @@ export default function HomePage() {
     let requestTimingFinished = false;
     const finishRequestTiming = () => { if (!requestTimingFinished) { scannerMetrics.current.finishRequest("analyze", requestStartedAt); requestTimingFinished = true; } };
     try {
-      const response = await fetch("/api/scan/analyze", { method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal, body: JSON.stringify({ imageBase64: image.split(",")[1], mimeType: "image/jpeg", context: "shelf", clientFrameId: `frame-${++frame.current}`, ...(expectedCount === undefined ? {} : { expectedProductCount: expectedCount }) }) });
+      const response = await fetch("/api/scan/analyze", { method: "POST", headers: protectedJsonHeaders(), signal: controller.signal, body: JSON.stringify({ imageBase64: image.split(",")[1], mimeType: "image/jpeg", context: "shelf", clientFrameId: `frame-${++frame.current}`, ...(expectedCount === undefined ? {} : { expectedProductCount: expectedCount }) }) });
       finishRequestTiming(); noteMetricsCapability(response);
       if (id !== session.current) return;
       if (!response.ok) { setFailure(await scanFailureMessage(response)); dispatch("ANALYZE_FAILURE"); completeScanMetrics(id, "request_failure"); return; }
@@ -453,7 +459,7 @@ export default function HomePage() {
     let requestTimingFinished = false;
     const finishRequestTiming = () => { if (!requestTimingFinished) { scannerMetrics.current.finishRequest("preflight", requestStartedAt); requestTimingFinished = true; } };
     try {
-      const response = await fetch("/api/scan/preflight", { method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal, body: JSON.stringify({ imageBase64: image.split(",")[1], mimeType: "image/jpeg", context: "shelf", clientFrameId: `preflight-${++frame.current}` }) });
+      const response = await fetch("/api/scan/preflight", { method: "POST", headers: protectedJsonHeaders(), signal: controller.signal, body: JSON.stringify({ imageBase64: image.split(",")[1], mimeType: "image/jpeg", context: "shelf", clientFrameId: `preflight-${++frame.current}` }) });
       finishRequestTiming(); noteMetricsCapability(response);
       if (id !== session.current) return;
       if (!response.ok) {
@@ -561,7 +567,7 @@ export default function HomePage() {
     try {
       const response = await fetch("/api/access/restore", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: protectedJsonHeaders(),
         body: JSON.stringify({ email }),
       });
       if (!response.ok) {
@@ -663,7 +669,7 @@ export default function HomePage() {
         const consented = window.confirm(consentMessage);
         if (!consented) { setRecoveryMessage(declinedMessage); return; }
         if (recoveryToken !== recoveryAttempt.current) return;
-        const response = await fetch("/api/scan/recovery-label", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ imageBase64: image.split(",")[1], mimeType: "image/jpeg", labelCaptureConsented: true }) });
+        const response = await fetch("/api/scan/recovery-label", { method: "POST", headers: protectedJsonHeaders(), body: JSON.stringify({ imageBase64: image.split(",")[1], mimeType: "image/jpeg", labelCaptureConsented: true }) });
         if (recoveryToken !== recoveryAttempt.current) return;
         const result = await response.json() as NutritionLabelRecoveryResponse;
         if (recoveryToken !== recoveryAttempt.current) return;
@@ -683,7 +689,7 @@ export default function HomePage() {
           return;
         }
         setRecovery((current) => current?.id === camera.id ? { ...current, state: "barcode_found", barcode } : current);
-        const lookup = await fetch("/api/scan/recover", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ gtin: barcode }) });
+        const lookup = await fetch("/api/scan/recover", { method: "POST", headers: protectedJsonHeaders(), body: JSON.stringify({ gtin: barcode }) });
         if (recoveryToken !== recoveryAttempt.current) return;
         if (!lookup.ok) throw new Error("lookup");
         const result = await lookup.json() as BarcodeRecoveryResponse;

@@ -4,6 +4,7 @@ import type { AnalyzeScanRequest, AnalyzeScanResponse, Detection, PreflightScanR
 import type { NormalizedBox, ScoreBand } from "@/lib/contracts/product";
 import { isVisionUsageMetricsEnabled, type ServerEnv } from "@/lib/env";
 import { logVisionTelemetry, logVisionUsageTelemetry, type VisionOperation, type VisionOutcome } from "@/lib/observability/vision";
+import { acquireGeminiPermit, reserveGeminiRequest, type GeminiOperation } from "@/lib/observability/redis-guard";
 
 // Multimodal detection on a full shelf can take longer than a text response.
 // The scanner freezes the captured frame while waiting, so prefer a reliable
@@ -64,7 +65,7 @@ export class VisionRequestError extends Error {
   constructor(
     message: string,
     public readonly status: number,
-    public readonly code: "client_cancelled" | "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response",
+    public readonly code: "client_cancelled" | "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response" | "rate_limiter_unavailable",
   ) {
     super(message);
     this.name = "VisionRequestError";
@@ -307,6 +308,26 @@ export function normalizeGeminiDetections(items: unknown[]): Detection[] {
   return detections;
 }
 
+/** Every actual provider call, including a hedge or retry, holds a shared lease. */
+async function guardedGeminiFetch(operation: GeminiOperation, input: RequestInfo | URL, init: RequestInit) {
+  // Preserve synchronous dispatch in local/test mode: cancellation tests and
+  // the camera lifecycle rely on fetch observing the already-wired signal.
+  if (!process.env.REDIS_URL && process.env.NODE_ENV !== "production") return fetch(input, init);
+  let release: (() => Promise<void>) | undefined;
+  try {
+    release = await acquireGeminiPermit(operation);
+    await reserveGeminiRequest();
+  } catch {
+    if (release) await release();
+    throw new VisionRequestError("Scan protection is temporarily unavailable.", 503, "rate_limiter_unavailable");
+  }
+  try {
+    return await fetch(input, init);
+  } finally {
+    await release();
+  }
+}
+
 async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, timeoutMs: number, requestSignal?: AbortSignal): Promise<AnalyzeScanResponse> {
   const attemptStartedAt = performance.now();
   const abort = createAttemptAbort(requestSignal, timeoutMs);
@@ -316,7 +337,7 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, timeout
     // between attempts) — the assertion just satisfies a type that cannot
     // narrow across the function boundary.
     if (abort.signal.aborted) throw abortVisionError(abort.reason());
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.GEMINI_VISION_MODEL)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY!)}`, {
+    const response = await guardedGeminiFetch("analyze", `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.GEMINI_VISION_MODEL)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY!)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       signal: abort.signal,
@@ -492,7 +513,7 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
     abort = createAttemptAbort(requestSignal, GEMINI_PREFLIGHT_TIMEOUT_MS);
     try {
     if (abort.signal.aborted) throw abortVisionError(abort.reason());
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`, {
+    const response = await guardedGeminiFetch("preflight", `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       signal: abort.signal,
