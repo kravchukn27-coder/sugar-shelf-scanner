@@ -5,6 +5,8 @@ import styles from "./analytics-dashboard.module.css";
 import type { DashboardOverview } from "@/lib/analytics/dashboard";
 
 const REFRESH_MS = 30_000;
+type OverviewRange = "24h" | "3d" | "7d" | "all";
+const RANGE_LABELS: Record<OverviewRange, string> = { "24h": "Last 24 hours", "3d": "Last 3 days", "7d": "Last 7 days", all: "All time" };
 
 function formatValue(value: number | null, unit: "count" | "usd") {
   if (value === null) return "Unpriced";
@@ -53,12 +55,13 @@ export default function AnalyticsDashboard() {
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "unauthorized" | "unavailable">("idle");
   const [view, setView] = useState<"overview" | "gemini">("overview");
+  const [range, setRange] = useState<OverviewRange>("24h");
 
-  const refresh = useCallback(async (token: string) => {
+  const refresh = useCallback(async (token: string, selectedRange: OverviewRange) => {
     if (!token) return;
     setStatus("loading");
     try {
-      const response = await fetch("/api/admin/analytics/overview", {
+      const response = await fetch(`/api/admin/analytics/overview?range=${selectedRange}`, {
         headers: { authorization: `Bearer ${token}` },
         cache: "no-store",
       });
@@ -73,17 +76,17 @@ export default function AnalyticsDashboard() {
 
   useEffect(() => {
     if (!secret) return;
-    void refresh(secret);
-    const timer = window.setInterval(() => void refresh(secret), REFRESH_MS);
+    void refresh(secret, range);
+    const timer = window.setInterval(() => void refresh(secret, range), REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [refresh, secret]);
+  }, [refresh, secret, range]);
 
   const totalQuality = useMemo(() => overview?.quality.reduce((total, item) => total + item.value, 0) ?? 0, [overview]);
   const geminiTotals = useMemo(() => overview?.geminiHealth.days.reduce((total, day) => ({ requests: total.requests + day.requests, errors: total.errors + day.errors, tokens: total.tokens + day.totalTokens, cost: total.cost === null || day.estimatedCostUsd === null ? null : total.cost + day.estimatedCostUsd }), { requests: 0, errors: 0, tokens: 0, cost: 0 as number | null }) ?? { requests: 0, errors: 0, tokens: 0, cost: null }, [overview]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void refresh(secret);
+    void refresh(secret, range);
   }
 
   if (!overview) {
@@ -103,8 +106,8 @@ export default function AnalyticsDashboard() {
 
   return <main className={styles.page}>
     <header className={styles.header}>
-      <div><p className={styles.eyebrow}>Sugar Camera · Internal</p><h1>Product pulse</h1><p className={styles.subhead}>Live 24-hour view · refreshes every 30 seconds</p></div>
-      <div className={styles.freshness}><span className={styles.liveDot} /> Updated {new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(overview.generatedAt))}<button onClick={() => void refresh(secret)} disabled={status === "loading"}>{status === "loading" ? "Refreshing…" : "Refresh"}</button></div>
+      <div><p className={styles.eyebrow}>Sugar Camera · Internal</p><h1>Product pulse</h1><p className={styles.subhead}>{RANGE_LABELS[range]} · refreshes every 30 seconds</p></div>
+      <div className={styles.freshness}><span className={styles.liveDot} /> Updated {new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(overview.generatedAt))}<button onClick={() => void refresh(secret, range)} disabled={status === "loading"}>{status === "loading" ? "Refreshing…" : "Refresh"}</button></div>
     </header>
 
     {status === "unavailable" && <p className={styles.inlineError} role="alert">The last refresh failed; values below are from the previous successful update.</p>}
@@ -112,17 +115,18 @@ export default function AnalyticsDashboard() {
     <nav className={styles.tabs} aria-label="Analytics views"><button className={view === "overview" ? styles.tabActive : undefined} onClick={() => setView("overview")}>Product pulse</button><button className={view === "gemini" ? styles.tabActive : undefined} onClick={() => setView("gemini")}>Gemini Health</button></nav>
 
     {view === "overview" && <>
+    <div className={styles.rangeTabs} aria-label="Product pulse date range">{(Object.keys(RANGE_LABELS) as OverviewRange[]).map((item) => <button key={item} className={range === item ? styles.rangeActive : undefined} onClick={() => setRange(item)}>{item === "all" ? "All time" : item}</button>)}</div>
     <section aria-label="Current metrics" className={styles.metrics}>
       {overview.metrics.map((metric) => <article className={styles.metricCard} key={metric.key}>
         <p>{metric.label}</p><strong>{formatValue(metric.value, metric.unit)}</strong>
-        <span className={deltaTone(metric.value, metric.previousValue, metric.key)}>{formatDelta(metric.value, metric.previousValue)}</span>
+        <span className={overview.window.allTime ? styles.neutral : deltaTone(metric.value, metric.previousValue, metric.key)}>{overview.window.allTime ? "All recorded data" : formatDelta(metric.value, metric.previousValue)}</span>
       </article>)}
     </section>
 
     <section className={styles.secondaryGrid}>
       <article className={styles.panel}>
-        <div className={styles.panelHeading}><div><p className={styles.eyebrow}>Funnel</p><h2>Conversion rates</h2></div><span>24h</span></div>
-        <div className={styles.funnelList}>{overview.funnel.map((step) => <div key={step.label}><div><span>{step.label}</span><strong>{formatPercent(step.rate)}</strong></div><small>{step.numerator} of {step.denominator} · {step.previousRate === null || step.rate === null ? "No prior baseline" : `${step.rate >= step.previousRate ? "+" : ""}${((step.rate - step.previousRate) * 100).toFixed(1)}pp`}</small></div>)}</div>
+        <div className={styles.panelHeading}><div><p className={styles.eyebrow}>Funnel</p><h2>Conversion rates</h2></div><span>{range === "all" ? "All time" : range}</span></div>
+        <div className={styles.funnelList}>{overview.funnel.map((step) => <div key={step.label}><div><span>{step.label}</span><strong>{formatPercent(step.rate)}</strong></div><small>{step.numerator} of {step.denominator} · {overview.window.allTime || step.previousRate === null || step.rate === null ? "No prior baseline" : `${step.rate >= step.previousRate ? "+" : ""}${((step.rate - step.previousRate) * 100).toFixed(1)}pp`}</small></div>)}</div>
       </article>
       <article className={styles.panel}>
         <div className={styles.panelHeading}><div><p className={styles.eyebrow}>Quality</p><h2>Result quality mix</h2></div><span>{totalQuality} shown</span></div>

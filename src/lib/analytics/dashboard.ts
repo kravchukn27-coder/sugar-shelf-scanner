@@ -23,7 +23,7 @@ export type DashboardMetric = {
 
 export type DashboardOverview = {
   generatedAt: string;
-  window: { startsAt: string; endsAt: string; previousStartsAt: string };
+  window: { startsAt: string; endsAt: string; previousStartsAt: string; allTime: boolean };
   metrics: DashboardMetric[];
   funnel: DashboardFunnelStep[];
   users: DashboardUniqueUsers;
@@ -134,12 +134,13 @@ function ratio(numerator: number, denominator: number): number | null {
 export async function readDashboardOverview(
   db: SqlQueryExecutor,
   now: Date = new Date(),
-  windowHours = 24,
+  windowHours: number | null = 24,
   cloudBilling: CloudBillingSummary = { state: "not_configured", currency: null, actualGoogleLast24Hours: null, actualGoogleLast30Days: null, geminiLast24Hours: null, geminiLast30Days: null, latestUsageAt: null },
 ): Promise<DashboardOverview> {
   const endsAt = now;
-  const startsAt = new Date(endsAt.getTime() - windowHours * 3_600_000);
-  const previousStartsAt = new Date(startsAt.getTime() - windowHours * 3_600_000);
+  const allTime = windowHours === null;
+  const startsAt = allTime ? new Date(0) : new Date(endsAt.getTime() - windowHours * 3_600_000);
+  const previousStartsAt = allTime ? startsAt : new Date(startsAt.getTime() - windowHours * 3_600_000);
 
   const metrics = await db.query<MetricRow>(`
     WITH metric_events AS (
@@ -340,7 +341,7 @@ export async function readDashboardOverview(
   const experienceRow = scannerExperience.rows[0];
   return {
     generatedAt: now.toISOString(),
-    window: { startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), previousStartsAt: previousStartsAt.toISOString() },
+    window: { startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), previousStartsAt: previousStartsAt.toISOString(), allTime },
     metrics: dashboardMetrics,
     funnel,
     users: { day: numeric(usersRow?.day ?? null), week: numeric(usersRow?.week ?? null), month: numeric(usersRow?.month ?? null) },

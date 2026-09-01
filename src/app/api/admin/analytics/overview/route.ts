@@ -22,6 +22,14 @@ function response(body: unknown, status: number) {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
 
+function readWindowHours(request: Request): number | null {
+  const range = new URL(request.url).searchParams.get("range");
+  if (range === "3d") return 72;
+  if (range === "7d") return 168;
+  if (range === "all") return null;
+  return 24;
+}
+
 /** A browser never receives analytics data until it proves possession of the admin secret. */
 export async function GET(request: Request) {
   if (!isAnalyticsDashboardConfigured()) return response({ error: "not_configured" }, 503);
@@ -29,7 +37,7 @@ export async function GET(request: Request) {
 
   try {
     const cloudBilling = await readCloudBillingSummary();
-    const data = await readDashboardOverview(getPool(process.env.DATABASE_URL!), new Date(), 24, cloudBilling);
+    const data = await readDashboardOverview(getPool(process.env.DATABASE_URL!), new Date(), readWindowHours(request), cloudBilling);
     return response(data, 200);
   } catch {
     // Keep database topology and query failures internal; the dashboard can
