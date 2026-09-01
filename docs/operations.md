@@ -28,6 +28,24 @@ shared Wi-Fi fair, while IP limits remain the abuse boundary.
 | barcode recovery | 20/10 min | 60/10 min |
 | access restore/redeem | 5/15 min | 15/15 min |
 
+## Image request body caps
+
+`analyze` and nutrition-label recovery accept at most **8 MiB + 64 KiB** of
+JSON; `preflight` accepts at most **3 MiB**. The limits account for base64
+expansion and the small JSON envelope around the existing 6 MiB/2 MiB decoded
+image limits. Each route rejects an oversized `Content-Length` before reading
+the body and enforces the same cap while streaming bodies without that header.
+It returns `413 { code: "body_too_large" }` before JSON parsing or Gemini.
+
+Railway's public edge currently documents upload-duration and header limits,
+but not a configurable request-body-size cap. Railway Edge Rules can add a
+best-effort block for an oversized `Content-Length`, but cannot protect against
+chunked uploads without that header. If an external WAF/CDN is placed before
+Railway, configure it to reject these three paths at the same caps; retain the
+application streaming guard as the authoritative backstop. Test a chunked
+oversized upload and assert `413` with zero Gemini calls after every proxy/WAF
+change.
+
 Every real Gemini call (including an analyze hedge/retry) also consumes the
 global Redis-backed request budget and a short concurrency lease. Before
 production deploy set these Railway variables; missing/invalid values fail

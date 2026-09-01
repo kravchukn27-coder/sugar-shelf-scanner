@@ -5,6 +5,7 @@ import { checkScanRateLimit, scanJsonResponse } from "@/lib/observability/scan-r
 import { analyzeWithGemini, VisionRequestError } from "@/lib/vision/gemini";
 import { resolveScan } from "@/lib/catalog/resolve-scan";
 import { createRuntimeCatalog } from "@/lib/catalog/runtime-catalog";
+import { IMAGE_JSON_BODY_LIMITS, readLimitedJson } from "@/lib/http/limited-json";
 
 export const runtime = "nodejs";
 
@@ -32,8 +33,9 @@ export async function POST(request: Request) {
     return response;
   }
 
-  const body = await request.json().catch(() => null);
-  const parsed = analyzeScanRequestSchema.safeParse(body);
+  const body = await readLimitedJson(request, IMAGE_JSON_BODY_LIMITS.analyze);
+  if (body.kind === "too_large") return respond({ error: "Request body is too large.", code: "body_too_large" }, 413);
+  const parsed = analyzeScanRequestSchema.safeParse(body.kind === "ok" ? body.value : null);
   if (!parsed.success) {
     return respond({ error: "Invalid scan request", issues: parsed.error.flatten() }, 400);
   }

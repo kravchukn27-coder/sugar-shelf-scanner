@@ -2,6 +2,7 @@ import { nutritionLabelRecoveryRequestSchema, nutritionLabelRecoveryResponseSche
 import { getServerEnv } from "@/lib/env";
 import { checkScanRateLimit, scanJsonResponse } from "@/lib/observability/scan-route";
 import { extractNutritionLabelWithGemini, NutritionLabelRequestError } from "@/lib/recovery/nutrition-label";
+import { IMAGE_JSON_BODY_LIMITS, readLimitedJson } from "@/lib/http/limited-json";
 
 export const runtime = "nodejs";
 
@@ -30,8 +31,9 @@ export async function POST(request: Request) {
     return response;
   }
 
-  const body = await request.json().catch(() => null);
-  const parsed = nutritionLabelRecoveryRequestSchema.safeParse(body);
+  const body = await readLimitedJson(request, IMAGE_JSON_BODY_LIMITS.recoveryLabel);
+  if (body.kind === "too_large") return respond({ error: "Request body is too large.", code: "body_too_large" }, 413);
+  const parsed = nutritionLabelRecoveryRequestSchema.safeParse(body.kind === "ok" ? body.value : null);
   if (!parsed.success) return respond({ error: "A nutrition-label photo requires your consent.", code: "invalid_request" }, 400);
 
   let env;

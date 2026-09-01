@@ -2,6 +2,7 @@ import { preflightScanRequestSchema, preflightScanResponseSchema } from "@/lib/c
 import { getServerEnv } from "@/lib/env";
 import { checkScanRateLimit, scanJsonResponse } from "@/lib/observability/scan-route";
 import { preflightWithGemini, VisionRequestError } from "@/lib/vision/gemini";
+import { IMAGE_JSON_BODY_LIMITS, readLimitedJson } from "@/lib/http/limited-json";
 
 export const runtime = "nodejs";
 
@@ -26,8 +27,9 @@ export async function POST(request: Request) {
     return response;
   }
 
-  const body = await request.json().catch(() => null);
-  const parsed = preflightScanRequestSchema.safeParse(body);
+  const body = await readLimitedJson(request, IMAGE_JSON_BODY_LIMITS.preflight);
+  if (body.kind === "too_large") return respond({ error: "Request body is too large.", code: "body_too_large" }, 413);
+  const parsed = preflightScanRequestSchema.safeParse(body.kind === "ok" ? body.value : null);
   if (!parsed.success) {
     return respond({ error: "Invalid preflight request", issues: parsed.error.flatten() }, 400);
   }
