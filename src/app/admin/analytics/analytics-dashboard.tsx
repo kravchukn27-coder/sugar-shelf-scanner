@@ -128,19 +128,30 @@ function relativeDeltaTone(current: number | null, baseline: number | null, lowe
 }
 
 /**
- * Per-operation averages across every day currently shown in the day-to-day
- * table, so each row can say "better/worse than typical" instead of only
- * "better/worse than the archived Aug 26-27 window" — useful even once
- * today's numbers no longer resemble late August at all. Rate metrics
- * (success, timeout) are pooled (sum of counts, not mean of daily %s) so a
- * high-volume day is not diluted by a low-volume one; latency figures are a
- * simple mean of the daily p50/p95/queue values, which is the standard,
- * if approximate, way to summarize percentiles across days.
+ * Per-operation baseline = the average over every day EXCEPT the most
+ * recent one, so "today" is compared against "typical, before today" —
+ * not against an average that already has today baked into it. That
+ * self-inclusion was the bug in the first version of this: with only one
+ * day of data on record (this app's log buffer resets on every redeploy),
+ * "today vs average" was silently "today vs itself", always reading
+ * ≈avg. Once a real prior day exists it becomes part of the baseline;
+ * until then this correctly returns no baseline (null) rather than a
+ * meaningless one. Rate metrics (success, timeout) are pooled (sum of
+ * counts, not mean of daily %s) so a high-volume day is not diluted by a
+ * low-volume one; latency figures are a simple mean of the daily
+ * p50/p95/queue values, the standard, if approximate, way to summarize
+ * percentiles across days.
  */
-function useOperationAverages(dailyOperations: { operation: string; requests: number; successes: number; timeoutErrors: number; p50LatencyMs: number | null; p95LatencyMs: number | null; p95QueueMs: number | null }[] | undefined) {
+function useOperationAverages(dailyOperations: { day: string; operation: string; requests: number; successes: number; timeoutErrors: number; p50LatencyMs: number | null; p95LatencyMs: number | null; p95QueueMs: number | null }[] | undefined) {
   return useMemo(() => {
+    const latestDayByOperation = new Map<string, string>();
+    for (const day of dailyOperations ?? []) {
+      const current = latestDayByOperation.get(day.operation);
+      if (!current || day.day > current) latestDayByOperation.set(day.operation, day.day);
+    }
     const byOperation = new Map<string, { requests: number; successes: number; timeoutErrors: number; p50s: number[]; p95s: number[]; queues: number[] }>();
     for (const day of dailyOperations ?? []) {
+      if (day.day === latestDayByOperation.get(day.operation)) continue; // exclude "today" from its own baseline
       const bucket = byOperation.get(day.operation) ?? { requests: 0, successes: 0, timeoutErrors: 0, p50s: [], p95s: [], queues: [] };
       bucket.requests += day.requests;
       bucket.successes += day.successes;
