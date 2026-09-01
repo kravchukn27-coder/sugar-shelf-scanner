@@ -13,6 +13,11 @@ const serverEnvSchema = z.object({
   // comparison confounded by Gemini's own latency drifting hour to hour.
   // Unset (the default) disables the split entirely — no random branch runs.
   GEMINI_PREFLIGHT_MODEL_VARIANT_B: z.string().min(1).optional(),
+  // Same concurrent-split mechanism as the preflight variant above, applied
+  // to the full analyze call instead. A single choice is reused for the
+  // primary attempt, its hedge duplicate (if one fires), and the one
+  // transport-failure retry, so one logical scan never mixes two models.
+  GEMINI_ANALYZE_MODEL_VARIANT_B: z.string().min(1).optional(),
   DATABASE_URL: z.string().url().optional(),
   RATE_LIMIT_SECRET: z.string().min(16).optional(),
   // Optional: enables the free USDA Branded Foods fallback. Never expose it to iOS.

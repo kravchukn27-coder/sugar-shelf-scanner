@@ -328,7 +328,7 @@ async function guardedGeminiFetch(operation: GeminiOperation, input: RequestInfo
   }
 }
 
-async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, timeoutMs: number, requestSignal?: AbortSignal): Promise<AnalyzeScanResponse> {
+async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, model: string, timeoutMs: number, requestSignal?: AbortSignal): Promise<AnalyzeScanResponse> {
   const attemptStartedAt = performance.now();
   const abort = createAttemptAbort(requestSignal, timeoutMs);
   try {
@@ -337,7 +337,7 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, timeout
     // between attempts) — the assertion just satisfies a type that cannot
     // narrow across the function boundary.
     if (abort.signal.aborted) throw abortVisionError(abort.reason());
-    const response = await guardedGeminiFetch("analyze", `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.GEMINI_VISION_MODEL)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY!)}`, {
+    const response = await guardedGeminiFetch("analyze", `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY!)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       signal: abort.signal,
@@ -346,7 +346,7 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, timeout
         generationConfig: {
           // Shelf recognition is latency-sensitive. Configure the supported
           // low-latency thinking mode for the model selected in Railway.
-          thinkingConfig: thinkingConfigFor(env.GEMINI_VISION_MODEL),
+          thinkingConfig: thinkingConfigFor(model),
           responseMimeType: "application/json",
           responseSchema: {
             type: "OBJECT",
@@ -375,7 +375,7 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, timeout
       await throwGeminiProviderError(response, "analyze");
     }
     const payload = await response.json();
-    logGeminiUsage("analyze", env.GEMINI_VISION_MODEL, attemptStartedAt, payload);
+    logGeminiUsage("analyze", model, attemptStartedAt, payload);
     const parsed = parseGeminiText(payload, geminiResponseSchema);
     const detections = normalizeGeminiDetections(parsed.detections);
     return {
@@ -408,6 +408,7 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, timeout
 function attemptAnalyzeWithHedge(
   input: AnalyzeScanRequest,
   env: ServerEnv,
+  model: string,
   timeoutMs: number,
   requestSignal: AbortSignal | undefined,
 ): Promise<{ result: AnalyzeScanResponse; hedge: "primary_won" | "hedge_won" }> {
@@ -436,13 +437,13 @@ function attemptAnalyzeWithHedge(
       // Give the hedge the remaining budget, not a fresh full window — it
       // must not outlive the primary's own deadline.
       const hedgeTimeoutMs = Math.max(3_000, timeoutMs - GEMINI_HEDGE_DELAY_MS);
-      attemptAnalyze(input, env, hedgeTimeoutMs, requestSignal).then(
+      attemptAnalyze(input, env, model, hedgeTimeoutMs, requestSignal).then(
         (result) => succeed(result, "hedge_won"),
         (error: unknown) => fail(error),
       );
     }, GEMINI_HEDGE_DELAY_MS);
 
-    attemptAnalyze(input, env, timeoutMs, requestSignal).then(
+    attemptAnalyze(input, env, model, timeoutMs, requestSignal).then(
       (result) => { primarySettled = true; succeed(result, "primary_won"); },
       (error: unknown) => { primarySettled = true; fail(error); },
     );
@@ -459,6 +460,13 @@ function isRetryableAnalyzeFailure(error: unknown): boolean {
 
 export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEnv, receivedAt: number, requestSignal?: AbortSignal): Promise<AnalyzeScanResponse> {
   const startedAt = performance.now();
+  // Same concurrent A/B mechanism as preflight: chosen once per logical scan
+  // and reused for the primary attempt, its hedge duplicate, and the one
+  // transport-failure retry below, so a single scan's telemetry never mixes
+  // two model names and the hedge race never crosses model A with model B.
+  const model = env.GEMINI_ANALYZE_MODEL_VARIANT_B && Math.random() < 0.5
+    ? env.GEMINI_ANALYZE_MODEL_VARIANT_B
+    : env.GEMINI_VISION_MODEL;
   try {
     if (!env.GEMINI_API_KEY) throw new VisionRequestError("Gemini is not configured.", 503, "provider_error");
     const bytes = imageByteLength(input.imageBase64);
@@ -469,21 +477,21 @@ export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEn
     const eligibleForHedge = input.expectedProductCount !== undefined && input.expectedProductCount < GEMINI_HEDGE_MAX_EXPECTED_PRODUCTS;
     try {
       if (eligibleForHedge) {
-        const { result, hedge } = await attemptAnalyzeWithHedge(input, env, GEMINI_TIMEOUT_MS, requestSignal);
-        logAttempt("analyze", env.GEMINI_VISION_MODEL, receivedAt, startedAt, GEMINI_TIMEOUT_MS, undefined, hedge);
+        const { result, hedge } = await attemptAnalyzeWithHedge(input, env, model, GEMINI_TIMEOUT_MS, requestSignal);
+        logAttempt("analyze", model, receivedAt, startedAt, GEMINI_TIMEOUT_MS, undefined, hedge);
         return result;
       }
-      const result = await attemptAnalyze(input, env, GEMINI_TIMEOUT_MS, requestSignal);
-      logAttempt("analyze", env.GEMINI_VISION_MODEL, receivedAt, startedAt, GEMINI_TIMEOUT_MS);
+      const result = await attemptAnalyze(input, env, model, GEMINI_TIMEOUT_MS, requestSignal);
+      logAttempt("analyze", model, receivedAt, startedAt, GEMINI_TIMEOUT_MS);
       return result;
     } catch (firstError) {
       if (!isRetryableAnalyzeFailure(firstError)) throw firstError;
-      const result = await attemptAnalyze(input, env, GEMINI_ANALYZE_RETRY_TIMEOUT_MS, requestSignal);
-      logAttempt("analyze", env.GEMINI_VISION_MODEL, receivedAt, startedAt, GEMINI_TIMEOUT_MS + GEMINI_ANALYZE_RETRY_TIMEOUT_MS);
+      const result = await attemptAnalyze(input, env, model, GEMINI_ANALYZE_RETRY_TIMEOUT_MS, requestSignal);
+      logAttempt("analyze", model, receivedAt, startedAt, GEMINI_TIMEOUT_MS + GEMINI_ANALYZE_RETRY_TIMEOUT_MS);
       return result;
     }
   } catch (error) {
-    logAttempt("analyze", env.GEMINI_VISION_MODEL, receivedAt, startedAt, GEMINI_TIMEOUT_MS, error);
+    logAttempt("analyze", model, receivedAt, startedAt, GEMINI_TIMEOUT_MS, error);
     throw error;
   }
 }
