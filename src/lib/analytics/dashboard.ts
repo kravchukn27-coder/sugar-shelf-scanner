@@ -32,6 +32,7 @@ export type DashboardOverview = {
   quality: { label: string; value: number }[];
   recentEvents: { occurredAt: string; eventName: string; source: string }[];
   cloudBilling: CloudBillingSummary;
+  geminiHealth: GeminiHealth;
 };
 
 export type DashboardFunnelStep = {
@@ -62,12 +63,20 @@ export type DashboardOperations = {
   visionP95Ms: number | null;
 };
 
+export type GeminiHealthDay = { day: string; requests: number; errors: number; timeoutErrors: number; p95LatencyMs: number | null; p95QueueMs: number | null; totalTokens: number; estimatedCostUsd: number | null };
+export type GeminiHealthModel = { model: string; requests: number; errors: number; timeoutErrors: number; p95LatencyMs: number | null; totalTokens: number; estimatedCostUsd: number | null };
+export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[] };
+
 type MetricRow = { key: DashboardMetricKey; current_value: number | string | null; previous_value: number | string | null };
 type QualityRow = { label: string; value: number | string | null };
 type EventRow = { occurred_at: string | Date; event_name: string; source: string };
 type StripeRow = { currency: string | null; paid_checkout_sessions: number | string | null; refunded_payments: number | string | null; gross_minor: number | string | null; refunded_minor: number | string | null };
 type OperationsRow = { vision_requests: number | string | null; vision_errors: number | string | null; vision_p95_ms: number | string | null };
 type UniqueUsersRow = { day: number | string | null; week: number | string | null; month: number | string | null };
+type GeminiRequestDayRow = { day: string | Date; requests: number | string | null; errors: number | string | null; timeout_errors: number | string | null; p95_latency_ms: number | string | null; p95_queue_ms: number | string | null };
+type GeminiUsageDayRow = { day: string | Date; total_tokens: number | string | null; estimated_cost_usd: number | string | null };
+type GeminiRequestModelRow = { model: string | null; requests: number | string | null; errors: number | string | null; timeout_errors: number | string | null; p95_latency_ms: number | string | null };
+type GeminiUsageModelRow = { model: string | null; total_tokens: number | string | null; estimated_cost_usd: number | string | null };
 
 const METRICS: { key: DashboardMetricKey; label: string; unit: DashboardMetric["unit"] }[] = [
   { key: "scan_started", label: "Scans started", unit: "count" },
@@ -202,6 +211,36 @@ export async function readDashboardOverview(
     WHERE subject_hash IS NOT NULL AND occurred_at >= $4::timestamptz AND occurred_at < $2::timestamptz
   `, [startsAt.toISOString(), endsAt.toISOString(), new Date(endsAt.getTime() - 7 * 86_400_000).toISOString(), new Date(endsAt.getTime() - 30 * 86_400_000).toISOString()]);
 
+  const weekStartsAt = new Date(endsAt.getTime() - 7 * 86_400_000);
+  const [geminiRequestDays, geminiUsageDays, geminiRequestModels, geminiUsageModels] = await Promise.all([
+    db.query<GeminiRequestDayRow>(`
+      SELECT date_trunc('day', occurred_at) AS day, COUNT(*)::bigint AS requests,
+        COUNT(*) FILTER (WHERE COALESCE(properties->>'outcome', 'success') <> 'success')::bigint AS errors,
+        COUNT(*) FILTER (WHERE properties->>'outcome' = 'provider_timeout')::bigint AS timeout_errors,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'durationMs')::numeric) FILTER (WHERE properties->>'durationMs' ~ '^[0-9]+$') AS p95_latency_ms,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'queueMs')::numeric) FILTER (WHERE properties->>'queueMs' ~ '^[0-9]+$') AS p95_queue_ms
+      FROM analytics_events WHERE event_name = 'vision_request' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1 ORDER BY 1 ASC
+    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    db.query<GeminiUsageDayRow>(`
+      SELECT date_trunc('day', occurred_at) AS day, COALESCE(SUM(NULLIF(properties->>'totalTokenCount', '')::numeric), 0) AS total_tokens,
+        SUM(NULLIF(properties->>'estimatedCostUsd', '')::numeric) AS estimated_cost_usd
+      FROM analytics_events WHERE event_name = 'vision_usage' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1 ORDER BY 1 ASC
+    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    db.query<GeminiRequestModelRow>(`
+      SELECT COALESCE(NULLIF(properties->>'model', ''), 'unknown') AS model, COUNT(*)::bigint AS requests,
+        COUNT(*) FILTER (WHERE COALESCE(properties->>'outcome', 'success') <> 'success')::bigint AS errors,
+        COUNT(*) FILTER (WHERE properties->>'outcome' = 'provider_timeout')::bigint AS timeout_errors,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'durationMs')::numeric) FILTER (WHERE properties->>'durationMs' ~ '^[0-9]+$') AS p95_latency_ms
+      FROM analytics_events WHERE event_name = 'vision_request' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1 ORDER BY requests DESC, model ASC
+    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    db.query<GeminiUsageModelRow>(`
+      SELECT COALESCE(NULLIF(properties->>'model', ''), 'unknown') AS model,
+        COALESCE(SUM(NULLIF(properties->>'totalTokenCount', '')::numeric), 0) AS total_tokens,
+        SUM(NULLIF(properties->>'estimatedCostUsd', '')::numeric) AS estimated_cost_usd
+      FROM analytics_events WHERE event_name = 'vision_usage' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1
+    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+  ]);
+
   const byKey = new Map(metrics.rows.map((row) => [row.key, row]));
   const dashboardMetrics = METRICS.map((definition) => {
     const row = byKey.get(definition.key);
@@ -218,6 +257,15 @@ export async function readDashboardOverview(
   const visionRequests = numeric(operationsRow?.vision_requests ?? null);
   const visionErrors = numeric(operationsRow?.vision_errors ?? null);
   const usersRow = uniqueUsers.rows[0];
+  const usageByDay = new Map(geminiUsageDays.rows.map((row) => [new Date(row.day).toISOString().slice(0, 10), row]));
+  const requestByDay = new Map(geminiRequestDays.rows.map((row) => [new Date(row.day).toISOString().slice(0, 10), row]));
+  const geminiDays = Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(Date.UTC(endsAt.getUTCFullYear(), endsAt.getUTCMonth(), endsAt.getUTCDate() - (6 - index))).toISOString().slice(0, 10);
+    const request = requestByDay.get(day); const usage = usageByDay.get(day);
+    return { day, requests: numeric(request?.requests ?? null), errors: numeric(request?.errors ?? null), timeoutErrors: numeric(request?.timeout_errors ?? null), p95LatencyMs: request?.p95_latency_ms === null || request?.p95_latency_ms === undefined ? null : numeric(request.p95_latency_ms), p95QueueMs: request?.p95_queue_ms === null || request?.p95_queue_ms === undefined ? null : numeric(request.p95_queue_ms), totalTokens: numeric(usage?.total_tokens ?? null), estimatedCostUsd: usage?.estimated_cost_usd === null || usage?.estimated_cost_usd === undefined ? null : numeric(usage.estimated_cost_usd) };
+  });
+  const usageByModel = new Map(geminiUsageModels.rows.map((row) => [row.model ?? "unknown", row]));
+  const geminiModels = geminiRequestModels.rows.map((row) => { const model = row.model ?? "unknown"; const usage = usageByModel.get(model); return { model, requests: numeric(row.requests), errors: numeric(row.errors), timeoutErrors: numeric(row.timeout_errors), p95LatencyMs: row.p95_latency_ms === null || row.p95_latency_ms === undefined ? null : numeric(row.p95_latency_ms), totalTokens: numeric(usage?.total_tokens ?? null), estimatedCostUsd: usage?.estimated_cost_usd === null || usage?.estimated_cost_usd === undefined ? null : numeric(usage.estimated_cost_usd) }; });
   return {
     generatedAt: now.toISOString(),
     window: { startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), previousStartsAt: previousStartsAt.toISOString() },
@@ -229,5 +277,6 @@ export async function readDashboardOverview(
     quality: quality.rows.map((row) => ({ label: row.label, value: numeric(row.value) })),
     recentEvents: recent.rows.map((row) => ({ occurredAt: new Date(row.occurred_at).toISOString(), eventName: row.event_name, source: row.source })),
     cloudBilling,
+    geminiHealth: { days: geminiDays, models: geminiModels },
   };
 }

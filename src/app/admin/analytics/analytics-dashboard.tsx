@@ -48,6 +48,7 @@ export default function AnalyticsDashboard() {
   const [secret, setSecret] = useState("");
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "unauthorized" | "unavailable">("idle");
+  const [view, setView] = useState<"overview" | "gemini">("overview");
 
   const refresh = useCallback(async (token: string) => {
     if (!token) return;
@@ -74,6 +75,8 @@ export default function AnalyticsDashboard() {
   }, [refresh, secret]);
 
   const totalQuality = useMemo(() => overview?.quality.reduce((total, item) => total + item.value, 0) ?? 0, [overview]);
+  const geminiTotals = useMemo(() => overview?.geminiHealth.days.reduce((total, day) => ({ requests: total.requests + day.requests, errors: total.errors + day.errors, tokens: total.tokens + day.totalTokens, cost: total.cost === null || day.estimatedCostUsd === null ? null : total.cost + day.estimatedCostUsd }), { requests: 0, errors: 0, tokens: 0, cost: 0 as number | null }) ?? { requests: 0, errors: 0, tokens: 0, cost: null }, [overview]);
+  const maxGeminiRequests = useMemo(() => Math.max(1, ...(overview?.geminiHealth.days.map((day) => day.requests) ?? [1])), [overview]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -103,6 +106,9 @@ export default function AnalyticsDashboard() {
 
     {status === "unavailable" && <p className={styles.inlineError} role="alert">The last refresh failed; values below are from the previous successful update.</p>}
 
+    <nav className={styles.tabs} aria-label="Analytics views"><button className={view === "overview" ? styles.tabActive : undefined} onClick={() => setView("overview")}>Product pulse</button><button className={view === "gemini" ? styles.tabActive : undefined} onClick={() => setView("gemini")}>Gemini Health</button></nav>
+
+    {view === "overview" && <>
     <section aria-label="Current metrics" className={styles.metrics}>
       {overview.metrics.map((metric) => <article className={styles.metricCard} key={metric.key}>
         <p>{metric.label}</p><strong>{formatValue(metric.value, metric.unit)}</strong>
@@ -135,7 +141,7 @@ export default function AnalyticsDashboard() {
       <article className={styles.panel}>
         <div className={styles.panelHeading}><div><p className={styles.eyebrow}>Gemini health</p><h2>Availability</h2></div><span>24h</span></div>
         <div className={styles.operationGrid}><div><span>Requests</span><strong>{overview.operations.visionRequests}</strong></div><div><span>Error rate</span><strong>{formatPercent(overview.operations.visionErrorRate)}</strong></div><div><span>p95 latency</span><strong>{overview.operations.visionP95Ms === null ? "—" : `${Math.round(overview.operations.visionP95Ms)} ms`}</strong></div></div>
-        <p className={styles.panelNote}>Latency is calculated from recorded provider request durations; a dash means no eligible observations.</p>
+        <button className={styles.panelLink} onClick={() => setView("gemini")}>Open 7-day Gemini Health →</button>
       </article>
       <article className={styles.panel}>
         <div className={styles.panelHeading}><div><p className={styles.eyebrow}>Cloud Billing</p><h2>Actual billed spend</h2></div><span>{overview.cloudBilling.state === "available" ? "Daily export" : overview.cloudBilling.state.replaceAll("_", " ")}</span></div>
@@ -143,5 +149,14 @@ export default function AnalyticsDashboard() {
       </article>
     </section>
     <p className={styles.note}>Gemini spend is an application-side estimate from recorded token usage. Cloud Billing reconciliation can be added later and may arrive with a delay.</p>
+    </>}
+
+    {view === "gemini" && <section className={styles.geminiHealth} aria-label="Gemini Health">
+      <div className={styles.healthHeading}><div><p className={styles.eyebrow}>Gemini Health</p><h2>Seven-day provider telemetry</h2><p>Recorded requests, queueing, latency, outcomes and provider usage metadata.</p></div><span>Last 7 days</span></div>
+      <div className={styles.metrics}><article className={styles.metricCard}><p>Requests</p><strong>{geminiTotals.requests}</strong><span className={styles.neutral}>All operations</span></article><article className={styles.metricCard}><p>Error rate</p><strong>{formatPercent(geminiTotals.requests ? geminiTotals.errors / geminiTotals.requests : null)}</strong><span className={styles.neutral}>{geminiTotals.errors} failed</span></article><article className={styles.metricCard}><p>Provider tokens</p><strong>{formatValue(geminiTotals.tokens, "count")}</strong><span className={styles.neutral}>Usage-reported only</span></article><article className={styles.metricCard}><p>Estimated cost</p><strong>{formatBilling(geminiTotals.cost, "USD")}</strong><span className={styles.neutral}>Application estimate</span></article></div>
+      <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Daily trend</p><h2>Requests, errors and latency</h2></div><span>UTC</span></div><div className={styles.dailyList}>{overview.geminiHealth.days.map((day) => <div key={day.day}><time>{new Intl.DateTimeFormat("en", { weekday: "short", day: "numeric" }).format(new Date(`${day.day}T00:00:00Z`))}</time><div className={styles.dailyBar}><b style={{ width: `${(day.requests / maxGeminiRequests) * 100}%` }} /></div><strong>{day.requests} req</strong><small>{day.errors} errors · {day.timeoutErrors} timeouts · p95 {day.p95LatencyMs === null ? "—" : `${Math.round(day.p95LatencyMs)}ms`} · queue {day.p95QueueMs === null ? "—" : `${Math.round(day.p95QueueMs)}ms`}</small></div>)}</div></article>
+      <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Models</p><h2>Seven-day breakdown</h2></div><span>{overview.geminiHealth.models.length} seen</span></div>{overview.geminiHealth.models.length === 0 ? <p className={styles.empty}>No Gemini provider events in this window yet.</p> : <div className={styles.modelTable}>{overview.geminiHealth.models.map((model) => <div key={model.model}><strong>{model.model}</strong><span>{model.requests} req · {formatPercent(model.requests ? model.errors / model.requests : null)} errors</span><span>p95 {model.p95LatencyMs === null ? "—" : `${Math.round(model.p95LatencyMs)}ms`} · {model.timeoutErrors} timeouts</span><span>{formatValue(model.totalTokens, "count")} tokens · {formatBilling(model.estimatedCostUsd, "USD")}</span></div>)}</div>}</article>
+      <p className={styles.note}>The panel reads aggregate telemetry only. Provider usage metadata can be absent for failed or cancelled calls; Cloud Billing remains the reconciliation source for actual spend.</p>
+    </section>}
   </main>;
 }
