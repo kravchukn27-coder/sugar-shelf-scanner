@@ -95,15 +95,18 @@
 .camera-result-overlay-stage{left:50%;top:50%;width:var(--camera-frame-width);max-height:none;aspect-ratio:3 / 4;transform:translate(-50%,-50%)}
 @media(max-height:660px){.camera-scene{--camera-frame-width:min(97%,386px,calc((100dvh - var(--camera-frame-top-inset) - var(--camera-frame-bottom-inset)) * 3 / 4))}}
 
-/* Manual capture. It shares the bottom band below the viewfinder with the
-   gallery button, matching that control's height and baseline so the two read
-   as one row, and carries the same translucent glass as the other floating
-   camera controls. The band is reserved by --camera-frame-bottom-inset, so the pill
-   never overlaps the frame. */
-.analyze-now-button{position:absolute;z-index:5;left:50%;bottom:var(--camera-control-bottom);transform:translateX(-50%);min-height:42px;padding:0 20px;border-radius:999px;white-space:nowrap;color:#16141b;background:#fff;font-size:14px;font-weight:700;letter-spacing:-.005em;box-shadow:0 6px 18px rgba(0,0,0,.34);-webkit-tap-highlight-color:transparent;transition:transform .16s ease,opacity .16s ease}
-.analyze-now-button:active:not(:disabled){transform:translateX(-50%) scale(.97)}
+/* Manual capture. Only this control changes: the viewfinder dimensions and its
+   black bands continue to come from the existing camera-frame variables above.
+   A familiar iPhone-style shutter makes the action unmistakable while the quiet
+   caption explains that the tap starts analysis rather than merely saving a photo. */
+.analyze-now-button{position:absolute;z-index:5;left:50%;bottom:var(--camera-control-bottom);transform:translateX(-50%);width:112px;min-height:94px;padding:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:6px;color:rgba(255,255,255,.56);background:transparent;font-size:12px;font-weight:600;line-height:1.15;white-space:nowrap;-webkit-tap-highlight-color:transparent;transition:opacity .16s ease}
+.analyze-now-shutter{display:grid;place-items:center;width:72px;height:72px;border:4px solid #fff;border-radius:50%;background:#050506;transition:transform .16s ease}
+.analyze-now-shutter:after{content:"";display:block;width:58px;height:58px;border-radius:50%;background:#fff;transition:transform .16s ease,background-color .16s ease}
+.analyze-now-button:active:not(:disabled) .analyze-now-shutter{transform:scale(.96)}
+.analyze-now-button:active:not(:disabled) .analyze-now-shutter:after{transform:scale(.88);background:#dedee2}
 .analyze-now-button:disabled{cursor:default;opacity:.48}
-@media(prefers-reduced-motion:reduce){.analyze-now-button{transition:none}}
+@media(max-height:700px){.analyze-now-button{min-height:84px;gap:4px}.analyze-now-shutter{width:64px;height:64px}.analyze-now-shutter:after{width:50px;height:50px}}
+@media(prefers-reduced-motion:reduce){.analyze-now-button,.analyze-now-shutter,.analyze-now-shutter:after{transition:none}}
 
 /* Monetization test: the payoff moment right after access is granted. The
    Home Screen ask is here because an installed origin is the only way iOS
