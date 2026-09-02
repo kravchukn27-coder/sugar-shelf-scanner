@@ -264,8 +264,10 @@ export async function reserveGeminiRequest(operation: GeminiOperation, environme
     // must match it rather than the server's UTC clock.
     throw new GeminiRequestBudgetExceededError("day", geminiBudgetRetryAfterSeconds("day"));
   }
-  recordGuardRejection(operation, "redis_unavailable");
-  throw new RedisGuardUnavailableError();
+  if (reserved !== 1) {
+    recordGuardRejection(operation, "redis_unavailable");
+    throw new RedisGuardUnavailableError();
+  }
 }
 
 /** Production routes use Redis. Tests/local mock retain the legacy process guard only outside production. */
