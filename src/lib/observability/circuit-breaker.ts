@@ -1,4 +1,5 @@
 import { createClient } from "redis";
+import { queueAnalyticsEvent } from "@/lib/analytics/events";
 
 /**
  * Circuit breaker for Gemini model selection.
@@ -62,7 +63,11 @@ const PROBE_LOCK_FLOOR_DEFAULT: Record<BreakerOperation, number> = { preflight: 
  * KEYS[1] state hash, KEYS[2] primary ring (list), KEYS[3] probe lock
  * ARGV: now, minSamples, failureThreshold, cooldownMs, minTransitionIntervalMs,
  *       baseProbeIntervalMs, primaryModel, fallbackModel, probeLockFloorMs
- * Returns "primary" | "primary_probe" | "fallback"
+ * Returns "primary" | "primary_probe" | "fallback" | "fallback_tripped"
+ * ("fallback_tripped" only on the exact call that just flipped closed->open
+ * this time -- distinct from plain "fallback" so the caller can fire a
+ * breaker_transition analytics event exactly once per real trip, not once
+ * per fallback-routed request.)
  */
 const SELECT_SCRIPT = `
 local now = tonumber(ARGV[1])
@@ -85,7 +90,7 @@ if state ~= 'open' then
       if (not lastTransition) or (now - lastTransition >= tonumber(ARGV[5])) then
         redis.call('HSET', KEYS[1], 'state', 'open', 'openedAtMs', now, 'lastTransitionAtMs', now,
           'probeIntervalMs', ARGV[6], 'recoverStreak', 0, 'fastPath', 0)
-        return 'fallback'
+        return 'fallback_tripped'
       end
     end
   end
@@ -313,6 +318,17 @@ function breakerKeys(operation: BreakerOperation) {
   };
 }
 
+/**
+ * Aggregate-only event for the admin dashboard's "how many times has this
+ * flapped" counter -- no request contents, no model names beyond what the
+ * dashboard already shows live. Fire-and-forget like every other telemetry
+ * call in this codebase (queueAnalyticsEvent already no-ops safely when
+ * analytics isn't configured); never awaited by the breaker's own callers.
+ */
+function recordBreakerTransition(operation: BreakerOperation, transition: "opened" | "closed") {
+  queueAnalyticsEvent({ eventName: "breaker_transition", source: "system", properties: { operation, transition } });
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -350,6 +366,7 @@ export async function selectModel(
     if (result === "primary" || result === "primary_probe") {
       return { model: primaryModel, isPrimary: true, isProbe: result === "primary_probe" };
     }
+    if (result === "fallback_tripped") recordBreakerTransition(operation, "opened");
     return { model: fallbackModel, isPrimary: false, isProbe: false };
   } catch {
     return { model: primaryModel, isPrimary: true, isProbe: false };
@@ -371,7 +388,7 @@ async function recordOutcome(
     const keys = breakerKeys(operation);
     const successFlag = isSuccess ? "1" : "0";
     if (wasPrimary) {
-      await client.eval(RECORD_PRIMARY_SCRIPT, {
+      const result = await client.eval(RECORD_PRIMARY_SCRIPT, {
         keys: [keys.state, keys.primaryRing, keys.probeLock, keys.fallbackRing],
         arguments: [
           String(Date.now()),
@@ -385,6 +402,7 @@ async function recordOutcome(
           String(cfg.probeLockFloorMs(operation)),
         ],
       });
+      if (result === "closed") recordBreakerTransition(operation, "closed");
     } else {
       await client.eval(RECORD_FALLBACK_SCRIPT, {
         keys: [keys.state, keys.fallbackRing, keys.probeLock],

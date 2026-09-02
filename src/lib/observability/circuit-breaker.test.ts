@@ -76,7 +76,7 @@ class FakeBreakerRedis implements RedisEval {
             state.set("probeIntervalMs", baseIntervalStr!);
             state.set("recoverStreak", "0");
             state.set("fastPath", "0");
-            return "fallback";
+            return "fallback_tripped";
           }
         }
       }

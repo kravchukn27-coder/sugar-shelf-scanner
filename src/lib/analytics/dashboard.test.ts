@@ -30,11 +30,12 @@ test("dashboard overview fills missing metrics and returns aggregate-only event 
       if (calls === 20) return { rows: [{ default_confidence_count: "2", total: "6" }] };
       if (calls === 21) return { rows: [{ day: "2026-08-31T00:00:00Z", default_confidence_count: "2", total: "6" }] };
       if (calls === 22) return { rows: [{ count: "4" }] };
+      if (calls === 23) return { rows: [{ operation: "preflight", opened: "2", closed: "1" }] };
       return { rows: [{ scope: "analyze", guard: "request_rate_limit", dimension: "installation", current_value: "3", previous_value: "1" }] };
     },
   };
   const overview = await readDashboardOverview(db as unknown as SqlQueryExecutor, new Date("2026-08-31T12:00:00.000Z"));
-  assert.equal(calls, 23);
+  assert.equal(calls, 24);
   assert.equal(overview.metrics.find((metric) => metric.key === "scan_started")?.value, 12);
   assert.equal(overview.metrics.find((metric) => metric.key === "vision_errors")?.value, 0);
   assert.equal(overview.metrics.find((metric) => metric.key === "gemini_estimated_cost_usd")?.value, null);
@@ -59,5 +60,6 @@ test("dashboard overview fills missing metrics and returns aggregate-only event 
   assert.deepEqual(overview.geminiHealth.confidenceStats, { defaultConfidenceCount: 2, total: 6 });
   assert.deepEqual(overview.geminiHealth.dailyConfidenceStats, [{ day: "2026-08-31", defaultConfidenceCount: 2, total: 6 }]);
   assert.equal(overview.geminiHealth.unbrandedDetectionCount, 4);
+  assert.deepEqual(overview.geminiHealth.breakerTransitions, [{ operation: "preflight", opened: 2, closed: 1 }]);
   assert.deepEqual(overview.guardRejections, [{ scope: "analyze", guard: "request_rate_limit", dimension: "installation", current: 3, previous: 1 }]);
 });
