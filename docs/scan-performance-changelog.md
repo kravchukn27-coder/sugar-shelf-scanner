@@ -246,8 +246,11 @@ panel — will show both model rows once each has accumulated live traffic
 (zero data at deploy time; the panel's "Seven-day breakdown" only reflects
 persisted events from before the split went live until fresh scans happen).
 
-**Result:** _(pending — needs real traffic on both models before either the
-dashboard or this entry can say anything)_
+**Result:** ✅ closed — see the 2026-09-02 decision entry below. Full-window
+Postgres data (`analytics_events`, 09-01 + 09-02, 140 preflight requests):
+`gemini-3.5-flash-lite` 79.6% success / 4 timeouts (7%) / p50 1.4s vs
+`gemini-3.6-flash` 48.8% success / 29 timeouts (34%) / p50 3.2s.
+`gemini-3.5-flash-lite` wins decisively on every metric.
 
 ### 2026-09-01 (update) — Preflight A/B: early data, and analyze A/B added
 
@@ -295,5 +298,44 @@ before considering it a real candidate for analyze specifically.
 **Where to check results:** `/admin/analytics` → Gemini Health → Models —
 both rows will show once each model has live analyze traffic.
 
-**Result:** _(pending — needs real traffic on both models for both
-operations)_
+**Result:** ✅ closed — see the 2026-09-02 decision entry below. Full-window
+Postgres data (09-01 + 09-02, 48 analyze requests): `gemini-3.5-flash-lite`
+100% success / 0 timeouts / p50 3.2s / p95 9.2s vs `gemini-3.6-flash` 71.4%
+success / 7 timeouts (20%) / p50 9.5s / p95 33.0s. The speed/reliability
+caveat above is resolved in `gemini-3.5-flash-lite`'s favor; detection
+*quality* (brand/name/sugar-estimate accuracy on analyze specifically) was
+not separately scored in this A/B and remains an open question — flagged in
+the decision entry below.
+
+### 2026-09-02 — decision — Promote `gemini-3.5-flash-lite` to primary for preflight and analyze
+
+**Decision:** end the 50/50 A/B split. `gemini-3.5-flash-lite` becomes the
+primary model for both `preflight` and `analyze`; `gemini-3.6-flash` is kept
+on standby as the fallback for a planned reliability-triggered failover (see
+below), not deleted from the codebase.
+
+**Why now:** the A/B ran long enough to cover both a bad external-Gemini day
+(09-01) and a healthy one (09-02) — see the two Result entries above.
+`gemini-3.5-flash-lite` won on every measured axis in both operations
+(success rate, timeout rate, p50, p95), by a wide enough margin (e.g. 100%
+vs 71.4% analyze success, 3.2s vs 9.5s analyze p50) that it isn't a
+close call. It is also the cheaper model per Google's pricing, so the
+switch is a win on cost as well as speed — no tradeoff to weigh here.
+
+**Open question, not blocking this decision:** analyze detection *quality*
+(does `gemini-3.5-flash-lite` identify brands/products as accurately as
+`gemini-3.6-flash`, not just faster) was not isolated in this A/B — both
+models ran the same prompt/schema, but nothing here scored output
+correctness, only speed and provider-reported success/failure. Worth a
+follow-up read once enough real analyze traffic accumulates on the new
+primary, using the existing `detection_unbranded_name` diagnostic log
+(`77fe250`) as one signal among others.
+
+**Planned safety net:** `gemini-3.6-flash` remains wired in as an automatic
+fallback, not removed — see the architecture note below (or a follow-up
+entry once implemented) for a circuit-breaker that watches
+`gemini-3.5-flash-lite`'s live success/latency and fails subsequent requests
+over to `gemini-3.6-flash` if it degrades, then probes to switch back once
+`gemini-3.5-flash-lite` recovers. Implementation not yet live as of this
+entry — see the architecture discussion in this file's companion doc or the
+relevant PR once it lands.
