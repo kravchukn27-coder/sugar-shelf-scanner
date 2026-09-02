@@ -185,6 +185,50 @@ test("ranks result groups from the highest Sugar Fit score to the lowest", () =>
   assert.deepEqual(groups.map((group) => group.detection.id), ["high-sugar", "unknown", "low-sugar", "same-sugar"]);
 });
 
+test("ranks by the Your Fit score the list actually shows, not by sugar density alone", () => {
+  // Sugar per 100 puts the iced tea well ahead of the granola bar (6 versus
+  // 24), but the score printed next to each row reads the other way round: a
+  // 1.5 litre pack carries far more sugar per serving than a 42g bar. Ranking
+  // on the density proxy left the list ordered against its own numbers.
+  const icedTea = detection({
+    id: "iced-tea",
+    status: "estimate",
+    visualCandidate: { brand: "Lipton", name: "Iced tea", packSize: "1.5l", gtin: null },
+    score: { band: "green", sugarPer100g: 6, source: "vision_estimate" },
+  });
+  const granolaBar = detection({
+    id: "granola-bar",
+    status: "estimate",
+    visualCandidate: { brand: "Nature Valley", name: "Granola bar", packSize: "42g", gtin: null },
+    score: { band: "orange", sugarPer100g: 24, source: "vision_estimate" },
+  });
+
+  const ranked = sortDetectionGroupsBySugarFit(groupRepeatedDetections([icedTea, granolaBar]));
+
+  assert.deepEqual(ranked.map((group) => group.detection.id), ["granola-bar", "iced-tea"]);
+});
+
+test("keeps a pack the day can absorb above an identical product in a larger pack", () => {
+  const can = detection({
+    id: "can",
+    status: "estimate",
+    visualCandidate: { brand: "Schweppes", name: "Tonic water", packSize: "330ml", gtin: null },
+    score: { band: "yellow", sugarPer100g: 8.5, source: "vision_estimate" },
+  });
+  const bottle = detection({
+    id: "bottle",
+    status: "estimate",
+    visualCandidate: { brand: "Schweppes", name: "Tonic water", packSize: "1.5l", gtin: null },
+    score: { band: "yellow", sugarPer100g: 8.5, source: "vision_estimate" },
+  });
+
+  // Identical sugar density, so the old proxy tied them and fell back to
+  // input order — the larger bottle stayed on top.
+  const ranked = sortDetectionGroupsBySugarFit(groupRepeatedDetections([bottle, can]));
+
+  assert.deepEqual(ranked.map((group) => group.detection.id), ["can", "bottle"]);
+});
+
 test("normalizes union boxes to the image bounds", () => {
   const box = unionNormalizedBoxes(
     { x: 0.8, y: 0.7, width: 0.2, height: 0.3 },

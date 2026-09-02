@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import type { Detection } from "@/lib/contracts/scan";
 import type { DetectionGroup } from "@/lib/scan/deduplicate-detections";
-import { calculateSugarFit, inferProductCategory, type SugarFitResult } from "@/lib/scoring/sugar-fit";
+import { inferProductCategory, type SugarFitResult } from "@/lib/scoring/sugar-fit";
+import { sugarFitForDetection } from "@/lib/scoring/detection-fit";
 
 type SheetProps = {
   groups: DetectionGroup[];
@@ -36,19 +37,6 @@ function productMeta(detection: Detection) {
 function amazonUrl(detection: Detection) {
   const query = [displayIdentity(detection), detection.product?.packSize ?? detection.visualCandidate.packSize].filter(Boolean).join(" ");
   return `https://www.amazon.com/s?k=${encodeURIComponent(query)}`;
-}
-
-function fitForDetection(detection: Detection) {
-  return calculateSugarFit({
-    sugarPer100g: detection.score.sugarPer100g,
-    packSize: detection.product?.packSize ?? detection.visualCandidate.packSize,
-    brand: detection.product?.brand ?? detection.visualCandidate.brand,
-    name: detection.visualCandidate.name ?? detection.product?.name,
-    energyKcalPer100g: detection.product?.energyKcalPer100g,
-    proteinPer100g: detection.product?.proteinPer100g,
-    fatPer100g: detection.product?.fatPer100g,
-    carbohydratesPer100g: detection.product?.carbohydratesPer100g,
-  });
 }
 
 function ScannedProductPhoto({ detection, frozenImage, compact, title }: { detection: Detection; frozenImage: string; compact: boolean; title: string }) {
@@ -122,7 +110,7 @@ function ProductDetail({ detection, count, frozenImage, recoveryBanner, onBack, 
   onScanAgain: () => void;
   onRecommendationOpen: () => void;
 }) {
-  const fit = fitForDetection(detection);
+  const fit = sugarFitForDetection(detection);
   const dataLabel = detection.status === "confirmed" ? "Verified" : detection.status === "estimate" ? "Estimated" : "Needs verification";
 
   return <>
@@ -155,7 +143,7 @@ function ProductComparison({ groups, frozenImage, onSelect, onClose, onScanAgain
     <div className="sugar-fit-sheet-top"><span /><span className="sugar-fit-grabber" aria-hidden="true" /><button className="sugar-fit-icon-button" onClick={onClose} aria-label="Collapse product comparison"><CollapseIcon /></button></div>
     <header className="sugar-fit-compare-heading"><strong>Compare your options</strong><span>See what fits your day best.</span></header>
     <div className="sugar-fit-list">{groups.map(({ detection, count }) => {
-      const fit = fitForDetection(detection);
+      const fit = sugarFitForDetection(detection);
       return <button key={detection.id} className="sugar-fit-row" onClick={() => onSelect(detection.id)}>
         <ProductPhoto detection={detection} frozenImage={frozenImage} compact />
         <span className="sugar-fit-row-copy"><strong>{displayIdentity(detection)}</strong><span>{productMeta(detection)}{count > 1 ? ` · ×${count}` : ""}</span></span>
@@ -178,6 +166,6 @@ export function SugarFitResultHandle({ groups, frozenImage, onOpen }: { groups: 
   const first = groups[0]?.detection;
   if (!first) return null;
   if (groups.length > 1) return <button className="result-handle sugar-fit-result-handle multi" onClick={onOpen}><span className="sugar-fit-handle-icon" aria-hidden="true"><i /><i /><i /></span><span><strong>{groups.length} products ready</strong><small>Compare your options</small></span><span className="sugar-fit-handle-arrow"><RightIcon /></span></button>;
-  const fit = fitForDetection(first);
+  const fit = sugarFitForDetection(first);
   return <button className="result-handle sugar-fit-result-handle" onClick={onOpen}><ProductPhoto detection={first} frozenImage={frozenImage} compact /><span><strong>{displayIdentity(first)}</strong><small>{fit?.label ?? "No score yet"}</small></span><b className={fit?.tone ?? "unknown"}>{fit?.score ?? "—"}<small>Your Fit</small></b><span className="sugar-fit-handle-arrow"><RightIcon /></span></button>;
 }

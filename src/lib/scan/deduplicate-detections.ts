@@ -1,4 +1,5 @@
 import type { NormalizedBox } from "@/lib/contracts/product";
+import { sugarFitForDetection } from "@/lib/scoring/detection-fit";
 import type { Detection } from "@/lib/contracts/scan";
 import { normalizeText } from "@/lib/catalog/normalization";
 
@@ -155,15 +156,18 @@ export function groupRepeatedDetections(detections: readonly Detection[]): Detec
 }
 
 /**
- * Ranks known products by their Sugar Fit score: 100 minus grams of sugar per
- * 100g. Equal and unavailable scores retain their existing visual order.
+ * Ranks products by the same Your Fit score the results list prints beside
+ * each row, highest first. Sugar density alone is not that score — pack size,
+ * the rest of the nutrition profile and the product category all move it — so
+ * ranking on a density proxy ordered the list against its own numbers.
+ * Products with no score, and ties, retain their existing visual order.
  */
 export function sortDetectionGroupsBySugarFit(groups: readonly DetectionGroup[]): DetectionGroup[] {
   return groups
-    .map((group, index) => ({ group, index, sugar: group.detection.score.sugarPer100g }))
+    .map((group, index) => ({ group, index, fit: sugarFitForDetection(group.detection) }))
     .sort((left, right) => {
-      const leftRank = left.sugar === null || !Number.isFinite(left.sugar) ? Number.NEGATIVE_INFINITY : Math.max(0, 100 - left.sugar);
-      const rightRank = right.sugar === null || !Number.isFinite(right.sugar) ? Number.NEGATIVE_INFINITY : Math.max(0, 100 - right.sugar);
+      const leftRank = left.fit?.score ?? Number.NEGATIVE_INFINITY;
+      const rightRank = right.fit?.score ?? Number.NEGATIVE_INFINITY;
       return rightRank - leftRank || left.index - right.index;
     })
     .map(({ group }) => group);
