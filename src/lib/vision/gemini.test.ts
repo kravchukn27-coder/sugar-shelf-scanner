@@ -34,6 +34,9 @@ const env: ServerEnv = {
   GEMINI_API_KEY: "test-key",
   GEMINI_VISION_MODEL: "gemini-test",
   GEMINI_PREFLIGHT_MODEL: "gemini-test",
+  GEMINI_ANALYZE_MODEL: "gemini-test",
+  GEMINI_PREFLIGHT_MODEL_FALLBACK: "gemini-test",
+  GEMINI_ANALYZE_MODEL_FALLBACK: "gemini-test",
 };
 const analyzeInput = { imageBase64: "AQID", mimeType: "image/jpeg" as const, context: "shelf" as const, clientFrameId: "frame-1" };
 const preflightInput = { imageBase64: "AQID", mimeType: "image/jpeg" as const, context: "shelf" as const, clientFrameId: "preflight-1" };
@@ -83,6 +86,11 @@ test("preflight propagates a client abort to Gemini", async () => {
   };
   try {
     const pending = preflightWithGemini(preflightInput, env, performance.now(), client.signal);
+    // Model selection (an async circuit-breaker lookup) now runs before the
+    // fetch is dispatched, so give that a tick to resolve before aborting --
+    // otherwise the abort would preempt the request before it ever reaches
+    // Gemini, which is not what this test is about.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     client.abort();
     await assert.rejects(pending, (error: unknown) => error instanceof VisionRequestError && error.code === "client_cancelled" && error.status === 499);
     assert.equal(calls, 1);
@@ -116,6 +124,9 @@ test("a cancelled analyze does not retry or call Gemini when already aborted", a
   };
   try {
     const pending = analyzeWithGemini(analyzeInput, env, performance.now(), client.signal);
+    // Same reasoning as the preflight test above: let the async model
+    // selection resolve so the fetch is actually in flight before aborting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     client.abort();
     await assert.rejects(pending, (error: unknown) => error instanceof VisionRequestError && error.code === "client_cancelled");
     assert.equal(calls, 1);

@@ -9,6 +9,9 @@ const env: ServerEnv = {
   GEMINI_API_KEY: "test-key",
   GEMINI_VISION_MODEL: "gemini-test",
   GEMINI_PREFLIGHT_MODEL: "gemini-test",
+  GEMINI_ANALYZE_MODEL: "gemini-test",
+  GEMINI_PREFLIGHT_MODEL_FALLBACK: "gemini-test",
+  GEMINI_ANALYZE_MODEL_FALLBACK: "gemini-test",
 };
 const request = { imageBase64: "AQID", mimeType: "image/jpeg" as const, labelCaptureConsented: true as const };
 const confidence = { brand: 0.9, name: 0.8, packSize: null, energyKcal: 0.95, proteinPer100g: 0.95, fatPer100g: 0.95, carbohydratesPer100g: 0.95, sugarPer100g: 0.95 };

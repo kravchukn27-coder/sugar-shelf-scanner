@@ -7,17 +7,16 @@ const serverEnvSchema = z.object({
   // Optional override. By default preflight uses the known-working full model
   // configured for this Railway service.
   GEMINI_PREFLIGHT_MODEL: z.string().min(1).optional(),
-  // Setting this turns on a 50/50 random split per preflight call between
-  // GEMINI_PREFLIGHT_MODEL and this one, so both models see the same
-  // concurrent traffic and provider conditions instead of a before/after
-  // comparison confounded by Gemini's own latency drifting hour to hour.
-  // Unset (the default) disables the split entirely — no random branch runs.
-  GEMINI_PREFLIGHT_MODEL_VARIANT_B: z.string().min(1).optional(),
-  // Same concurrent-split mechanism as the preflight variant above, applied
-  // to the full analyze call instead. A single choice is reused for the
-  // primary attempt, its hedge duplicate (if one fires), and the one
-  // transport-failure retry, so one logical scan never mixes two models.
-  GEMINI_ANALYZE_MODEL_VARIANT_B: z.string().min(1).optional(),
+  // Optional override. By default analyze reuses GEMINI_VISION_MODEL, same as
+  // preflight does above.
+  GEMINI_ANALYZE_MODEL: z.string().min(1).optional(),
+  // Primary/fallback pair consumed by the circuit breaker
+  // (src/lib/observability/circuit-breaker.ts) for the preflight call. Unset
+  // defaults to GEMINI_VISION_MODEL, so an unconfigured deployment keeps
+  // calling a single model for everything.
+  GEMINI_PREFLIGHT_MODEL_FALLBACK: z.string().min(1).optional(),
+  // Same as above, for the analyze call.
+  GEMINI_ANALYZE_MODEL_FALLBACK: z.string().min(1).optional(),
   DATABASE_URL: z.string().url().optional(),
   RATE_LIMIT_SECRET: z.string().min(16).optional(),
   // Optional: enables the free USDA Branded Foods fallback. Never expose it to iOS.
@@ -43,8 +42,14 @@ const serverEnvSchema = z.object({
   GOOGLE_CLOUD_BILLING_SERVICE_ACCOUNT_JSON_BASE64: z.string().min(1).optional(),
 });
 
-export type ServerEnv = Omit<z.infer<typeof serverEnvSchema>, "GEMINI_PREFLIGHT_MODEL"> & {
+export type ServerEnv = Omit<
+  z.infer<typeof serverEnvSchema>,
+  "GEMINI_PREFLIGHT_MODEL" | "GEMINI_ANALYZE_MODEL" | "GEMINI_PREFLIGHT_MODEL_FALLBACK" | "GEMINI_ANALYZE_MODEL_FALLBACK"
+> & {
   GEMINI_PREFLIGHT_MODEL: string;
+  GEMINI_ANALYZE_MODEL: string;
+  GEMINI_PREFLIGHT_MODEL_FALLBACK: string;
+  GEMINI_ANALYZE_MODEL_FALLBACK: string;
 };
 
 export function getServerEnv(): ServerEnv {
@@ -52,7 +57,13 @@ export function getServerEnv(): ServerEnv {
   if (parsed.VISION_PROVIDER === "gemini" && !parsed.GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY is required when VISION_PROVIDER=gemini.");
   }
-  return { ...parsed, GEMINI_PREFLIGHT_MODEL: parsed.GEMINI_PREFLIGHT_MODEL ?? parsed.GEMINI_VISION_MODEL };
+  return {
+    ...parsed,
+    GEMINI_PREFLIGHT_MODEL: parsed.GEMINI_PREFLIGHT_MODEL ?? parsed.GEMINI_VISION_MODEL,
+    GEMINI_ANALYZE_MODEL: parsed.GEMINI_ANALYZE_MODEL ?? parsed.GEMINI_VISION_MODEL,
+    GEMINI_PREFLIGHT_MODEL_FALLBACK: parsed.GEMINI_PREFLIGHT_MODEL_FALLBACK ?? parsed.GEMINI_VISION_MODEL,
+    GEMINI_ANALYZE_MODEL_FALLBACK: parsed.GEMINI_ANALYZE_MODEL_FALLBACK ?? parsed.GEMINI_VISION_MODEL,
+  };
 }
 
 /**
