@@ -43,6 +43,9 @@ Free external checks:
    inbox; Telegram remains the primary paging channel.
 3. Create Google Cloud Budget email alerts at 50%, 80% and 100% of the monthly
    Gemini/Google Cloud spend. Budgets are alerts, not an automatic spend cap.
+   The current public-test budget is **€10/month**, so the alerts are at
+   **€5**, **€8**, and **€10**. Review the observed Gemini spend after seven
+   days before changing this amount.
 
 ### Sentry error diagnostics
 
