@@ -8,7 +8,7 @@
     "postbuild": "mkdir -p .next/standalone/.next && cp -R .next/static .next/standalone/.next/static && cp -R public .next/standalone/public",
     "start": "node .next/standalone/server.js",
     "lint": "next lint",
-    "test": "tsx --test 'src/**/*.test.ts'",
+    "test": "tsx --test $(find src -name '*.test.ts' -print)",
     "typecheck": "tsc --noEmit",
     "clean:next": "node scripts/clean-next.mjs",
     "catalog:import": "tsx scripts/import-approved-catalog.ts",
