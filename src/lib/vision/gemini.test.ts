@@ -29,6 +29,20 @@ test("drops one malformed detection without discarding the rest of the shelf", (
   assert.deepEqual(result.map((item) => item.visualCandidate.name), ["Product 0", "Product 3"]);
 });
 
+test("only trusts a sugar estimate when Gemini claims it read a label or barcode, not a category guess", () => {
+  const result = normalizeGeminiDetections([
+    { ...detection(0), estimatedSugarPer100g: 12, estimateSource: "label_or_barcode" },
+    { ...detection(1), estimatedSugarPer100g: 12, estimateSource: "typical_for_category" },
+    { ...detection(2), estimatedSugarPer100g: 12 }, // no estimateSource at all
+  ]);
+  assert.equal(result[0]?.status, "estimate");
+  assert.equal(result[0]?.score.sugarPer100g, 12);
+  assert.equal(result[1]?.status, "unknown", "a category-typical guess must not surface as a real score");
+  assert.equal(result[1]?.score.sugarPer100g, null);
+  assert.equal(result[2]?.status, "unknown", "a number with no claimed evidence source must not surface as a real score");
+  assert.equal(result[2]?.score.sugarPer100g, null);
+});
+
 const env: ServerEnv = {
   VISION_PROVIDER: "gemini",
   GEMINI_API_KEY: "test-key",

@@ -47,6 +47,12 @@ const geminiDetectionSchema = z.object({
   confidence: z.number().min(0).max(1).optional(),
   estimatedSugarPer100g: z.number().min(0).max(200).nullable().optional(),
   estimateReason: z.string().trim().max(280).nullable().optional(),
+  // Self-reported evidence basis for estimatedSugarPer100g. A number alone
+  // doesn't say whether Gemini actually read a nutrition panel/barcode value
+  // or just guessed a category-typical figure (e.g. scoring a bottle whose
+  // label was never visible) -- this field is how toDetection() below tells
+  // the two apart and only surfaces the former as a real score.
+  estimateSource: z.enum(["label_or_barcode", "typical_for_category"]).nullable().optional(),
 });
 
 const geminiResponseSchema = z.object({
@@ -260,7 +266,9 @@ function promptFor(context: AnalyzeScanRequest["context"]) {
 
   return `You analyze packaged grocery products for a sugar-awareness app. ${contextInstruction}
 
-Return JSON only, matching the supplied schema. Each box_2d is [ymin, xmin, ymax, xmax] normalized to integers or decimals in 0..1000 relative to the entire image. Use only a box for a visible product package. Identify brand, product name, and pack size when legible. When a UPC/EAN/GTIN barcode number is clearly readable, return its digits in gtin; otherwise omit gtin. estimatedSugarPer100g is a visual estimate only; omit it when it cannot be responsibly inferred. confidence reflects visual identification certainty, not nutrition certainty. Return an empty detections array when no qualifying packaged product is visible.`;
+Return JSON only, matching the supplied schema. Each box_2d is [ymin, xmin, ymax, xmax] normalized to integers or decimals in 0..1000 relative to the entire image. Use only a box for a visible product package. Identify brand, product name, and pack size when legible. When a UPC/EAN/GTIN barcode number is clearly readable, return its digits in gtin; otherwise omit gtin. confidence reflects visual identification certainty, not nutrition certainty. Return an empty detections array when no qualifying packaged product is visible.
+
+For estimatedSugarPer100g: only set it when you can actually read a real sugar/nutrition value printed on the package or a barcode you can match to real data, and in that case set estimateSource to "label_or_barcode". Do not set estimatedSugarPer100g from a category-typical guess (for example, a bottle whose label is not visible, or a product you merely recognize the type of) -- if you can only guess a typical value for this kind of product without reading one, either set estimateSource to "typical_for_category" and leave estimatedSugarPer100g null, or omit both. A confident product identification with no visible nutrition data is still a valid detection; it just carries no sugar estimate.`;
 }
 
 function preflightPrompt() {
@@ -277,10 +285,13 @@ Set reasonCode exactly to: packaged_food_or_drink for candidate; person_or_docum
 // the way 2.5's thinkingBudget:0 did; "minimal" is the closest analog and is
 // what the docs recommend for classification-shaped calls. Preflight is pure
 // classification (candidate/none/uncertain + a count) with no need to reason
-// about brand, text, or nutrition, so it gets that floor; analyze still
-// benefits from some reasoning over what it's actually detecting, so it
-// stays at "low" rather than dropping further without its own evaluation.
-function thinkingConfigFor(model: string, gemini3Level: "minimal" | "low" = "low") {
+// about brand, text, or nutrition, so it gets that floor. analyze started at
+// "low" but real gemini-3.5-flash-lite traffic on 09-02 showed the same
+// shelf, rescanned seconds apart, flip-flopping on whether it gave a sugar
+// estimate at all (and once garbling a product name) -- consistent with
+// "low" being too thin for the model to reliably reason through brand +
+// nutrition together. Raised to "medium" to test whether that's the cause.
+function thinkingConfigFor(model: string, gemini3Level: "minimal" | "low" | "medium" = "low") {
   // Gemini 3 uses thinkingLevel while Gemini 2.5 uses thinkingBudget. Keeping
   // this branch server-side makes a Railway model change safe.
   return model.startsWith("gemini-2.5-")
@@ -309,7 +320,14 @@ function toDetection(item: z.infer<typeof geminiDetectionSchema>, index: number)
   if (!box) return null;
   const name = item.name?.trim() || null;
   const brand = item.brand?.trim() || null;
-  const sugar = item.estimatedSugarPer100g ?? null;
+  // A number alone doesn't say whether Gemini actually read it off the
+  // package or guessed a category-typical figure (the "scores a bottle
+  // whose label was never visible" problem) -- only trust it when Gemini
+  // itself claims real evidence (label or barcode), same standard applied
+  // regardless of how confident the guess would otherwise sound.
+  const sugar = item.estimatedSugarPer100g !== null && item.estimatedSugarPer100g !== undefined && item.estimateSource === "label_or_barcode"
+    ? item.estimatedSugarPer100g
+    : null;
   const confidence = item.confidence ?? (name || brand ? 0.55 : 0.35);
   const canEstimate = sugar !== null;
 
@@ -388,7 +406,7 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, model: 
         generationConfig: {
           // Shelf recognition is latency-sensitive. Configure the supported
           // low-latency thinking mode for the model selected in Railway.
-          thinkingConfig: thinkingConfigFor(model),
+          thinkingConfig: thinkingConfigFor(model, "medium"),
           responseMimeType: "application/json",
           responseSchema: {
             type: "OBJECT",
@@ -402,6 +420,7 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, model: 
                     box_2d: { type: "ARRAY", items: { type: "NUMBER" }, minItems: 4, maxItems: 4 },
                     brand: { type: "STRING", nullable: true }, name: { type: "STRING", nullable: true }, packSize: { type: "STRING", nullable: true }, gtin: { type: "STRING", nullable: true },
                     confidence: { type: "NUMBER" }, estimatedSugarPer100g: { type: "NUMBER", nullable: true }, estimateReason: { type: "STRING", nullable: true },
+                    estimateSource: { type: "STRING", enum: ["label_or_barcode", "typical_for_category"], nullable: true },
                   },
                   required: ["box_2d"],
                 },
