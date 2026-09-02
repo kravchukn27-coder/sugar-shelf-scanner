@@ -26,11 +26,12 @@ test("dashboard overview fills missing metrics and returns aggregate-only event 
       if (calls === 16) return { rows: [{ day: "2026-08-31T00:00:00Z", route: "preflight", requests: "7", errors: "1", p95_duration_ms: "1050", p95_vision_ms: "900", p95_catalog_ms: "60" }] };
       if (calls === 17) return { rows: [{ confirmed: "3", estimate: "2", unknown: "1", total: "6" }] };
       if (calls === 18) return { rows: [{ day: "2026-08-31T00:00:00Z", confirmed: "3", estimate: "2", unknown: "1", total: "6" }] };
+      if (calls === 19) return { rows: [{ operation: "analyze", eligible: "5", won: "2" }] };
       return { rows: [{ scope: "analyze", guard: "request_rate_limit", dimension: "installation", current_value: "3", previous_value: "1" }] };
     },
   };
   const overview = await readDashboardOverview(db as unknown as SqlQueryExecutor, new Date("2026-08-31T12:00:00.000Z"));
-  assert.equal(calls, 19);
+  assert.equal(calls, 20);
   assert.equal(overview.metrics.find((metric) => metric.key === "scan_started")?.value, 12);
   assert.equal(overview.metrics.find((metric) => metric.key === "vision_errors")?.value, 0);
   assert.equal(overview.metrics.find((metric) => metric.key === "gemini_estimated_cost_usd")?.value, null);
@@ -51,5 +52,6 @@ test("dashboard overview fills missing metrics and returns aggregate-only event 
   assert.deepEqual(overview.geminiHealth.dailyRoutes, [{ day: "2026-08-31", route: "preflight", requests: 7, errors: 1, p95DurationMs: 1050, p95VisionMs: 900, p95CatalogMs: 60 }]);
   assert.deepEqual(overview.geminiHealth.scoreYield, { confirmed: 3, estimate: 2, unknown: 1, total: 6 });
   assert.deepEqual(overview.geminiHealth.dailyScoreYield, [{ day: "2026-08-31", confirmed: 3, estimate: 2, unknown: 1, total: 6 }]);
+  assert.deepEqual(overview.geminiHealth.hedgeStats, [{ operation: "analyze", eligible: 5, won: 2 }]);
   assert.deepEqual(overview.guardRejections, [{ scope: "analyze", guard: "request_rate_limit", dimension: "installation", current: 3, previous: 1 }]);
 });

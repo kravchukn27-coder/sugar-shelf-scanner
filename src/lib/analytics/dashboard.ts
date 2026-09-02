@@ -76,7 +76,9 @@ export type HistoricalGeminiComparison = { period: string; requests: number; suc
 /** Of everything Gemini detected, how much actually resolved to a usable score (confirmed via catalog, or a trusted Gemini estimate) vs. unknown. */
 export type ScoreYield = { confirmed: number; estimate: number; unknown: number; total: number };
 export type ScoreYieldDay = { day: string; confirmed: number; estimate: number; unknown: number; total: number };
-export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[]; operations: GeminiHealthOperation[]; dailyOperations: GeminiHealthDayOperation[]; historicalComparisons: HistoricalGeminiComparison[]; routes: ScannerRoutePerformance[]; experience: ScannerExperiencePerformance; dailyExperience: ScannerExperienceDay[]; dailyRoutes: ScannerRouteDay[]; scoreYield: ScoreYield; dailyScoreYield: ScoreYieldDay[] };
+/** Of hedge-eligible analyze calls (small expected shelf, see GEMINI_HEDGE_MAX_EXPECTED_PRODUCTS), how often the duplicate call actually won the race -- tells you whether the extra token spend is earning its keep. */
+export type HedgeStats = { operation: string; eligible: number; won: number };
+export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[]; operations: GeminiHealthOperation[]; dailyOperations: GeminiHealthDayOperation[]; historicalComparisons: HistoricalGeminiComparison[]; routes: ScannerRoutePerformance[]; experience: ScannerExperiencePerformance; dailyExperience: ScannerExperienceDay[]; dailyRoutes: ScannerRouteDay[]; scoreYield: ScoreYield; dailyScoreYield: ScoreYieldDay[]; hedgeStats: HedgeStats[] };
 /** Aggregate protection decisions only; no client identity or request contents. */
 export type GuardRejection = { scope: string; guard: string; dimension: string | null; current: number; previous: number };
 
@@ -99,6 +101,7 @@ type ScannerRouteDayRow = { day: string | Date; route: string | null; requests: 
 type GuardRejectionRow = { scope: string | null; guard: string | null; dimension: string | null; current_value: number | string | null; previous_value: number | string | null };
 type ScoreYieldRow = { confirmed: number | string | null; estimate: number | string | null; unknown: number | string | null; total: number | string | null };
 type ScoreYieldDayRow = { day: string | Date; confirmed: number | string | null; estimate: number | string | null; unknown: number | string | null; total: number | string | null };
+type HedgeStatsRow = { operation: string | null; eligible: number | string | null; won: number | string | null };
 
 const METRICS: { key: DashboardMetricKey; label: string; unit: DashboardMetric["unit"] }[] = [
   { key: "scan_started", label: "Scans started", unit: "count" },
@@ -249,7 +252,7 @@ export async function readDashboardOverview(
 
   const sevenDayStartsAt = new Date(endsAt.getTime() - 7 * 86_400_000);
   const geminiWindowStartsAt = new Date(endsAt.getTime() - geminiWindowHours * 3_600_000);
-  const [geminiRequestDays, geminiUsageDays, geminiRequestModels, geminiUsageModels, geminiOperations, geminiDailyOperations, scannerRoutes, scannerExperience, scannerDailyExperience, scannerDailyRoutes, scoreYield, dailyScoreYield, guardRejections] = await Promise.all([
+  const [geminiRequestDays, geminiUsageDays, geminiRequestModels, geminiUsageModels, geminiOperations, geminiDailyOperations, scannerRoutes, scannerExperience, scannerDailyExperience, scannerDailyRoutes, scoreYield, dailyScoreYield, hedgeStats, guardRejections] = await Promise.all([
     db.query<GeminiRequestDayRow>(`
       SELECT date_trunc('day', occurred_at) AS day, COUNT(*)::bigint AS requests,
         COUNT(*) FILTER (WHERE COALESCE(properties->>'outcome', 'success') <> 'success')::bigint AS errors,
@@ -353,6 +356,13 @@ export async function readDashboardOverview(
       FROM analytics_events WHERE event_name = 'catalog_resolution' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
       GROUP BY 1 ORDER BY day DESC
     `, [sevenDayStartsAt.toISOString(), endsAt.toISOString()]),
+    db.query<HedgeStatsRow>(`
+      SELECT COALESCE(NULLIF(properties->>'operation', ''), 'unknown') AS operation,
+        COUNT(*) FILTER (WHERE properties ? 'hedge')::bigint AS eligible,
+        COUNT(*) FILTER (WHERE properties->>'hedge' = 'hedge_won')::bigint AS won
+      FROM analytics_events WHERE event_name = 'vision_request' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
+      GROUP BY 1 ORDER BY eligible DESC, operation ASC
+    `, [geminiWindowStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<GuardRejectionRow>(`
       SELECT COALESCE(NULLIF(properties->>'scope', ''), 'unknown') AS scope,
         COALESCE(NULLIF(properties->>'guard', ''), 'unknown') AS guard,
@@ -441,6 +451,7 @@ export async function readDashboardOverview(
       dailyRoutes: scannerDailyRoutes.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), route: row.route ?? "unknown", requests: numeric(row.requests), errors: numeric(row.errors), p95DurationMs: optional(row.p95_duration_ms), p95VisionMs: optional(row.p95_vision_ms), p95CatalogMs: optional(row.p95_catalog_ms) })),
       scoreYield: { confirmed: numeric(scoreYieldRow?.confirmed ?? null), estimate: numeric(scoreYieldRow?.estimate ?? null), unknown: numeric(scoreYieldRow?.unknown ?? null), total: numeric(scoreYieldRow?.total ?? null) },
       dailyScoreYield: dailyScoreYield.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), confirmed: numeric(row.confirmed), estimate: numeric(row.estimate), unknown: numeric(row.unknown), total: numeric(row.total) })),
+      hedgeStats: hedgeStats.rows.filter((row) => numeric(row.eligible) > 0).map((row) => ({ operation: row.operation ?? "unknown", eligible: numeric(row.eligible), won: numeric(row.won) })),
     },
   };
 }
