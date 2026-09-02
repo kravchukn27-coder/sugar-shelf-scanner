@@ -31,11 +31,6 @@ function readWindowHours(request: Request): number | null {
   return 24;
 }
 
-/** Independent of readWindowHours above -- the Gemini Health tab has its own 24h/7d toggle, separate from Product pulse's range selector. */
-function readGeminiWindowHours(request: Request): 24 | 168 {
-  return new URL(request.url).searchParams.get("geminiRange") === "24h" ? 24 : 168;
-}
-
 /** A browser never receives analytics data until it proves possession of the admin secret. */
 export async function GET(request: Request) {
   if (!isAnalyticsDashboardConfigured()) return response({ error: "not_configured" }, 503);
@@ -46,7 +41,7 @@ export async function GET(request: Request) {
       readCloudBillingSummary(),
       readBreakerStatus(["preflight", "analyze"]).catch(() => ({}) as Record<string, BreakerStatus>),
     ]);
-    const data = await readDashboardOverview(getPool(process.env.DATABASE_URL!), new Date(), readWindowHours(request), cloudBilling, readGeminiWindowHours(request));
+    const data = await readDashboardOverview(getPool(process.env.DATABASE_URL!), new Date(), readWindowHours(request), cloudBilling);
     return response({ ...data, breaker }, 200);
   } catch {
     // Keep database topology and query failures internal; the dashboard can
