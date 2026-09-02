@@ -73,7 +73,10 @@ export type ScannerExperiencePerformance = { completions: number; p95CaptureRead
 export type ScannerExperienceDay = { day: string; completions: number; p95FirstPreflightDispatchMs: number | null; p95PreflightRttMs: number | null; p95AnalyzeRttMs: number | null };
 export type ScannerRouteDay = { day: string; route: string; requests: number; errors: number; p95DurationMs: number | null; p95VisionMs: number | null; p95CatalogMs: number | null };
 export type HistoricalGeminiComparison = { period: string; requests: number; successRate: number; preflightP50Ms: string; preflightTimeoutRate: number; note: string };
-export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[]; operations: GeminiHealthOperation[]; dailyOperations: GeminiHealthDayOperation[]; historicalComparisons: HistoricalGeminiComparison[]; routes: ScannerRoutePerformance[]; experience: ScannerExperiencePerformance; dailyExperience: ScannerExperienceDay[]; dailyRoutes: ScannerRouteDay[] };
+/** Of everything Gemini detected, how much actually resolved to a usable score (confirmed via catalog, or a trusted Gemini estimate) vs. unknown. */
+export type ScoreYield = { confirmed: number; estimate: number; unknown: number; total: number };
+export type ScoreYieldDay = { day: string; confirmed: number; estimate: number; unknown: number; total: number };
+export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[]; operations: GeminiHealthOperation[]; dailyOperations: GeminiHealthDayOperation[]; historicalComparisons: HistoricalGeminiComparison[]; routes: ScannerRoutePerformance[]; experience: ScannerExperiencePerformance; dailyExperience: ScannerExperienceDay[]; dailyRoutes: ScannerRouteDay[]; scoreYield: ScoreYield; dailyScoreYield: ScoreYieldDay[] };
 /** Aggregate protection decisions only; no client identity or request contents. */
 export type GuardRejection = { scope: string; guard: string; dimension: string | null; current: number; previous: number };
 
@@ -94,6 +97,8 @@ type ScannerExperienceRow = { completions: number | string | null; p95_capture_r
 type ScannerExperienceDayRow = { day: string | Date; completions: number | string | null; p95_first_preflight_dispatch_ms: number | string | null; p95_preflight_rtt_ms: number | string | null; p95_analyze_rtt_ms: number | string | null };
 type ScannerRouteDayRow = { day: string | Date; route: string | null; requests: number | string | null; errors: number | string | null; p95_duration_ms: number | string | null; p95_vision_ms: number | string | null; p95_catalog_ms: number | string | null };
 type GuardRejectionRow = { scope: string | null; guard: string | null; dimension: string | null; current_value: number | string | null; previous_value: number | string | null };
+type ScoreYieldRow = { confirmed: number | string | null; estimate: number | string | null; unknown: number | string | null; total: number | string | null };
+type ScoreYieldDayRow = { day: string | Date; confirmed: number | string | null; estimate: number | string | null; unknown: number | string | null; total: number | string | null };
 
 const METRICS: { key: DashboardMetricKey; label: string; unit: DashboardMetric["unit"] }[] = [
   { key: "scan_started", label: "Scans started", unit: "count" },
@@ -244,7 +249,7 @@ export async function readDashboardOverview(
 
   const sevenDayStartsAt = new Date(endsAt.getTime() - 7 * 86_400_000);
   const geminiWindowStartsAt = new Date(endsAt.getTime() - geminiWindowHours * 3_600_000);
-  const [geminiRequestDays, geminiUsageDays, geminiRequestModels, geminiUsageModels, geminiOperations, geminiDailyOperations, scannerRoutes, scannerExperience, scannerDailyExperience, scannerDailyRoutes, guardRejections] = await Promise.all([
+  const [geminiRequestDays, geminiUsageDays, geminiRequestModels, geminiUsageModels, geminiOperations, geminiDailyOperations, scannerRoutes, scannerExperience, scannerDailyExperience, scannerDailyRoutes, scoreYield, dailyScoreYield, guardRejections] = await Promise.all([
     db.query<GeminiRequestDayRow>(`
       SELECT date_trunc('day', occurred_at) AS day, COUNT(*)::bigint AS requests,
         COUNT(*) FILTER (WHERE COALESCE(properties->>'outcome', 'success') <> 'success')::bigint AS errors,
@@ -331,6 +336,23 @@ export async function readDashboardOverview(
       FROM analytics_events WHERE event_name = 'scan_request' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
       GROUP BY 1, 2 ORDER BY day DESC, route ASC
     `, [sevenDayStartsAt.toISOString(), endsAt.toISOString()]),
+    db.query<ScoreYieldRow>(`
+      SELECT
+        COALESCE(SUM(NULLIF(properties->'outcomes'->>'confirmed', '')::numeric), 0) AS confirmed,
+        COALESCE(SUM(NULLIF(properties->'outcomes'->>'estimate', '')::numeric), 0) AS estimate,
+        COALESCE(SUM(NULLIF(properties->'outcomes'->>'unknown', '')::numeric), 0) AS unknown,
+        COALESCE(SUM(NULLIF(properties->>'detections', '')::numeric), 0) AS total
+      FROM analytics_events WHERE event_name = 'catalog_resolution' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
+    `, [geminiWindowStartsAt.toISOString(), endsAt.toISOString()]),
+    db.query<ScoreYieldDayRow>(`
+      SELECT date_trunc('day', occurred_at) AS day,
+        COALESCE(SUM(NULLIF(properties->'outcomes'->>'confirmed', '')::numeric), 0) AS confirmed,
+        COALESCE(SUM(NULLIF(properties->'outcomes'->>'estimate', '')::numeric), 0) AS estimate,
+        COALESCE(SUM(NULLIF(properties->'outcomes'->>'unknown', '')::numeric), 0) AS unknown,
+        COALESCE(SUM(NULLIF(properties->>'detections', '')::numeric), 0) AS total
+      FROM analytics_events WHERE event_name = 'catalog_resolution' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
+      GROUP BY 1 ORDER BY day DESC
+    `, [sevenDayStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<GuardRejectionRow>(`
       SELECT COALESCE(NULLIF(properties->>'scope', ''), 'unknown') AS scope,
         COALESCE(NULLIF(properties->>'guard', ''), 'unknown') AS guard,
@@ -394,6 +416,7 @@ export async function readDashboardOverview(
   });
   const optional = (value: number | string | null | undefined) => value === null || value === undefined ? null : numeric(value);
   const experienceRow = scannerExperience.rows[0];
+  const scoreYieldRow = scoreYield.rows[0];
   return {
     generatedAt: now.toISOString(),
     window: { startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), previousStartsAt: previousStartsAt.toISOString(), allTime },
@@ -416,6 +439,8 @@ export async function readDashboardOverview(
       experience: { completions: numeric(experienceRow?.completions ?? null), p95CaptureReadyMs: optional(experienceRow?.p95_capture_ready_ms), p95FirstPreflightDispatchMs: optional(experienceRow?.p95_first_preflight_dispatch_ms), p95PreflightRttMs: optional(experienceRow?.p95_preflight_rtt_ms), p95AnalyzeRttMs: optional(experienceRow?.p95_analyze_rtt_ms), p95RenderMs: optional(experienceRow?.p95_render_ms) },
       dailyExperience: scannerDailyExperience.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), completions: numeric(row.completions), p95FirstPreflightDispatchMs: optional(row.p95_first_preflight_dispatch_ms), p95PreflightRttMs: optional(row.p95_preflight_rtt_ms), p95AnalyzeRttMs: optional(row.p95_analyze_rtt_ms) })),
       dailyRoutes: scannerDailyRoutes.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), route: row.route ?? "unknown", requests: numeric(row.requests), errors: numeric(row.errors), p95DurationMs: optional(row.p95_duration_ms), p95VisionMs: optional(row.p95_vision_ms), p95CatalogMs: optional(row.p95_catalog_ms) })),
+      scoreYield: { confirmed: numeric(scoreYieldRow?.confirmed ?? null), estimate: numeric(scoreYieldRow?.estimate ?? null), unknown: numeric(scoreYieldRow?.unknown ?? null), total: numeric(scoreYieldRow?.total ?? null) },
+      dailyScoreYield: dailyScoreYield.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), confirmed: numeric(row.confirmed), estimate: numeric(row.estimate), unknown: numeric(row.unknown), total: numeric(row.total) })),
     },
   };
 }

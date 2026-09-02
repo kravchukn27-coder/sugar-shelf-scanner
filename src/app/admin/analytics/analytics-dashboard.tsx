@@ -286,14 +286,41 @@ function useRouteComparisons(
   }, [dailyRoutes, referenceIso]);
 }
 
+/**
+ * Score yield = (confirmed + estimate) / total detections -- of everything
+ * Gemini detected, how much actually resolved to a usable score. Pools
+ * counts (not a mean of daily rates) for the average, same convention as
+ * successRate/timeoutRate in useOperationAverages above, so a high-volume
+ * day isn't diluted by a quiet one.
+ */
+function useScoreYieldComparison(
+  dailyScoreYield: { day: string; confirmed: number; estimate: number; unknown: number; total: number }[] | undefined,
+  referenceIso: string | undefined,
+): { yesterday: number | null; average: number | null } {
+  return useMemo(() => {
+    const rows = dailyScoreYield ?? [];
+    if (rows.length === 0 || !referenceIso) return { yesterday: null, average: null };
+    const yieldRate = (row: { confirmed: number; estimate: number; total: number }) => (row.total ? (row.confirmed + row.estimate) / row.total : null);
+    const yesterdayKey = new Date(new Date(referenceIso).getTime() - 86_400_000).toISOString().slice(0, 10);
+    const yesterdayRow = rows.find((row) => row.day === yesterdayKey) ?? null;
+    const latestDay = rows.reduce((max, row) => (row.day > max ? row.day : max), rows[0]!.day);
+    const prior = rows.filter((row) => row.day !== latestDay);
+    const pooled = prior.reduce((total, row) => ({ confirmed: total.confirmed + row.confirmed, estimate: total.estimate + row.estimate, total: total.total + row.total }), { confirmed: 0, estimate: 0, total: 0 });
+    return {
+      yesterday: yesterdayRow ? yieldRate(yesterdayRow) : null,
+      average: pooled.total ? (pooled.confirmed + pooled.estimate) / pooled.total : null,
+    };
+  }, [dailyScoreYield, referenceIso]);
+}
+
 /** Compact "vs yesterday" / "vs 7d avg" badge pair, reusing the existing relative-delta formatting. */
-function ComparisonBadges({ current, yesterday, average }: { current: number | null; yesterday: number | null | undefined; average: number | null | undefined }) {
+function ComparisonBadges({ current, yesterday, average, lowerIsBetter = true }: { current: number | null; yesterday: number | null | undefined; average: number | null | undefined; lowerIsBetter?: boolean }) {
   const hasYesterday = yesterday !== null && yesterday !== undefined;
   const hasAverage = average !== null && average !== undefined;
   if (!hasYesterday && !hasAverage) return null;
   return <span className={styles.deltaBadges}>
-    {hasYesterday && <small className={relativeDeltaTone(current, yesterday)}>{formatRelativeDelta(current, yesterday) ?? "—"} yesterday</small>}
-    {hasAverage && <small className={relativeDeltaTone(current, average)}>{formatRelativeDelta(current, average) ?? "—"} 7d avg</small>}
+    {hasYesterday && <small className={relativeDeltaTone(current, yesterday, lowerIsBetter)}>{formatRelativeDelta(current, yesterday) ?? "—"} yesterday</small>}
+    {hasAverage && <small className={relativeDeltaTone(current, average, lowerIsBetter)}>{formatRelativeDelta(current, average) ?? "—"} 7d avg</small>}
   </span>;
 }
 
@@ -338,6 +365,8 @@ export default function AnalyticsDashboard() {
   const operationAverages = useOperationAverages(overview?.geminiHealth.dailyOperations);
   const experienceComparison = useExperienceComparison(overview?.geminiHealth.dailyExperience, overview?.generatedAt);
   const routeComparisons = useRouteComparisons(overview?.geminiHealth.dailyRoutes, overview?.generatedAt);
+  const scoreYieldComparison = useScoreYieldComparison(overview?.geminiHealth.dailyScoreYield, overview?.generatedAt);
+  const scoreYieldRate = overview?.geminiHealth.scoreYield.total ? (overview.geminiHealth.scoreYield.confirmed + overview.geminiHealth.scoreYield.estimate) / overview.geminiHealth.scoreYield.total : null;
   const breakerOperations = useMemo(() => (["preflight", "analyze"] as const).map((operation) => ({ operation, status: overview?.breaker?.[operation] ?? null })), [overview]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -439,7 +468,7 @@ export default function AnalyticsDashboard() {
         if (status.state === "open") return <span key={operation} className={styles.breakerBadgeOpen}>{formatOperationLabel(operation)}: failover active — {status.currentModel ?? "fallback model"}{status.sinceMs !== null ? ` since ${formatBreakerSince(status.sinceMs)}` : ""}</span>;
         return <span key={operation} className={styles.breakerBadgeProbing}>{formatOperationLabel(operation)}: testing {status.currentModel ?? "primary model"} again…</span>;
       })}</div>
-      <div className={styles.metrics}><article className={styles.metricCard}><p>Requests</p><strong>{geminiTotals.requests}</strong><span className={styles.neutral}>All operations</span></article><article className={styles.metricCard}><p>Error rate</p><strong>{formatPercent(geminiTotals.requests ? geminiTotals.errors / geminiTotals.requests : null)}</strong><span className={styles.neutral}>{geminiTotals.errors} failed</span></article><article className={styles.metricCard}><p>Provider tokens</p><strong>{formatValue(geminiTotals.tokens, "count")}</strong><span className={styles.neutral}>Usage-reported only</span></article><article className={styles.metricCard}><p>Estimated cost</p><strong>{formatBilling(geminiTotals.cost, "USD")}</strong><span className={styles.neutral}>Application estimate</span></article></div>
+      <div className={styles.metrics}><article className={styles.metricCard}><p>Requests</p><strong>{geminiTotals.requests}</strong><span className={styles.neutral}>All operations</span></article><article className={styles.metricCard}><p>Error rate</p><strong>{formatPercent(geminiTotals.requests ? geminiTotals.errors / geminiTotals.requests : null)}</strong><span className={styles.neutral}>{geminiTotals.errors} failed</span></article><article className={styles.metricCard}><p>Provider tokens</p><strong>{formatValue(geminiTotals.tokens, "count")}</strong><span className={styles.neutral}>Usage-reported only</span></article><article className={styles.metricCard}><p>Estimated cost</p><strong>{formatBilling(geminiTotals.cost, "USD")}</strong><span className={styles.neutral}>Application estimate</span></article><article className={styles.metricCard}><p>Score yield</p><strong>{formatPercent(scoreYieldRate)}</strong><ComparisonBadges current={scoreYieldRate} yesterday={scoreYieldComparison.yesterday} average={scoreYieldComparison.average} lowerIsBetter={false} /><span className={styles.neutral}>{overview.geminiHealth.scoreYield.confirmed + overview.geminiHealth.scoreYield.estimate} of {overview.geminiHealth.scoreYield.total} detections scored</span></article></div>
       <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Protection limits</p><h2>Where requests were blocked</h2></div><span>{RANGE_LABELS[range]}</span></div>{overview.guardRejections.length === 0 ? <p className={styles.empty}>No protection limit has blocked work in this window.</p> : <div className={styles.guardTable}><div className={styles.comparisonHeader}><span>Scope</span><span>Protection</span><span>Dimension</span><span>Blocked</span><span>Prior window</span></div>{overview.guardRejections.map((item) => <div key={`${item.scope}-${item.guard}-${item.dimension ?? "none"}`}><strong>{formatEventName(item.scope)}</strong><span>{formatGuardName(item.guard)}</span><span>{item.dimension ? formatEventName(item.dimension) : "—"}</span><strong className={styles.negative}>{item.current}</strong><span>{item.previous}</span></div>)}</div>}<p className={styles.panelNote}>Counts begin with this deployment. They are aggregate safety decisions only: no IP addresses, installation IDs, images, or request payloads are stored.</p></article>
       <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Historical Railway logs</p><h2>Baseline and incident comparison</h2></div><span>Archived aggregates</span></div><div className={styles.comparisonScroll}><div className={styles.historyTable}><div className={styles.comparisonHeader}><span>Window</span><span>Requests</span><span>Success</span><span>Pre-screen p50</span><span>Pre-screen timeout</span><span>Confidence</span></div>{overview.geminiHealth.historicalComparisons.map((item) => <div key={item.period}><strong>{item.period}</strong><span>{item.requests}</span><span>{formatPercent(item.successRate)}</span><span>{item.preflightP50Ms}</span><span>{formatPercent(item.preflightTimeoutRate)}</span><small>{item.note}</small></div>)}</div></div><p className={styles.panelNote}>These are verified aggregates from the August Railway investigation. Individual logs have expired, so p95, queue and Analyze splits are deliberately not inferred.</p></article>
       <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Day-to-day comparison</p><h2>Gemini speed by operation</h2></div><span>UTC · newest first</span></div>{overview.geminiHealth.dailyOperations.length === 0 ? <p className={styles.empty}>No persisted Gemini events in this window yet.</p> : <div className={styles.comparisonScroll}><div className={styles.comparisonTable}><div className={styles.comparisonHeader}><span>Day</span><span>Stage</span><span>Requests</span><span>Success</span><span>Timeout</span><span>p50 Gemini</span><span>p95 Gemini</span><span>p95 queue</span></div>{overview.geminiHealth.dailyOperations.map((item) => {
