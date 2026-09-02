@@ -30,7 +30,11 @@ test("cloud billing reads only an aggregate Gemini and Google spend summary", as
     query = JSON.parse(String(init?.body)).query;
     return new Response(JSON.stringify({ rows: [{ f: [{ v: "USD" }, { v: "2026-08-31T10:00:00Z" }, { v: "1.25" }, { v: "15.5" }, { v: "1" }, { v: "12" }] }] }));
   }) as typeof fetch;
-  const result = await readCloudBillingSummary(environment, new Date(), fetcher, {});
+  // Fixed clock on purpose: "available" versus "stale" is decided by how far
+  // `now` sits from the row's usage timestamp, so a real clock made this test
+  // pass only for the 36 hours after the fixture's date and fail every day
+  // after that.
+  const result = await readCloudBillingSummary(environment, new Date("2026-08-31T12:00:00Z"), fetcher, {});
   assert.deepEqual(result, { state: "available", currency: "USD", latestUsageAt: "2026-08-31T10:00:00Z", actualGoogleLast24Hours: 1.25, actualGoogleLast30Days: 15.5, geminiLast24Hours: 1, geminiLast30Days: 12 });
   assert.match(query, /project\.id = @projectId/);
   assert.match(query, /gemini\|generative language/);
