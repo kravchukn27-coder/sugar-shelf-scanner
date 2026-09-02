@@ -153,6 +153,7 @@ function logAttempt(
   operation: VisionOperation,
   model: string,
   isPrimary: boolean,
+  isProbe: boolean,
   receivedAt: number,
   startedAt: number,
   timeoutMs: number,
@@ -179,7 +180,12 @@ function logAttempt(
     // (process.env) is what actually carries REDIS_URL/NODE_ENV, matching
     // how acquireGeminiPermit/reserveGeminiRequest are already called
     // elsewhere in this file.
-    recordOutcomeAsync(operation as BreakerOperation, isPrimary, outcome === "success");
+    //
+    // `isProbe` must be the exact value selectModel returned for this
+    // request, not re-derived here -- see recordOutcomeAsync's own doc
+    // comment for why an in-flight request that started before a trip must
+    // never be misclassified as a probe result.
+    recordOutcomeAsync(operation as BreakerOperation, isPrimary, isProbe, outcome === "success");
   }
 }
 
@@ -503,7 +509,7 @@ export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEn
   // logical scan and reused for the primary attempt, its hedge duplicate, and
   // the one transport-failure retry below, so a single scan's telemetry never
   // mixes two model names and the hedge race never crosses two models.
-  const { model, isPrimary } = await selectModel("analyze", env.GEMINI_ANALYZE_MODEL, env.GEMINI_ANALYZE_MODEL_FALLBACK);
+  const { model, isPrimary, isProbe } = await selectModel("analyze", env.GEMINI_ANALYZE_MODEL, env.GEMINI_ANALYZE_MODEL_FALLBACK);
   try {
     if (!env.GEMINI_API_KEY) throw new VisionRequestError("Gemini is not configured.", 503, "provider_error");
     const bytes = imageByteLength(input.imageBase64);
@@ -515,20 +521,20 @@ export async function analyzeWithGemini(input: AnalyzeScanRequest, env: ServerEn
     try {
       if (eligibleForHedge) {
         const { result, hedge } = await attemptAnalyzeWithHedge(input, env, model, GEMINI_TIMEOUT_MS, requestSignal);
-        logAttempt("analyze", model, isPrimary, receivedAt, startedAt, GEMINI_TIMEOUT_MS, undefined, hedge);
+        logAttempt("analyze", model, isPrimary, isProbe, receivedAt, startedAt, GEMINI_TIMEOUT_MS, undefined, hedge);
         return result;
       }
       const result = await attemptAnalyze(input, env, model, GEMINI_TIMEOUT_MS, requestSignal);
-      logAttempt("analyze", model, isPrimary, receivedAt, startedAt, GEMINI_TIMEOUT_MS);
+      logAttempt("analyze", model, isPrimary, isProbe, receivedAt, startedAt, GEMINI_TIMEOUT_MS);
       return result;
     } catch (firstError) {
       if (!isRetryableAnalyzeFailure(firstError)) throw firstError;
       const result = await attemptAnalyze(input, env, model, GEMINI_ANALYZE_RETRY_TIMEOUT_MS, requestSignal);
-      logAttempt("analyze", model, isPrimary, receivedAt, startedAt, GEMINI_TIMEOUT_MS + GEMINI_ANALYZE_RETRY_TIMEOUT_MS);
+      logAttempt("analyze", model, isPrimary, isProbe, receivedAt, startedAt, GEMINI_TIMEOUT_MS + GEMINI_ANALYZE_RETRY_TIMEOUT_MS);
       return result;
     }
   } catch (error) {
-    logAttempt("analyze", model, isPrimary, receivedAt, startedAt, GEMINI_TIMEOUT_MS, error);
+    logAttempt("analyze", model, isPrimary, isProbe, receivedAt, startedAt, GEMINI_TIMEOUT_MS, error);
     throw error;
   }
 }
@@ -543,7 +549,7 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
   // Model selection is delegated to the circuit breaker. Chosen once and
   // reused for the fetch URL and every log line below, so a single request's
   // telemetry never mixes two model names.
-  const { model, isPrimary } = await selectModel("preflight", env.GEMINI_PREFLIGHT_MODEL, env.GEMINI_PREFLIGHT_MODEL_FALLBACK);
+  const { model, isPrimary, isProbe } = await selectModel("preflight", env.GEMINI_PREFLIGHT_MODEL, env.GEMINI_PREFLIGHT_MODEL_FALLBACK);
   let abort: AttemptAbort | undefined;
   try {
     if (!env.GEMINI_API_KEY) throw new VisionRequestError("Gemini is not configured.", 503, "provider_error");
@@ -593,7 +599,7 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
     // Keep the invariant meaningful even if a model returns internally
     // inconsistent fields despite the schema instructions.
     const isCandidate = parsed.decision === "candidate" && parsed.packagedProductCount > 0;
-    logAttempt("preflight", model, isPrimary, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS);
+    logAttempt("preflight", model, isPrimary, isProbe, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS);
     return {
       clientFrameId: input.clientFrameId,
       provider: "gemini",
@@ -608,16 +614,16 @@ export async function preflightWithGemini(input: PreflightScanRequest, env: Serv
     }
   } catch (error) {
     if (error instanceof VisionRequestError) {
-      logAttempt("preflight", model, isPrimary, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, error);
+      logAttempt("preflight", model, isPrimary, isProbe, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, error);
       throw error;
     }
     if (abort?.reason() || (error instanceof Error && error.name === "AbortError")) {
       const timeoutError = abortVisionError(abort?.reason() ?? null);
-      logAttempt("preflight", model, isPrimary, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, timeoutError);
+      logAttempt("preflight", model, isPrimary, isProbe, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, timeoutError);
       throw timeoutError;
     }
     const providerError = new VisionRequestError("Unable to reach the vision provider.", 502, "provider_error");
-    logAttempt("preflight", model, isPrimary, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, providerError);
+    logAttempt("preflight", model, isPrimary, isProbe, receivedAt, startedAt, GEMINI_PREFLIGHT_TIMEOUT_MS, providerError);
     throw providerError;
   }
 }

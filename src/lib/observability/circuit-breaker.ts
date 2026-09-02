@@ -22,7 +22,7 @@ import { createClient } from "redis";
 
 export type BreakerOperation = "preflight" | "analyze";
 
-export type ModelSelection = { model: string; isPrimary: boolean };
+export type ModelSelection = { model: string; isPrimary: boolean; isProbe: boolean };
 
 export type BreakerState = "closed" | "open" | "probing";
 
@@ -38,6 +38,18 @@ export type RedisEval = { eval(script: string, options: { keys: string[]; argume
 const FALLBACK_RING_SIZE = 5;
 const PROBE_INTERVAL_CAP_MS = 30 * 60 * 1000;
 const PROBE_INTERVAL_FLOOR_MS = 10_000;
+// A probe's lock must outlive the request it gates, or a second probe can
+// acquire the slot while the first is still in flight (the lock would
+// expire mid-request, since the default probe interval is shorter than
+// analyze's worst-case duration). Defaults are sized generously above each
+// operation's worst-case timeout (preflight 5s; analyze 25s + one 8s retry).
+// Env-overridable (like every other tunable here) so tests can use a floor
+// far below production reality without waiting out a real 35s timer.
+const PROBE_LOCK_FLOOR_ENV: Record<BreakerOperation, string> = {
+  preflight: "GEMINI_BREAKER_PROBE_LOCK_FLOOR_MS_PREFLIGHT",
+  analyze: "GEMINI_BREAKER_PROBE_LOCK_FLOOR_MS_ANALYZE",
+};
+const PROBE_LOCK_FLOOR_DEFAULT: Record<BreakerOperation, number> = { preflight: 6_000, analyze: 35_000 };
 
 // ---------------------------------------------------------------------------
 // Lua scripts. Each one is a single atomic round trip so replica races (two
@@ -49,7 +61,7 @@ const PROBE_INTERVAL_FLOOR_MS = 10_000;
  * Decide primary vs fallback for one request.
  * KEYS[1] state hash, KEYS[2] primary ring (list), KEYS[3] probe lock
  * ARGV: now, minSamples, failureThreshold, cooldownMs, minTransitionIntervalMs,
- *       baseProbeIntervalMs, primaryModel, fallbackModel
+ *       baseProbeIntervalMs, primaryModel, fallbackModel, probeLockFloorMs
  * Returns "primary" | "primary_probe" | "fallback"
  */
 const SELECT_SCRIPT = `
@@ -89,7 +101,10 @@ end
 
 local intervalRaw = redis.call('HGET', KEYS[1], 'probeIntervalMs')
 local interval = intervalRaw and tonumber(intervalRaw) or tonumber(ARGV[6])
-local acquired = redis.call('SET', KEYS[3], '1', 'NX', 'PX', interval)
+local floor = tonumber(ARGV[9])
+local ttl = interval
+if ttl < floor then ttl = floor end
+local acquired = redis.call('SET', KEYS[3], '1', 'NX', 'PX', ttl)
 if acquired then
   return 'primary_probe'
 end
@@ -101,7 +116,8 @@ return 'fallback'
  * normal closed-state request, or a probe while open).
  * KEYS[1] state hash, KEYS[2] primary ring, KEYS[3] probe lock, KEYS[4] fallback ring
  * ARGV: now, isSuccess('1'/'0'), minSamples (primary ring cap), recoverStreakThreshold,
- *       minTransitionIntervalMs, probeIntervalCapMs, baseProbeIntervalMs
+ *       minTransitionIntervalMs, probeIntervalCapMs, baseProbeIntervalMs, isProbe('1'/'0'),
+ *       probeLockFloorMs
  */
 const RECORD_PRIMARY_SCRIPT = `
 local state = redis.call('HGET', KEYS[1], 'state')
@@ -109,6 +125,16 @@ if state ~= 'open' then
   redis.call('LPUSH', KEYS[2], ARGV[2])
   redis.call('LTRIM', KEYS[2], 0, tonumber(ARGV[3]) - 1)
   return 'recorded_closed'
+end
+
+-- A primary result that lands here without having actually been the probe
+-- (an in-flight request that started before this breaker tripped, or a
+-- transition raced with a request already underway) says nothing about
+-- whether primary has recovered -- it must not touch recoverStreak or the
+-- backoff interval, mirroring how RECORD_FALLBACK_SCRIPT ignores writes
+-- once no longer open.
+if ARGV[8] ~= '1' then
+  return 'ignored'
 end
 
 local now = tonumber(ARGV[1])
@@ -138,6 +164,14 @@ else
   local next = current * 2
   if next > cap then next = cap end
   redis.call('HSET', KEYS[1], 'probeIntervalMs', next)
+  -- Re-arm the lock to the freshly-doubled interval right now, rather than
+  -- leaving whatever's left of the failed probe's (shorter, pre-doubling)
+  -- lock to expire on its own -- otherwise the next probe can arrive after
+  -- only the old interval's remaining time, undershooting the backoff.
+  local ttl = next
+  local floor = tonumber(ARGV[9])
+  if ttl < floor then ttl = floor end
+  redis.call('SET', KEYS[3], '1', 'PX', ttl)
   return 'probe_failed'
 end
 `;
@@ -264,6 +298,8 @@ function breakerConfig(environment: NodeJS.ProcessEnv) {
     probeIntervalMs: envPositiveInt("GEMINI_BREAKER_PROBE_INTERVAL_MS", 30_000, environment),
     recoverStreak: envPositiveInt("GEMINI_BREAKER_RECOVER_STREAK", 3, environment),
     minTransitionIntervalMs: envPositiveInt("GEMINI_BREAKER_MIN_TRANSITION_INTERVAL_MS", 30_000, environment),
+    probeLockFloorMs: (operation: BreakerOperation) =>
+      envPositiveInt(PROBE_LOCK_FLOOR_ENV[operation], PROBE_LOCK_FLOOR_DEFAULT[operation], environment),
   };
 }
 
@@ -294,7 +330,7 @@ export async function selectModel(
 ): Promise<ModelSelection> {
   try {
     const client = await resolveRedis(environment, redis);
-    if (!client) return { model: primaryModel, isPrimary: true };
+    if (!client) return { model: primaryModel, isPrimary: true, isProbe: false };
     const cfg = breakerConfig(environment);
     const keys = breakerKeys(operation);
     const result = await client.eval(SELECT_SCRIPT, {
@@ -308,18 +344,22 @@ export async function selectModel(
         String(cfg.probeIntervalMs),
         primaryModel,
         fallbackModel,
+        String(cfg.probeLockFloorMs(operation)),
       ],
     });
-    if (result === "primary" || result === "primary_probe") return { model: primaryModel, isPrimary: true };
-    return { model: fallbackModel, isPrimary: false };
+    if (result === "primary" || result === "primary_probe") {
+      return { model: primaryModel, isPrimary: true, isProbe: result === "primary_probe" };
+    }
+    return { model: fallbackModel, isPrimary: false, isProbe: false };
   } catch {
-    return { model: primaryModel, isPrimary: true };
+    return { model: primaryModel, isPrimary: true, isProbe: false };
   }
 }
 
 async function recordOutcome(
   operation: BreakerOperation,
   wasPrimary: boolean,
+  isProbe: boolean,
   isSuccess: boolean,
   environment: NodeJS.ProcessEnv,
   redis?: RedisEval,
@@ -341,6 +381,8 @@ async function recordOutcome(
           String(cfg.minTransitionIntervalMs),
           String(PROBE_INTERVAL_CAP_MS),
           String(cfg.probeIntervalMs),
+          isProbe ? "1" : "0",
+          String(cfg.probeLockFloorMs(operation)),
         ],
       });
     } else {
@@ -358,15 +400,23 @@ async function recordOutcome(
  * Fire-and-forget outcome recording. The caller passes only whether the
  * request succeeded -- mapping a provider outcome to that boolean happens in
  * the integration layer, not here.
+ *
+ * `isProbe` must be the exact value `selectModel` returned for THIS request
+ * (its `ModelSelection.isProbe`). It is NOT safe to re-derive "was this a
+ * probe?" from the breaker's current state at record time: a request that
+ * started while closed can finish after another concurrent request has
+ * already tripped the breaker open, and misclassifying that stale result as
+ * a probe would corrupt the recovery streak and backoff schedule.
  */
 export function recordOutcomeAsync(
   operation: BreakerOperation,
   wasPrimary: boolean,
+  isProbe: boolean,
   isSuccess: boolean,
   environment: NodeJS.ProcessEnv = process.env,
   redis?: RedisEval,
 ): void {
-  void recordOutcome(operation, wasPrimary, isSuccess, environment, redis);
+  void recordOutcome(operation, wasPrimary, isProbe, isSuccess, environment, redis);
 }
 
 /** For the admin dashboard. Must never throw -- any Redis problem reports "closed" for every operation. */
