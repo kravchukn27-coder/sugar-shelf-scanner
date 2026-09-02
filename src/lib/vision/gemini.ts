@@ -4,7 +4,7 @@ import type { AnalyzeScanRequest, AnalyzeScanResponse, Detection, PreflightScanR
 import type { NormalizedBox, ScoreBand } from "@/lib/contracts/product";
 import { isVisionUsageMetricsEnabled, type ServerEnv } from "@/lib/env";
 import { logUnbrandedDetectionNameForReview, logVisionTelemetry, logVisionUsageTelemetry, type VisionOperation, type VisionOutcome } from "@/lib/observability/vision";
-import { acquireGeminiPermit, reserveGeminiRequest, type GeminiOperation } from "@/lib/observability/redis-guard";
+import { acquireGeminiPermit, GeminiRequestBudgetExceededError, reserveGeminiRequest, type GeminiOperation } from "@/lib/observability/redis-guard";
 import { recordOutcomeAsync, selectModel, type BreakerOperation } from "@/lib/observability/circuit-breaker";
 
 // Multimodal detection on a full shelf can take longer than a text response.
@@ -66,7 +66,8 @@ export class VisionRequestError extends Error {
   constructor(
     message: string,
     public readonly status: number,
-    public readonly code: "client_cancelled" | "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response" | "rate_limiter_unavailable",
+    public readonly code: "client_cancelled" | "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response" | "rate_limiter_unavailable" | "gemini_minute_budget_exhausted" | "gemini_daily_budget_exhausted",
+    public readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "VisionRequestError";
@@ -349,8 +350,17 @@ async function guardedGeminiFetch(operation: GeminiOperation, input: RequestInfo
   try {
     release = await acquireGeminiPermit(operation);
     await reserveGeminiRequest(operation);
-  } catch {
+  } catch (error) {
     if (release) await release();
+    if (error instanceof GeminiRequestBudgetExceededError) {
+      const daily = error.budget === "day";
+      throw new VisionRequestError(
+        daily ? "Daily scan capacity has been reached. Please try again tomorrow." : "Scan capacity is busy. Please wait a minute and try again.",
+        429,
+        daily ? "gemini_daily_budget_exhausted" : "gemini_minute_budget_exhausted",
+        error.retryAfterSeconds,
+      );
+    }
     throw new VisionRequestError("Scan protection is temporarily unavailable.", 503, "rate_limiter_unavailable");
   }
   try {

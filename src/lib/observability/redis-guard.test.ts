@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { RATE_LIMIT_POLICIES, RedisGuardUnavailableError, checkSharedRateLimit, reserveGeminiRequest } from "./redis-guard";
+import { GeminiRequestBudgetExceededError, geminiBudgetRetryAfterSeconds, RATE_LIMIT_POLICIES, RedisGuardUnavailableError, checkSharedRateLimit, reserveGeminiRequest } from "./redis-guard";
 
 class CounterRedis {
   counts = new Map<string, number>();
@@ -51,4 +51,17 @@ test("production request budget is rejected when Redis cannot reserve it", async
     reserveGeminiRequest("analyze", { NODE_ENV: "production", REDIS_URL: "redis://example", GEMINI_REQUESTS_PER_MINUTE_LIMIT: "120", GEMINI_REQUESTS_PER_DAY_LIMIT: "10000" } as NodeJS.ProcessEnv, redis),
     RedisGuardUnavailableError,
   );
+});
+
+test("a spent shared Gemini day budget returns a retryable quota error, not a Redis outage", async () => {
+  const redis = { eval: async () => "day" };
+  await assert.rejects(
+    reserveGeminiRequest("analyze", { NODE_ENV: "production", REDIS_URL: "redis://example", GEMINI_REQUESTS_PER_MINUTE_LIMIT: "120", GEMINI_REQUESTS_PER_DAY_LIMIT: "5000" } as NodeJS.ProcessEnv, redis),
+    (error: unknown) => error instanceof GeminiRequestBudgetExceededError && error.budget === "day" && error.retryAfterSeconds > 0,
+  );
+});
+
+test("daily Gemini retry time ends at the next Los Angeles midnight", () => {
+  // 2026-09-02 09:30 UTC is 02:30 in Los Angeles (PDT); reset is 07:00 UTC.
+  assert.equal(geminiBudgetRetryAfterSeconds("day", Date.parse("2026-09-02T09:30:00Z")), 77_400);
 });

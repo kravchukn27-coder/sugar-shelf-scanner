@@ -8,7 +8,7 @@ import {
 import type { ServerEnv } from "@/lib/env";
 import { estimateGeminiCost } from "@/lib/analytics/gemini-cost";
 import { logVisionTelemetry, logVisionUsageTelemetry, type VisionOutcome } from "@/lib/observability/vision";
-import { acquireGeminiPermit, reserveGeminiRequest } from "@/lib/observability/redis-guard";
+import { acquireGeminiPermit, GeminiRequestBudgetExceededError, reserveGeminiRequest } from "@/lib/observability/redis-guard";
 
 const LABEL_TIMEOUT_MS = 30_000;
 const MAX_LABEL_IMAGE_BYTES = 6 * 1024 * 1024;
@@ -21,7 +21,8 @@ export class NutritionLabelRequestError extends Error {
   constructor(
     message: string,
     public readonly status: number,
-    public readonly code: "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response" | "rate_limiter_unavailable",
+    public readonly code: "bad_image" | "provider_timeout" | "provider_error" | "invalid_provider_response" | "rate_limiter_unavailable" | "gemini_minute_budget_exhausted" | "gemini_daily_budget_exhausted",
+    public readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "NutritionLabelRequestError";
@@ -135,8 +136,17 @@ export async function extractNutritionLabelWithGemini(input: NutritionLabelRecov
       try {
         release = await acquireGeminiPermit("nutrition_label");
         await reserveGeminiRequest("nutrition_label");
-      } catch {
+      } catch (error) {
         if (release) await release();
+        if (error instanceof GeminiRequestBudgetExceededError) {
+          const daily = error.budget === "day";
+          throw new NutritionLabelRequestError(
+            daily ? "Daily scan capacity has been reached. Please try again tomorrow." : "Scan capacity is busy. Please wait a minute and try again.",
+            429,
+            daily ? "gemini_daily_budget_exhausted" : "gemini_minute_budget_exhausted",
+            error.retryAfterSeconds,
+          );
+        }
         throw new NutritionLabelRequestError("Scan protection is temporarily unavailable.", 503, "rate_limiter_unavailable");
       }
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.GEMINI_VISION_MODEL)}:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`, {

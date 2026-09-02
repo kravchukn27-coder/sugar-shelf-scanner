@@ -59,7 +59,9 @@ export async function POST(request: Request) {
     return respond(preflightScanResponseSchema.parse(response), 200, performance.now() - visionStartedAt);
   } catch (error) {
     if (error instanceof VisionRequestError) {
-      return respond({ error: error.message, code: error.code }, error.status);
+      const response = respond({ error: error.message, code: error.code }, error.status);
+      if (error.retryAfterSeconds) response.headers.set("Retry-After", String(error.retryAfterSeconds));
+      return response;
     }
     return respond({ error: "Unable to preflight this frame.", code: "internal_error" }, 500);
   }

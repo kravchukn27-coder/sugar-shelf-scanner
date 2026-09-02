@@ -47,7 +47,11 @@ export async function POST(request: Request) {
   try {
     return respond(nutritionLabelRecoveryResponseSchema.parse(await extractNutritionLabelWithGemini(parsed.data, env, startedAt)), 200);
   } catch (error) {
-    if (error instanceof NutritionLabelRequestError) return respond({ error: error.message, code: error.code }, error.status);
+    if (error instanceof NutritionLabelRequestError) {
+      const response = respond({ error: error.message, code: error.code }, error.status);
+      if (error.retryAfterSeconds) response.headers.set("Retry-After", String(error.retryAfterSeconds));
+      return response;
+    }
     return respond({ error: "Nutrition label reading is temporarily unavailable. Take another photo and try again.", code: "internal_error" }, 500);
   }
 }

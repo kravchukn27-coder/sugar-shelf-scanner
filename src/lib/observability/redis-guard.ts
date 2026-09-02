@@ -66,6 +66,17 @@ export class RedisGuardUnavailableError extends Error {
   constructor() { super("Shared rate limiter is unavailable."); this.name = "RedisGuardUnavailableError"; }
 }
 
+/** The shared counter is healthy; the paid-provider allowance is simply spent. */
+export class GeminiRequestBudgetExceededError extends Error {
+  constructor(
+    public readonly budget: "minute" | "day",
+    public readonly retryAfterSeconds: number,
+  ) {
+    super(`Gemini ${budget} request budget is exhausted.`);
+    this.name = "GeminiRequestBudgetExceededError";
+  }
+}
+
 /**
  * This is intentionally an aggregate-only event. It records which safety
  * boundary rejected work, never the IP, installation ID, image, or request
@@ -178,6 +189,34 @@ const operationEnv: Record<GeminiOperation, string> = {
   nutrition_label: "GEMINI_NUTRITION_LABEL_CONCURRENCY_LIMIT",
 };
 
+function pacificOffsetMs(timestamp: number) {
+  const zoneName = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    timeZoneName: "longOffset",
+  }).formatToParts(new Date(timestamp)).find((part) => part.type === "timeZoneName")?.value;
+  const match = /^GMT([+-])(\d{2}):(\d{2})$/.exec(zoneName ?? "");
+  if (!match) throw new RedisGuardUnavailableError();
+  const magnitude = (Number(match[2]) * 60 + Number(match[3])) * 60_000;
+  return match[1] === "+" ? magnitude : -magnitude;
+}
+
+export function geminiBudgetRetryAfterSeconds(budget: "minute" | "day", now = Date.now()) {
+  if (budget === "minute") return 60 - (Math.floor(now / 1_000) % 60);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(now));
+  const values = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  const localNextMidnight = Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day) + 1);
+  // Iterate once so a DST transition between now and the coming midnight does
+  // not advertise a retry window that is one hour early or late.
+  let nextPacificMidnight = localNextMidnight - pacificOffsetMs(localNextMidnight);
+  nextPacificMidnight = localNextMidnight - pacificOffsetMs(nextPacificMidnight);
+  return Math.max(1, Math.ceil((nextPacificMidnight - now) / 1_000));
+}
+
 /** A short Redis lease bounds actual provider calls across every API replica. */
 export async function acquireGeminiPermit(operation: GeminiOperation, environment: NodeJS.ProcessEnv = process.env, redis?: RedisEval): Promise<() => Promise<void>> {
   if (!environment.REDIS_URL && !production(environment)) return async () => undefined;
@@ -215,10 +254,18 @@ export async function reserveGeminiRequest(operation: GeminiOperation, environme
       arguments: [String(minuteLimit), String(dayLimit), "120000", "172800000"],
     });
   } catch { recordGuardRejection(operation, "redis_unavailable"); throw new RedisGuardUnavailableError(); }
-  if (reserved !== 1) {
-    recordGuardRejection(operation, reserved === "minute" ? "gemini_minute_budget" : "gemini_day_budget");
-    throw new RedisGuardUnavailableError();
+  if (reserved === "minute") {
+    recordGuardRejection(operation, "gemini_minute_budget");
+    throw new GeminiRequestBudgetExceededError("minute", geminiBudgetRetryAfterSeconds("minute"));
   }
+  if (reserved === "day") {
+    recordGuardRejection(operation, "gemini_day_budget");
+    // The Redis key uses the Los Angeles calendar day, so the retry window
+    // must match it rather than the server's UTC clock.
+    throw new GeminiRequestBudgetExceededError("day", geminiBudgetRetryAfterSeconds("day"));
+  }
+  recordGuardRejection(operation, "redis_unavailable");
+  throw new RedisGuardUnavailableError();
 }
 
 /** Production routes use Redis. Tests/local mock retain the legacy process guard only outside production. */
