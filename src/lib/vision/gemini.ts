@@ -408,7 +408,7 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, model: 
         generationConfig: {
           // Shelf recognition is latency-sensitive. Configure the supported
           // low-latency thinking mode for the model selected in Railway.
-          thinkingConfig: thinkingConfigFor(model, "medium"),
+          thinkingConfig: thinkingConfigFor(model),
           responseMimeType: "application/json",
           responseSchema: {
             type: "OBJECT",
