@@ -339,3 +339,75 @@ over to `gemini-3.6-flash` if it degrades, then probes to switch back once
 `gemini-3.5-flash-lite` recovers. Implementation not yet live as of this
 entry — see the architecture discussion in this file's companion doc or the
 relevant PR once it lands.
+
+### 2026-09-02 — [`cc593ba`](../../commit/cc593ba) — analyze thinkingLevel raised to "medium"; sugar-estimate prompt contract clarified after a regression
+
+**Change:** `src/lib/vision/gemini.ts` — `analyze`'s `thinkingConfig` moved
+from `"low"` to `"medium"` (`thinkingConfigFor(model, "medium")`). Preflight
+stays at `"minimal"`, unaffected.
+
+**Why:** real `gemini-3.5-flash-lite` traffic on 09-02 showed the same shelf,
+rescanned seconds apart, flip-flopping on whether it returned a sugar
+estimate at all (and once garbling a product name, "Claro de Huevo" →
+"Claro de Huerto") — consistent with `"low"` being too thin for this model
+to reliably reason through brand identification + nutrition together.
+
+**Incident along the way (self-inflicted, now fixed):** the same deploy
+attempted a second change — an `estimateSource` field (`"label_or_barcode"`
+vs `"typical_for_category"`) added to the response schema and prompt, meant
+to stop the "scores a bottle whose label was never visible" pattern by only
+trusting an estimate when Gemini claimed it read one off real packaging.
+This **broke every analyze call** (`400`/`422 provider_error`, both primary
+and fallback model) — Gemini rejected the request outright. Isolated via a
+temporary debug log of the raw provider message
+(`"Request contains an invalid argument."`) plus binary-search reverts:
+neither `nullable: true` nor the `"medium"` thinking level were the cause;
+declaring `estimateSource` as an `enum` *nested inside `detections[]`'s
+array-item object* was. Preflight's working enum fields (`decision`,
+`reasonCode`) are both top-level object properties, never nested inside an
+array item — suspect that's the unsupported shape. Reverted in
+[`66017ba`](../../commit/66017ba)/[`6baf487`](../../commit/6baf487): schema
+field and the `toDetection` gate removed, its test skipped (not deleted).
+
+**Second-order bug (also self-inflicted, also fixed):** the revert above
+restored the *code*, but not the *prompt text* — the prompt paragraph
+introduced alongside `estimateSource` was still live and told Gemini "only
+set `estimatedSugarPer100g` when you can literally read a printed
+value... do not estimate from recognizing the product type." Combined with
+the `"medium"` bump making Gemini more literal/conservative, this drove
+`estimate: 0` across *every* analyze call regardless of shelf — not a
+reasoning-depth problem, a prompt regression. Fixed in
+[`a3274be`](../../commit/a3274be) by restoring the prompt to its original
+wording.
+
+**The scoring contract, restated for the record (this is how it has always
+worked, `gemini-3.6-flash` included — the incident above never actually
+changed the intended design, just briefly broke it):**
+- `estimatedSugarPer100g` is Gemini's own visual estimate, given whenever it
+  successfully identifies the product — brand/name/pack-size recognition is
+  enough, Gemini does **not** need to literally read a printed nutrition
+  value or find a barcode match first.
+- A catalog match (USDA/Open Food Facts) is an *enhancement layered on top*
+  of a successful identification, upgrading `status` to `confirmed` — it is
+  never a *precondition* for Gemini providing its own estimate. A product
+  entirely absent from both catalogs (true for most regional/foreign brands)
+  should still get a Gemini-estimated score as long as it was identified.
+  `estimatedSugarPer100g` should be omitted **only** when Gemini could not
+  responsibly infer a number at all — in practice, this should track
+  "Gemini couldn't identify the product," not "the product isn't in a
+  catalog" and not "no printed number was visible."
+- Prompt wording that enforces this exactly: *"estimatedSugarPer100g is a
+  visual estimate only; omit it when it cannot be responsibly inferred."*
+  Any future prompt edit narrowing this (e.g. requiring a literal
+  label/barcode read) is a regression against this contract, not a
+  tightening — re-read this entry before changing that sentence again.
+
+**Result:** ✅ live and confirmed — `medium` thinking level applied, prompt
+contract restored and matches the design above. Verified via a direct
+synthetic `POST /api/scan/analyze` call (200, no schema-shape errors) and
+via real traffic in Railway logs showing `success`/`200` outcomes and
+non-default confidence values (0.9–0.98, vs the previous `0.55` fallback
+default) on the model's own identifications. Whether `estimate: 0` rates
+actually improve for regional/unfamiliar products under the restored
+contract needs a fresh log pull once more real traffic accumulates — not
+yet measured post-fix.
