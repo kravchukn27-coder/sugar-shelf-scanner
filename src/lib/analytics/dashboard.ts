@@ -86,7 +86,13 @@ export type HedgeStats = { operation: string; eligible: number; won: number };
  */
 export type ConfidenceStats = { defaultConfidenceCount: number; total: number };
 export type ConfidenceStatsDay = { day: string; defaultConfidenceCount: number; total: number };
-export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[]; operations: GeminiHealthOperation[]; dailyOperations: GeminiHealthDayOperation[]; historicalComparisons: HistoricalGeminiComparison[]; routes: ScannerRoutePerformance[]; experience: ScannerExperiencePerformance; dailyExperience: ScannerExperienceDay[]; dailyRoutes: ScannerRouteDay[]; scoreYield: ScoreYield; dailyScoreYield: ScoreYieldDay[]; hedgeStats: HedgeStats[]; confidenceStats: ConfidenceStats; dailyConfidenceStats: ConfidenceStatsDay[] };
+export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[]; operations: GeminiHealthOperation[]; dailyOperations: GeminiHealthDayOperation[]; historicalComparisons: HistoricalGeminiComparison[]; routes: ScannerRoutePerformance[]; experience: ScannerExperiencePerformance; dailyExperience: ScannerExperienceDay[]; dailyRoutes: ScannerRouteDay[]; scoreYield: ScoreYield; dailyScoreYield: ScoreYieldDay[]; hedgeStats: HedgeStats[]; confidenceStats: ConfidenceStats; dailyConfidenceStats: ConfidenceStatsDay[];
+  // TEMPORARY: mirrors the detection_unbranded_name diagnostic in
+  // src/lib/observability/vision.ts (added 2026-09-01, scheduled for
+  // deletion by ~2026-09-16 along with this count). Delete this field, its
+  // query below, and the UI badge that reads it in the same cleanup.
+  unbrandedDetectionCount: number;
+};
 /** Aggregate protection decisions only; no client identity or request contents. */
 export type GuardRejection = { scope: string; guard: string; dimension: string | null; current: number; previous: number };
 
@@ -112,6 +118,7 @@ type ScoreYieldDayRow = { day: string | Date; confirmed: number | string | null;
 type HedgeStatsRow = { operation: string | null; eligible: number | string | null; won: number | string | null };
 type ConfidenceStatsRow = { default_confidence_count: number | string | null; total: number | string | null };
 type ConfidenceStatsDayRow = { day: string | Date; default_confidence_count: number | string | null; total: number | string | null };
+type UnbrandedDetectionCountRow = { count: number | string | null };
 
 const METRICS: { key: DashboardMetricKey; label: string; unit: DashboardMetric["unit"] }[] = [
   { key: "scan_started", label: "Scans started", unit: "count" },
@@ -262,7 +269,7 @@ export async function readDashboardOverview(
 
   const sevenDayStartsAt = new Date(endsAt.getTime() - 7 * 86_400_000);
   const geminiWindowStartsAt = new Date(endsAt.getTime() - geminiWindowHours * 3_600_000);
-  const [geminiRequestDays, geminiUsageDays, geminiRequestModels, geminiUsageModels, geminiOperations, geminiDailyOperations, scannerRoutes, scannerExperience, scannerDailyExperience, scannerDailyRoutes, scoreYield, dailyScoreYield, hedgeStats, confidenceStats, dailyConfidenceStats, guardRejections] = await Promise.all([
+  const [geminiRequestDays, geminiUsageDays, geminiRequestModels, geminiUsageModels, geminiOperations, geminiDailyOperations, scannerRoutes, scannerExperience, scannerDailyExperience, scannerDailyRoutes, scoreYield, dailyScoreYield, hedgeStats, confidenceStats, dailyConfidenceStats, unbrandedDetectionCount, guardRejections] = await Promise.all([
     db.query<GeminiRequestDayRow>(`
       SELECT date_trunc('day', occurred_at) AS day, COUNT(*)::bigint AS requests,
         COUNT(*) FILTER (WHERE COALESCE(properties->>'outcome', 'success') <> 'success')::bigint AS errors,
@@ -386,6 +393,11 @@ export async function readDashboardOverview(
       FROM analytics_events WHERE event_name = 'catalog_resolution' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
       GROUP BY 1 ORDER BY day DESC
     `, [sevenDayStartsAt.toISOString(), endsAt.toISOString()]),
+    // TEMPORARY: see the GeminiHealth.unbrandedDetectionCount comment above.
+    db.query<UnbrandedDetectionCountRow>(`
+      SELECT COUNT(*)::bigint AS count
+      FROM analytics_events WHERE event_name = 'detection_unbranded_name' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
+    `, [geminiWindowStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<GuardRejectionRow>(`
       SELECT COALESCE(NULLIF(properties->>'scope', ''), 'unknown') AS scope,
         COALESCE(NULLIF(properties->>'guard', ''), 'unknown') AS guard,
@@ -477,6 +489,7 @@ export async function readDashboardOverview(
       hedgeStats: hedgeStats.rows.filter((row) => numeric(row.eligible) > 0).map((row) => ({ operation: row.operation ?? "unknown", eligible: numeric(row.eligible), won: numeric(row.won) })),
       confidenceStats: { defaultConfidenceCount: numeric(confidenceStats.rows[0]?.default_confidence_count ?? null), total: numeric(confidenceStats.rows[0]?.total ?? null) },
       dailyConfidenceStats: dailyConfidenceStats.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), defaultConfidenceCount: numeric(row.default_confidence_count), total: numeric(row.total) })),
+      unbrandedDetectionCount: numeric(unbrandedDetectionCount.rows[0]?.count ?? null),
     },
   };
 }
