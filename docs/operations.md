@@ -44,6 +44,18 @@ Free external checks:
 3. Create Google Cloud Budget email alerts at 50%, 80% and 100% of the monthly
    Gemini/Google Cloud spend. Budgets are alerts, not an automatic spend cap.
 
+### Sentry error diagnostics
+
+Create a Sentry Developer project with platform **Next.js** and add its DSN as
+the server-only Railway variable `SENTRY_DSN`. The application is inert until
+this variable exists. It records server exception stacks and release metadata,
+but explicitly drops request and user fields; do not enable Session Replay,
+performance tracing, attachments, or `sendDefaultPii` for this public test.
+Telegram remains the page channel, while Sentry is the private diagnostic
+inbox. After deployment, trigger Sentry's project test event, then confirm it
+does not contain request bodies, images, OCR, e-mail, IP addresses, tokens, or
+query data.
+
 ### Incident drill
 
 After every alert setup change, use the bot's test message and temporarily set
