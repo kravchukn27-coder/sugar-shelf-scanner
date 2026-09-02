@@ -33,12 +33,12 @@ test("never displays a Sugar Fit below 1", () => {
   assert.equal(result.tone, "red");
 });
 
-test("keeps low-sugar chips in the red zone because overall nutrition matters", () => {
+test("uses a category penalty without flattening distinct chip nutrition into one score", () => {
   const result = calculateSugarFit({ sugarPer100g: .5, packSize: "45 g", name: "Classic Potato Chips", energyKcalPer100g: 536, fatPer100g: 35 });
   assert.ok(result);
-  assert.ok(result.score <= 39);
-  assert.equal(result.tone, "red");
-  assert.equal(result.label, "Not your best fit today");
+  const lighter = calculateSugarFit({ sugarPer100g: .5, packSize: "45 g", name: "Classic Potato Chips", energyKcalPer100g: 480, fatPer100g: 24, proteinPer100g: 7 });
+  assert.ok(lighter);
+  assert.ok(lighter.score > result.score);
   assert.deepEqual(result.reasons[0], { label: "Low sugar impact", tone: "good" });
   assert.ok(result.reasons.some((reason) => reason.label === "High calorie density"));
   assert.ok(result.reasons.some((reason) => reason.label === "High in fat"));
@@ -46,8 +46,20 @@ test("keeps low-sugar chips in the red zone because overall nutrition matters", 
 
   const visualEstimate = calculateSugarFit({ sugarPer100g: .5, packSize: "45 g", brand: "Lay’s", name: "Original" });
   assert.ok(visualEstimate);
-  assert.ok(visualEstimate.score <= 39);
   assert.ok(visualEstimate.reasons.some((reason) => reason.label === "Highly processed snack"));
+});
+
+test("differentiates candy and chocolate products instead of capping them at a shared score", () => {
+  const gummy = calculateSugarFit({ sugarPer100g: 50, packSize: "50 g", name: "Gummy Candy", energyKcalPer100g: 350, fatPer100g: 0, proteinPer100g: 5 });
+  const caramel = calculateSugarFit({ sugarPer100g: 45, packSize: "50 g", name: "Caramel Candy", energyKcalPer100g: 430, fatPer100g: 15, proteinPer100g: 3 });
+  const darkChocolate = calculateSugarFit({ sugarPer100g: 25, packSize: "40 g", name: "Dark Chocolate", energyKcalPer100g: 600, fatPer100g: 42, proteinPer100g: 8 });
+  const milkChocolate = calculateSugarFit({ sugarPer100g: 52, packSize: "40 g", name: "Milk Chocolate", energyKcalPer100g: 535, fatPer100g: 30, proteinPer100g: 7 });
+
+  assert.ok(gummy && caramel && darkChocolate && milkChocolate);
+  assert.notEqual(gummy.score, caramel.score);
+  assert.notEqual(darkChocolate.score, milkChocolate.score);
+  assert.ok(gummy.score > caramel.score);
+  assert.ok(darkChocolate.score > milkChocolate.score);
 });
 
 test("keeps unavailable sugar unscored", () => {

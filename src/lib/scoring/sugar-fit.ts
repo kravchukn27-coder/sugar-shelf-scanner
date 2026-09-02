@@ -42,6 +42,9 @@ const ENERGY_STOPS: readonly Stop[] = [[0, 100], [120, 90], [250, 70], [400, 40]
 const FAT_STOPS: readonly Stop[] = [[0, 100], [3, 90], [10, 70], [17.5, 45], [30, 15], [50, 0]];
 const PROTEIN_STOPS: readonly Stop[] = [[0, 45], [5, 60], [10, 80], [20, 100]];
 const CHIPS_PATTERN = /\b(chips?|crisps?|pringles|doritos|cheetos|ruffles|takis|lays|papitas?|papas?)\b|lay[’']s|patatas?\s+fritas/;
+const CANDY_PATTERN = /\b(candy|candies|gumm(?:y|ies)|jelly beans?|caramels?|toffees?|lollipops?|bonbons?|marshmallows?|licorice|liquorice)\b/;
+const CHOCOLATE_PATTERN = /\b(chocolate|chocolat|cocoa|cacao)\b/;
+const PROCESSED_BAR_PATTERN = /\b(granola|snack bar|protein bar|cereal bar)\b/;
 
 function clamp(value: number, minimum = 0, maximum = 100) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -105,8 +108,19 @@ function finiteNonNegative(value: number | null | undefined): value is number {
 function productProfile(input: SugarFitInput) {
   const identity = `${input.brand ?? ""} ${input.name ?? ""}`.toLowerCase();
   const chips = CHIPS_PATTERN.test(identity);
-  const processedBar = /\b(granola|snack bar|protein bar|cereal bar)\b/.test(identity);
-  return { chips, processedBar, highlyProcessedSnack: chips || processedBar };
+  const candy = CANDY_PATTERN.test(identity);
+  const chocolate = CHOCOLATE_PATTERN.test(identity);
+  const processedBar = PROCESSED_BAR_PATTERN.test(identity);
+  // Categories influence the result without replacing it. The old hard caps
+  // turned many distinct products into the same 39/59 score; a bounded
+  // penalty preserves the nutritional ranking inside each category.
+  const categoryPenalty = Math.max(
+    chips ? 20 : 0,
+    candy ? 10 : 0,
+    chocolate ? 7 : 0,
+    processedBar ? 5 : 0,
+  );
+  return { categoryPenalty, highlyProcessedSnack: chips || candy || chocolate || processedBar };
 }
 
 function nutritionScore(input: SugarFitInput) {
@@ -139,11 +153,10 @@ export function calculateSugarFit(input: SugarFitInput): SugarFitResult | null {
   const sugarTone = sugarScore >= 80 ? "green" : sugarScore >= 60 ? "yellow" : sugarScore >= 40 ? "orange" : "red";
   const nutrition = nutritionScore(input);
   const profile = productProfile(input);
-  let combinedScore = (sugarScore * .6) + (nutrition.score * .4);
-  if (sugarTone === "red") combinedScore = Math.min(combinedScore, 39);
-  else if (sugarTone === "orange") combinedScore = Math.min(combinedScore, 59);
-  if (profile.chips) combinedScore = Math.min(combinedScore, 39);
-  else if (profile.processedBar) combinedScore = Math.min(combinedScore, 59);
+  // Sugar remains the primary signal. The nutrition profile can move the
+  // result meaningfully, but cannot wash out a high-sugar serving just because
+  // some secondary nutrition fields are missing or favourable.
+  const combinedScore = (sugarScore * .75) + (nutrition.score * .25) - profile.categoryPenalty;
   const score = Math.round(clamp(combinedScore, 1, 100));
   const nutritionPenalty = nutrition.score < 60 || profile.highlyProcessedSnack;
   const copy = fitCopy(score, sugarTone, nutritionPenalty);
