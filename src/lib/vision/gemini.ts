@@ -36,6 +36,13 @@ const GEMINI_HEDGE_MAX_EXPECTED_PRODUCTS = 10;
 const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 const MAX_PREFLIGHT_IMAGE_BYTES = 2 * 1024 * 1024;
 const MAX_DETECTIONS = 20;
+// When Gemini identifies a product but omits its own confidence value, these
+// are the fallback figures toDetection() below substitutes. Exported so
+// catalog/telemetry.ts can tell "Gemini gave us a real confidence" from
+// "this is our own default standing in for one" without duplicating the
+// literals (and risking them drifting apart from the actual fallback logic).
+export const DEFAULT_CONFIDENCE_WITH_NAME = 0.55;
+export const DEFAULT_CONFIDENCE_WITHOUT_NAME = 0.35;
 
 const geminiDetectionSchema = z.object({
   // Gemini object detection boxes use a 0..1000 coordinate system: [ymin, xmin, ymax, xmax].
@@ -324,7 +331,7 @@ function toDetection(item: z.infer<typeof geminiDetectionSchema>, index: number)
   // wire response schema broke every analyze call. Re-add once a working
   // schema shape is confirmed.
   const sugar = item.estimatedSugarPer100g ?? null;
-  const confidence = item.confidence ?? (name || brand ? 0.55 : 0.35);
+  const confidence = item.confidence ?? (name || brand ? DEFAULT_CONFIDENCE_WITH_NAME : DEFAULT_CONFIDENCE_WITHOUT_NAME);
   const canEstimate = sugar !== null;
 
   return {

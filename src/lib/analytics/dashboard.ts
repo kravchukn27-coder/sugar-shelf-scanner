@@ -78,7 +78,15 @@ export type ScoreYield = { confirmed: number; estimate: number; unknown: number;
 export type ScoreYieldDay = { day: string; confirmed: number; estimate: number; unknown: number; total: number };
 /** Of hedge-eligible analyze calls (small expected shelf, see GEMINI_HEDGE_MAX_EXPECTED_PRODUCTS), how often the duplicate call actually won the race -- tells you whether the extra token spend is earning its keep. */
 export type HedgeStats = { operation: string; eligible: number; won: number };
-export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[]; operations: GeminiHealthOperation[]; dailyOperations: GeminiHealthDayOperation[]; historicalComparisons: HistoricalGeminiComparison[]; routes: ScannerRoutePerformance[]; experience: ScannerExperiencePerformance; dailyExperience: ScannerExperienceDay[]; dailyRoutes: ScannerRouteDay[]; scoreYield: ScoreYield; dailyScoreYield: ScoreYieldDay[]; hedgeStats: HedgeStats[] };
+/**
+ * Of everything Gemini detected (globally -- this fires from the catalog
+ * layer, which doesn't know which Gemini model produced a detection, so
+ * this is not broken out per-model), how much came with a model-provided
+ * confidence vs. our own default filling in for a value Gemini omitted.
+ */
+export type ConfidenceStats = { defaultConfidenceCount: number; total: number };
+export type ConfidenceStatsDay = { day: string; defaultConfidenceCount: number; total: number };
+export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[]; operations: GeminiHealthOperation[]; dailyOperations: GeminiHealthDayOperation[]; historicalComparisons: HistoricalGeminiComparison[]; routes: ScannerRoutePerformance[]; experience: ScannerExperiencePerformance; dailyExperience: ScannerExperienceDay[]; dailyRoutes: ScannerRouteDay[]; scoreYield: ScoreYield; dailyScoreYield: ScoreYieldDay[]; hedgeStats: HedgeStats[]; confidenceStats: ConfidenceStats; dailyConfidenceStats: ConfidenceStatsDay[] };
 /** Aggregate protection decisions only; no client identity or request contents. */
 export type GuardRejection = { scope: string; guard: string; dimension: string | null; current: number; previous: number };
 
@@ -102,6 +110,8 @@ type GuardRejectionRow = { scope: string | null; guard: string | null; dimension
 type ScoreYieldRow = { confirmed: number | string | null; estimate: number | string | null; unknown: number | string | null; total: number | string | null };
 type ScoreYieldDayRow = { day: string | Date; confirmed: number | string | null; estimate: number | string | null; unknown: number | string | null; total: number | string | null };
 type HedgeStatsRow = { operation: string | null; eligible: number | string | null; won: number | string | null };
+type ConfidenceStatsRow = { default_confidence_count: number | string | null; total: number | string | null };
+type ConfidenceStatsDayRow = { day: string | Date; default_confidence_count: number | string | null; total: number | string | null };
 
 const METRICS: { key: DashboardMetricKey; label: string; unit: DashboardMetric["unit"] }[] = [
   { key: "scan_started", label: "Scans started", unit: "count" },
@@ -252,7 +262,7 @@ export async function readDashboardOverview(
 
   const sevenDayStartsAt = new Date(endsAt.getTime() - 7 * 86_400_000);
   const geminiWindowStartsAt = new Date(endsAt.getTime() - geminiWindowHours * 3_600_000);
-  const [geminiRequestDays, geminiUsageDays, geminiRequestModels, geminiUsageModels, geminiOperations, geminiDailyOperations, scannerRoutes, scannerExperience, scannerDailyExperience, scannerDailyRoutes, scoreYield, dailyScoreYield, hedgeStats, guardRejections] = await Promise.all([
+  const [geminiRequestDays, geminiUsageDays, geminiRequestModels, geminiUsageModels, geminiOperations, geminiDailyOperations, scannerRoutes, scannerExperience, scannerDailyExperience, scannerDailyRoutes, scoreYield, dailyScoreYield, hedgeStats, confidenceStats, dailyConfidenceStats, guardRejections] = await Promise.all([
     db.query<GeminiRequestDayRow>(`
       SELECT date_trunc('day', occurred_at) AS day, COUNT(*)::bigint AS requests,
         COUNT(*) FILTER (WHERE COALESCE(properties->>'outcome', 'success') <> 'success')::bigint AS errors,
@@ -363,6 +373,19 @@ export async function readDashboardOverview(
       FROM analytics_events WHERE event_name = 'vision_request' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
       GROUP BY 1 ORDER BY eligible DESC, operation ASC
     `, [geminiWindowStartsAt.toISOString(), endsAt.toISOString()]),
+    db.query<ConfidenceStatsRow>(`
+      SELECT
+        COALESCE(SUM(NULLIF(properties->>'defaultConfidenceCount', '')::numeric), 0) AS default_confidence_count,
+        COALESCE(SUM(NULLIF(properties->>'detections', '')::numeric), 0) AS total
+      FROM analytics_events WHERE event_name = 'catalog_resolution' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
+    `, [geminiWindowStartsAt.toISOString(), endsAt.toISOString()]),
+    db.query<ConfidenceStatsDayRow>(`
+      SELECT date_trunc('day', occurred_at) AS day,
+        COALESCE(SUM(NULLIF(properties->>'defaultConfidenceCount', '')::numeric), 0) AS default_confidence_count,
+        COALESCE(SUM(NULLIF(properties->>'detections', '')::numeric), 0) AS total
+      FROM analytics_events WHERE event_name = 'catalog_resolution' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
+      GROUP BY 1 ORDER BY day DESC
+    `, [sevenDayStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<GuardRejectionRow>(`
       SELECT COALESCE(NULLIF(properties->>'scope', ''), 'unknown') AS scope,
         COALESCE(NULLIF(properties->>'guard', ''), 'unknown') AS guard,
@@ -452,6 +475,8 @@ export async function readDashboardOverview(
       scoreYield: { confirmed: numeric(scoreYieldRow?.confirmed ?? null), estimate: numeric(scoreYieldRow?.estimate ?? null), unknown: numeric(scoreYieldRow?.unknown ?? null), total: numeric(scoreYieldRow?.total ?? null) },
       dailyScoreYield: dailyScoreYield.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), confirmed: numeric(row.confirmed), estimate: numeric(row.estimate), unknown: numeric(row.unknown), total: numeric(row.total) })),
       hedgeStats: hedgeStats.rows.filter((row) => numeric(row.eligible) > 0).map((row) => ({ operation: row.operation ?? "unknown", eligible: numeric(row.eligible), won: numeric(row.won) })),
+      confidenceStats: { defaultConfidenceCount: numeric(confidenceStats.rows[0]?.default_confidence_count ?? null), total: numeric(confidenceStats.rows[0]?.total ?? null) },
+      dailyConfidenceStats: dailyConfidenceStats.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), defaultConfidenceCount: numeric(row.default_confidence_count), total: numeric(row.total) })),
     },
   };
 }
