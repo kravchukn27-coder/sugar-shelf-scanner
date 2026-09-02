@@ -118,3 +118,18 @@
    anchored to the viewport edge — the two can't overlap regardless of
    viewport height. */
 .access-granted-banner{width:min(100%,480px);margin:18px 0 0;padding:14px 16px;border-radius:14px;background:rgba(255, 90, 69, 0.16);color:#1f2025;font-size:14px;line-height:1.4;text-align:center}
+
+/* Fixed camera stack: controls, unchanged 3:4 viewfinder, then actions.
+   Keeping these anchors in one coordinate system removes device-height gaps
+   without altering the responsive frame width or its aspect ratio. */
+html,body{width:100%;min-height:100%;background:#000;overscroll-behavior:none}
+.scanner-shell{height:100dvh;min-height:100dvh;background:#000}
+.camera-scene{height:100%;min-height:0;--camera-controls-top:max(14px,calc(env(safe-area-inset-top) + 6px));--camera-frame-height:min(calc(97vw * 4 / 3),calc(460px * 4 / 3),calc(100dvh - var(--camera-frame-top-inset) - var(--camera-frame-bottom-inset)));--camera-frame-top:calc(var(--camera-controls-top) + 58px);--camera-actions-top:calc(var(--camera-frame-top) + var(--camera-frame-height) + 10px)}
+.camera-scene>.camera-controls{top:var(--camera-controls-top);height:48px;padding:0 18px}
+.camera-scene>.camera-controls .round-control{width:48px;height:48px;border:1px solid rgba(255,255,255,.2);background:rgba(38,37,43,.96);box-shadow:0 8px 24px rgba(0,0,0,.34),inset 0 1px 0 rgba(255,255,255,.08);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.camera-scene>.camera-controls .round-control svg{width:22px;height:22px}
+.camera-live-preview{top:var(--camera-frame-top);transform:translateX(-50%)}
+.camera-result-preview{top:var(--camera-frame-top);transform:translateX(-50%)}
+.camera-result-overlay-stage{top:var(--camera-frame-top);transform:translateX(-50%)}
+.camera-scene>.gallery-button{top:calc(var(--camera-actions-top) + 12px);bottom:auto;background:rgba(38,37,43,.96);border:1px solid rgba(255,255,255,.16);box-shadow:0 8px 24px rgba(0,0,0,.3),inset 0 1px 0 rgba(255,255,255,.07);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.camera-scene>.analyze-now-button{top:var(--camera-actions-top);bottom:auto;justify-content:flex-start}
