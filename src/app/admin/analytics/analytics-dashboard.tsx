@@ -180,15 +180,27 @@ const ARCHIVED_OPERATION_BASELINE: Record<string, { successRate: number | null; 
   analyze: { successRate: null, timeoutRate: null, p50LatencyMs: 3300 },
 };
 
+/** Per-group (e.g. per-operation, per-route) map of that group's most recent day. */
+function latestDayPerGroup<T extends { day: string }>(rows: T[], groupKey: (row: T) => string): Map<string, string> {
+  const latest = new Map<string, string>();
+  for (const row of rows) {
+    const key = groupKey(row);
+    const current = latest.get(key);
+    if (!current || row.day > current) latest.set(key, row.day);
+  }
+  return latest;
+}
+
+function mean(values: number[]): number | null {
+  return values.length ? values.reduce((total, value) => total + value, 0) / values.length : null;
+}
+
 function useOperationAverages(dailyOperations: { day: string; operation: string; requests: number; successes: number; timeoutErrors: number; p50LatencyMs: number | null; p95LatencyMs: number | null; p95QueueMs: number | null }[] | undefined) {
   return useMemo(() => {
-    const latestDayByOperation = new Map<string, string>();
-    for (const day of dailyOperations ?? []) {
-      const current = latestDayByOperation.get(day.operation);
-      if (!current || day.day > current) latestDayByOperation.set(day.operation, day.day);
-    }
+    const rows = dailyOperations ?? [];
+    const latestDayByOperation = latestDayPerGroup(rows, (row) => row.operation);
     const byOperation = new Map<string, { requests: number; successes: number; timeoutErrors: number; p50s: number[]; p95s: number[]; queues: number[] }>();
-    for (const day of dailyOperations ?? []) {
+    for (const day of rows) {
       if (day.day === latestDayByOperation.get(day.operation)) continue; // exclude "today" from its own baseline
       const bucket = byOperation.get(day.operation) ?? { requests: 0, successes: 0, timeoutErrors: 0, p50s: [], p95s: [], queues: [] };
       bucket.requests += day.requests;
@@ -199,7 +211,6 @@ function useOperationAverages(dailyOperations: { day: string; operation: string;
       if (day.p95QueueMs !== null) bucket.queues.push(day.p95QueueMs);
       byOperation.set(day.operation, bucket);
     }
-    const mean = (values: number[]) => values.length ? values.reduce((total, value) => total + value, 0) / values.length : null;
     const averages = new Map<string, { successRate: number | null; timeoutRate: number | null; p50LatencyMs: number | null; p95LatencyMs: number | null; p95QueueMs: number | null }>();
     const operations = new Set([...byOperation.keys(), ...latestDayByOperation.keys()]);
     for (const operation of operations) {
@@ -217,18 +228,90 @@ function useOperationAverages(dailyOperations: { day: string; operation: string;
   }, [dailyOperations]);
 }
 
+type ExperienceComparison = { p95FirstPreflightDispatchMs: number | null; p95PreflightRttMs: number | null; p95AnalyzeRttMs: number | null };
+type ExperienceComparisonPair = { yesterday: ExperienceComparison | null; average: ExperienceComparison | null };
+
+/**
+ * "Yesterday" is the calendar day (UTC) before `referenceIso`, looked up
+ * directly by date -- not just "the second row in the array" -- so it
+ * reads correctly even on a day with zero scans so far. "Average" reuses
+ * the same leave-the-latest-day-out logic as useOperationAverages above
+ * (excludes whichever day is most recent *in the data*, which may lag
+ * behind `referenceIso` if today has no rows yet).
+ */
+function useExperienceComparison(
+  dailyExperience: { day: string; completions: number; p95FirstPreflightDispatchMs: number | null; p95PreflightRttMs: number | null; p95AnalyzeRttMs: number | null }[] | undefined,
+  referenceIso: string | undefined,
+): ExperienceComparisonPair {
+  return useMemo(() => {
+    const rows = dailyExperience ?? [];
+    if (rows.length === 0 || !referenceIso) return { yesterday: null, average: null };
+    const yesterdayKey = new Date(new Date(referenceIso).getTime() - 86_400_000).toISOString().slice(0, 10);
+    const yesterdayRow = rows.find((row) => row.day === yesterdayKey) ?? null;
+    const latestDay = rows.reduce((max, row) => (row.day > max ? row.day : max), rows[0]!.day);
+    const prior = rows.filter((row) => row.day !== latestDay);
+    const field = (source: typeof rows, key: keyof ExperienceComparison) => mean(source.map((row) => row[key]).filter((value): value is number => value !== null));
+    return {
+      yesterday: yesterdayRow ? { p95FirstPreflightDispatchMs: yesterdayRow.p95FirstPreflightDispatchMs, p95PreflightRttMs: yesterdayRow.p95PreflightRttMs, p95AnalyzeRttMs: yesterdayRow.p95AnalyzeRttMs } : null,
+      average: prior.length ? { p95FirstPreflightDispatchMs: field(prior, "p95FirstPreflightDispatchMs"), p95PreflightRttMs: field(prior, "p95PreflightRttMs"), p95AnalyzeRttMs: field(prior, "p95AnalyzeRttMs") } : null,
+    };
+  }, [dailyExperience, referenceIso]);
+}
+
+type RouteComparison = { p95DurationMs: number | null; p95VisionMs: number | null; p95CatalogMs: number | null };
+
+/** Same yesterday/average shape as useExperienceComparison, keyed per route since routes have independent timings. */
+function useRouteComparisons(
+  dailyRoutes: { day: string; route: string; requests: number; errors: number; p95DurationMs: number | null; p95VisionMs: number | null; p95CatalogMs: number | null }[] | undefined,
+  referenceIso: string | undefined,
+): Map<string, { yesterday: RouteComparison | null; average: RouteComparison | null }> {
+  return useMemo(() => {
+    const rows = dailyRoutes ?? [];
+    const result = new Map<string, { yesterday: RouteComparison | null; average: RouteComparison | null }>();
+    if (rows.length === 0 || !referenceIso) return result;
+    const yesterdayKey = new Date(new Date(referenceIso).getTime() - 86_400_000).toISOString().slice(0, 10);
+    const latestDayByRoute = latestDayPerGroup(rows, (row) => row.route);
+    const byRoute = new Map<string, typeof rows>();
+    for (const row of rows) byRoute.set(row.route, [...(byRoute.get(row.route) ?? []), row]);
+    for (const [route, routeRows] of byRoute) {
+      const yesterdayRow = routeRows.find((row) => row.day === yesterdayKey) ?? null;
+      const prior = routeRows.filter((row) => row.day !== latestDayByRoute.get(route));
+      const field = (source: typeof routeRows, key: keyof RouteComparison) => mean(source.map((row) => row[key]).filter((value): value is number => value !== null));
+      result.set(route, {
+        yesterday: yesterdayRow ? { p95DurationMs: yesterdayRow.p95DurationMs, p95VisionMs: yesterdayRow.p95VisionMs, p95CatalogMs: yesterdayRow.p95CatalogMs } : null,
+        average: prior.length ? { p95DurationMs: field(prior, "p95DurationMs"), p95VisionMs: field(prior, "p95VisionMs"), p95CatalogMs: field(prior, "p95CatalogMs") } : null,
+      });
+    }
+    return result;
+  }, [dailyRoutes, referenceIso]);
+}
+
+/** Compact "vs yesterday" / "vs 7d avg" badge pair, reusing the existing relative-delta formatting. */
+function ComparisonBadges({ current, yesterday, average }: { current: number | null; yesterday: number | null | undefined; average: number | null | undefined }) {
+  const hasYesterday = yesterday !== null && yesterday !== undefined;
+  const hasAverage = average !== null && average !== undefined;
+  if (!hasYesterday && !hasAverage) return null;
+  return <span className={styles.deltaBadges}>
+    {hasYesterday && <small className={relativeDeltaTone(current, yesterday)}>{formatRelativeDelta(current, yesterday) ?? "—"} yesterday</small>}
+    {hasAverage && <small className={relativeDeltaTone(current, average)}>{formatRelativeDelta(current, average) ?? "—"} 7d avg</small>}
+  </span>;
+}
+
 export default function AnalyticsDashboard() {
   const [secret, setSecret] = useState("");
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "unauthorized" | "unavailable">("idle");
   const [view, setView] = useState<"overview" | "gemini">("overview");
   const [range, setRange] = useState<OverviewRange>("24h");
+  // Independent from the Product-pulse range above: Gemini Health has its
+  // own single 24h/7d toggle covering every headline panel on that tab.
+  const [geminiRange, setGeminiRange] = useState<"24h" | "7d">("7d");
 
-  const refresh = useCallback(async (token: string, selectedRange: OverviewRange) => {
+  const refresh = useCallback(async (token: string, selectedRange: OverviewRange, selectedGeminiRange: "24h" | "7d") => {
     if (!token) return;
     setStatus("loading");
     try {
-      const response = await fetch(`/api/admin/analytics/overview?range=${selectedRange}`, {
+      const response = await fetch(`/api/admin/analytics/overview?range=${selectedRange}&geminiRange=${selectedGeminiRange}`, {
         headers: { authorization: `Bearer ${token}` },
         cache: "no-store",
       });
@@ -243,21 +326,23 @@ export default function AnalyticsDashboard() {
 
   useEffect(() => {
     if (!secret) return;
-    void refresh(secret, range);
-    const timer = window.setInterval(() => void refresh(secret, range), REFRESH_MS);
+    void refresh(secret, range, geminiRange);
+    const timer = window.setInterval(() => void refresh(secret, range, geminiRange), REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [refresh, secret, range]);
+  }, [refresh, secret, range, geminiRange]);
 
   const totalQuality = useMemo(() => overview?.quality.reduce((total, item) => total + item.value, 0) ?? 0, [overview]);
   const geminiTotals = useMemo(() => overview?.geminiHealth.days.reduce((total, day) => ({ requests: total.requests + day.requests, errors: total.errors + day.errors, tokens: total.tokens + day.totalTokens, cost: total.cost === null || day.estimatedCostUsd === null ? null : total.cost + day.estimatedCostUsd }), { requests: 0, errors: 0, tokens: 0, cost: 0 as number | null }) ?? { requests: 0, errors: 0, tokens: 0, cost: null }, [overview]);
   const geminiDaysCovered = overview?.geminiHealth.days.length ?? 0;
   const healthyBaselineSuccessRate = overview?.geminiHealth.historicalComparisons.find((item) => item.period.includes("healthy baseline"))?.successRate ?? null;
   const operationAverages = useOperationAverages(overview?.geminiHealth.dailyOperations);
+  const experienceComparison = useExperienceComparison(overview?.geminiHealth.dailyExperience, overview?.generatedAt);
+  const routeComparisons = useRouteComparisons(overview?.geminiHealth.dailyRoutes, overview?.generatedAt);
   const breakerOperations = useMemo(() => (["preflight", "analyze"] as const).map((operation) => ({ operation, status: overview?.breaker?.[operation] ?? null })), [overview]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void refresh(secret, range);
+    void refresh(secret, range, geminiRange);
   }
 
   if (!overview) {
@@ -278,7 +363,7 @@ export default function AnalyticsDashboard() {
   return <main className={styles.page}>
     <header className={styles.header}>
       <div><p className={styles.eyebrow}>Sugar Camera · Internal</p><h1>Product pulse</h1><p className={styles.subhead}>{RANGE_LABELS[range]} · refreshes every 30 seconds</p></div>
-      <div className={styles.freshness}><span className={styles.liveDot} /> Updated {new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(overview.generatedAt))}<button onClick={() => void refresh(secret, range)} disabled={status === "loading"}>{status === "loading" ? "Refreshing…" : "Refresh"}</button></div>
+      <div className={styles.freshness}><span className={styles.liveDot} /> Updated {new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(overview.generatedAt))}<button onClick={() => void refresh(secret, range, geminiRange)} disabled={status === "loading"}>{status === "loading" ? "Refreshing…" : "Refresh"}</button></div>
     </header>
 
     {status === "unavailable" && <p className={styles.inlineError} role="alert">The last refresh failed; values below are from the previous successful update.</p>}
@@ -348,7 +433,7 @@ export default function AnalyticsDashboard() {
     </>}
 
     {view === "gemini" && <section className={styles.geminiHealth} aria-label="Gemini Health">
-      <div className={styles.healthHeading}><div><p className={styles.eyebrow}>Gemini Health</p><h2>Seven-day speed and reliability</h2><p>Separate Gemini time from server work and the user’s actual scanner experience.</p></div><span>{coverageLabel(geminiDaysCovered)}</span></div>
+      <div className={styles.healthHeading}><div><p className={styles.eyebrow}>Gemini Health</p><h2>{geminiRange === "24h" ? "Last-24-hour" : "Seven-day"} speed and reliability</h2><p>Separate Gemini time from server work and the user’s actual scanner experience.</p></div><div className={styles.rangeTabs} aria-label="Gemini Health date range"><button className={geminiRange === "24h" ? styles.rangeActive : undefined} onClick={() => setGeminiRange("24h")}>24h</button><button className={geminiRange === "7d" ? styles.rangeActive : undefined} onClick={() => setGeminiRange("7d")}>7d</button></div><span>{coverageLabel(geminiDaysCovered)}</span></div>
       <div className={styles.breakerRow}>{breakerOperations.map(({ operation, status }) => {
         if (!status || status.state === "closed") return <span key={operation} className={styles.breakerBadgeClosed}>{formatOperationLabel(operation)}: {status?.currentModel ?? "primary model"} (primary)</span>;
         if (status.state === "open") return <span key={operation} className={styles.breakerBadgeOpen}>{formatOperationLabel(operation)}: failover active — {status.currentModel ?? "fallback model"}{status.sinceMs !== null ? ` since ${formatBreakerSince(status.sinceMs)}` : ""}</span>;
@@ -368,7 +453,10 @@ export default function AnalyticsDashboard() {
                 return <div key={`${item.day}-${item.operation}`}><time>{new Intl.DateTimeFormat("en", { month: "short", day: "numeric", weekday: "short" }).format(new Date(`${item.day}T00:00:00Z`))}</time><strong>{formatEventName(item.operation)}</strong><span>{item.requests}</span><span>{formatPercent(successRate)}{average && <small className={deltaPointsTone(successRate, average.successRate)}>{formatDeltaPoints(successRate, average.successRate)}</small>}</span><span>{formatPercent(timeoutRate)}{average && <small className={deltaPointsTone(timeoutRate, average.timeoutRate, true)}>{formatDeltaPoints(timeoutRate, average.timeoutRate)}</small>}</span><span>{formatMs(item.p50LatencyMs)}{average && <small className={relativeDeltaTone(item.p50LatencyMs, average.p50LatencyMs)}>{formatRelativeDelta(item.p50LatencyMs, average.p50LatencyMs)}</small>}</span><span>{formatMs(item.p95LatencyMs)}{average && <small className={relativeDeltaTone(item.p95LatencyMs, average.p95LatencyMs)}>{formatRelativeDelta(item.p95LatencyMs, average.p95LatencyMs)}</small>}</span><span>{formatMs(item.p95QueueMs)}{average && <small className={relativeDeltaTone(item.p95QueueMs, average.p95QueueMs)}>{formatRelativeDelta(item.p95QueueMs, average.p95QueueMs)}</small>}</span></div>;
               })}</div></div>}</article>
       <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Day-to-day user experience</p><h2>What scanner users wait for</h2></div><span>p95 · client RTT</span></div>{overview.geminiHealth.dailyExperience.length === 0 ? <p className={styles.empty}>No completed scanner sessions in this window yet.</p> : <div className={styles.comparisonScroll}><div className={styles.experienceTable}><div className={styles.comparisonHeader}><span>Day</span><span>Completed scans</span><span>First pre-screen dispatch</span><span>Pre-screen RTT</span><span>Analysis RTT</span></div>{overview.geminiHealth.dailyExperience.map((item) => <div key={item.day}><time>{new Intl.DateTimeFormat("en", { month: "short", day: "numeric", weekday: "short" }).format(new Date(`${item.day}T00:00:00Z`))}</time><span>{item.completions}</span><span>{formatMs(item.p95FirstPreflightDispatchMs)}</span><span>{formatMs(item.p95PreflightRttMs)}</span><span>{formatMs(item.p95AnalyzeRttMs)}</span></div>)}</div></div>}</article>
-      <section className={styles.performanceGrid} aria-label="Scanner end-to-end performance"><article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>User experience</p><h2>Scanner end-to-end</h2></div><span>{overview.geminiHealth.experience.completions} completions</span></div><div className={styles.operationGrid}><div><span>Capture ready p95</span><strong>{formatMs(overview.geminiHealth.experience.p95CaptureReadyMs)}</strong></div><div><span>First pre-screen dispatch p95</span><strong>{formatMs(overview.geminiHealth.experience.p95FirstPreflightDispatchMs)}</strong></div><div><span>Pre-screen RTT p95</span><strong>{formatMs(overview.geminiHealth.experience.p95PreflightRttMs)}</strong></div><div><span>Analysis RTT p95</span><strong>{formatMs(overview.geminiHealth.experience.p95AnalyzeRttMs)}</strong></div><div><span>Render p95</span><strong>{formatMs(overview.geminiHealth.experience.p95RenderMs)}</strong></div></div><p className={styles.panelNote}>RTT includes network and application time measured in the browser; it is the closest view of what a scanner user feels.</p></article><article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Server route timings</p><h2>Where time is spent</h2></div><span>p95</span></div>{overview.geminiHealth.routes.length === 0 ? <p className={styles.empty}>No persisted scan-route events in this window yet.</p> : <div className={styles.routeList}>{overview.geminiHealth.routes.map((route) => <div key={route.route}><strong>{formatEventName(route.route)}</strong><span>{route.requests} requests · {route.errors} errors</span><small>Total {formatMs(route.p95DurationMs)} · Gemini {formatMs(route.p95VisionMs)} · catalog {formatMs(route.p95CatalogMs)}</small></div>)}</div>}</article></section>
+      <section className={styles.performanceGrid} aria-label="Scanner end-to-end performance"><article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>User experience</p><h2>Scanner end-to-end</h2></div><span>{overview.geminiHealth.experience.completions} completions</span></div><div className={styles.operationGrid}><div><span>Capture ready p95</span><strong>{formatMs(overview.geminiHealth.experience.p95CaptureReadyMs)}</strong></div><div><span>First pre-screen dispatch p95</span><strong>{formatMs(overview.geminiHealth.experience.p95FirstPreflightDispatchMs)}</strong><ComparisonBadges current={overview.geminiHealth.experience.p95FirstPreflightDispatchMs} yesterday={experienceComparison.yesterday?.p95FirstPreflightDispatchMs} average={experienceComparison.average?.p95FirstPreflightDispatchMs} /></div><div><span>Pre-screen RTT p95</span><strong>{formatMs(overview.geminiHealth.experience.p95PreflightRttMs)}</strong><ComparisonBadges current={overview.geminiHealth.experience.p95PreflightRttMs} yesterday={experienceComparison.yesterday?.p95PreflightRttMs} average={experienceComparison.average?.p95PreflightRttMs} /></div><div><span>Analysis RTT p95</span><strong>{formatMs(overview.geminiHealth.experience.p95AnalyzeRttMs)}</strong><ComparisonBadges current={overview.geminiHealth.experience.p95AnalyzeRttMs} yesterday={experienceComparison.yesterday?.p95AnalyzeRttMs} average={experienceComparison.average?.p95AnalyzeRttMs} /></div><div><span>Render p95</span><strong>{formatMs(overview.geminiHealth.experience.p95RenderMs)}</strong></div></div><p className={styles.panelNote}>RTT includes network and application time measured in the browser; it is the closest view of what a scanner user feels. "Yesterday"/"7d avg" badges compare against the trailing 7 calendar days regardless of the 24h/7d toggle above, so there is always something to compare against.</p></article><article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Server route timings</p><h2>Where time is spent</h2></div><span>p95</span></div>{overview.geminiHealth.routes.length === 0 ? <p className={styles.empty}>No persisted scan-route events in this window yet.</p> : <div className={styles.routeList}>{overview.geminiHealth.routes.map((route) => {
+        const comparison = routeComparisons.get(route.route);
+        return <div key={route.route}><strong>{formatEventName(route.route)}</strong><span>{route.requests} requests · {route.errors} errors</span><small>Total {formatMs(route.p95DurationMs)} · Gemini {formatMs(route.p95VisionMs)} · catalog {formatMs(route.p95CatalogMs)}</small><ComparisonBadges current={route.p95DurationMs} yesterday={comparison?.yesterday?.p95DurationMs} average={comparison?.average?.p95DurationMs} /></div>;
+      })}</div>}</article></section>
       {/* A <details> disclosure rather than an always-open table: today there is
           only one model, but this is where an A/B against a second model
           (e.g. while diagnosing a slowdown) will show up, and that shouldn't

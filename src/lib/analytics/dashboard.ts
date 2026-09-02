@@ -71,8 +71,9 @@ export type GeminiHealthDayOperation = { day: string; operation: string; request
 export type ScannerRoutePerformance = { route: string; requests: number; errors: number; p95DurationMs: number | null; p95VisionMs: number | null; p95CatalogMs: number | null };
 export type ScannerExperiencePerformance = { completions: number; p95CaptureReadyMs: number | null; p95FirstPreflightDispatchMs: number | null; p95PreflightRttMs: number | null; p95AnalyzeRttMs: number | null; p95RenderMs: number | null };
 export type ScannerExperienceDay = { day: string; completions: number; p95FirstPreflightDispatchMs: number | null; p95PreflightRttMs: number | null; p95AnalyzeRttMs: number | null };
+export type ScannerRouteDay = { day: string; route: string; requests: number; errors: number; p95DurationMs: number | null; p95VisionMs: number | null; p95CatalogMs: number | null };
 export type HistoricalGeminiComparison = { period: string; requests: number; successRate: number; preflightP50Ms: string; preflightTimeoutRate: number; note: string };
-export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[]; operations: GeminiHealthOperation[]; dailyOperations: GeminiHealthDayOperation[]; historicalComparisons: HistoricalGeminiComparison[]; routes: ScannerRoutePerformance[]; experience: ScannerExperiencePerformance; dailyExperience: ScannerExperienceDay[] };
+export type GeminiHealth = { days: GeminiHealthDay[]; models: GeminiHealthModel[]; operations: GeminiHealthOperation[]; dailyOperations: GeminiHealthDayOperation[]; historicalComparisons: HistoricalGeminiComparison[]; routes: ScannerRoutePerformance[]; experience: ScannerExperiencePerformance; dailyExperience: ScannerExperienceDay[]; dailyRoutes: ScannerRouteDay[] };
 /** Aggregate protection decisions only; no client identity or request contents. */
 export type GuardRejection = { scope: string; guard: string; dimension: string | null; current: number; previous: number };
 
@@ -91,6 +92,7 @@ type GeminiDayOperationRow = { day: string | Date; operation: string | null; req
 type ScannerRouteRow = { route: string | null; requests: number | string | null; errors: number | string | null; p95_duration_ms: number | string | null; p95_vision_ms: number | string | null; p95_catalog_ms: number | string | null };
 type ScannerExperienceRow = { completions: number | string | null; p95_capture_ready_ms: number | string | null; p95_first_preflight_dispatch_ms: number | string | null; p95_preflight_rtt_ms: number | string | null; p95_analyze_rtt_ms: number | string | null; p95_render_ms: number | string | null };
 type ScannerExperienceDayRow = { day: string | Date; completions: number | string | null; p95_first_preflight_dispatch_ms: number | string | null; p95_preflight_rtt_ms: number | string | null; p95_analyze_rtt_ms: number | string | null };
+type ScannerRouteDayRow = { day: string | Date; route: string | null; requests: number | string | null; errors: number | string | null; p95_duration_ms: number | string | null; p95_vision_ms: number | string | null; p95_catalog_ms: number | string | null };
 type GuardRejectionRow = { scope: string | null; guard: string | null; dimension: string | null; current_value: number | string | null; previous_value: number | string | null };
 
 const METRICS: { key: DashboardMetricKey; label: string; unit: DashboardMetric["unit"] }[] = [
@@ -140,6 +142,7 @@ export async function readDashboardOverview(
   now: Date = new Date(),
   windowHours: number | null = 24,
   cloudBilling: CloudBillingSummary = { state: "not_configured", currency: null, actualGoogleLast24Hours: null, actualGoogleLast30Days: null, geminiLast24Hours: null, geminiLast30Days: null, latestUsageAt: null },
+  geminiWindowHours: 24 | 168 = 168,
 ): Promise<DashboardOverview> {
   const endsAt = now;
   const allTime = windowHours === null;
@@ -239,8 +242,9 @@ export async function readDashboardOverview(
     WHERE subject_hash IS NOT NULL AND occurred_at >= $4::timestamptz AND occurred_at < $2::timestamptz
   `, [startsAt.toISOString(), endsAt.toISOString(), new Date(endsAt.getTime() - 7 * 86_400_000).toISOString(), new Date(endsAt.getTime() - 30 * 86_400_000).toISOString()]);
 
-  const weekStartsAt = new Date(endsAt.getTime() - 7 * 86_400_000);
-  const [geminiRequestDays, geminiUsageDays, geminiRequestModels, geminiUsageModels, geminiOperations, geminiDailyOperations, scannerRoutes, scannerExperience, scannerDailyExperience, guardRejections] = await Promise.all([
+  const sevenDayStartsAt = new Date(endsAt.getTime() - 7 * 86_400_000);
+  const geminiWindowStartsAt = new Date(endsAt.getTime() - geminiWindowHours * 3_600_000);
+  const [geminiRequestDays, geminiUsageDays, geminiRequestModels, geminiUsageModels, geminiOperations, geminiDailyOperations, scannerRoutes, scannerExperience, scannerDailyExperience, scannerDailyRoutes, guardRejections] = await Promise.all([
     db.query<GeminiRequestDayRow>(`
       SELECT date_trunc('day', occurred_at) AS day, COUNT(*)::bigint AS requests,
         COUNT(*) FILTER (WHERE COALESCE(properties->>'outcome', 'success') <> 'success')::bigint AS errors,
@@ -248,12 +252,12 @@ export async function readDashboardOverview(
         percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'durationMs')::numeric) FILTER (WHERE properties->>'durationMs' ~ '^[0-9]+$') AS p95_latency_ms,
         percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'queueMs')::numeric) FILTER (WHERE properties->>'queueMs' ~ '^[0-9]+$') AS p95_queue_ms
       FROM analytics_events WHERE event_name = 'vision_request' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1 ORDER BY 1 ASC
-    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    `, [sevenDayStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<GeminiUsageDayRow>(`
       SELECT date_trunc('day', occurred_at) AS day, COALESCE(SUM(NULLIF(properties->>'totalTokenCount', '')::numeric), 0) AS total_tokens,
         SUM(NULLIF(properties->>'estimatedCostUsd', '')::numeric) AS estimated_cost_usd
       FROM analytics_events WHERE event_name = 'vision_usage' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1 ORDER BY 1 ASC
-    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    `, [sevenDayStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<GeminiRequestModelRow>(`
       SELECT COALESCE(NULLIF(properties->>'model', ''), 'unknown') AS model,
         COALESCE(NULLIF(properties->>'operation', ''), 'unknown') AS operation, COUNT(*)::bigint AS requests,
@@ -262,14 +266,14 @@ export async function readDashboardOverview(
         percentile_cont(0.5) WITHIN GROUP (ORDER BY (properties->>'durationMs')::numeric) FILTER (WHERE properties->>'durationMs' ~ '^[0-9]+$') AS p50_latency_ms,
         percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'durationMs')::numeric) FILTER (WHERE properties->>'durationMs' ~ '^[0-9]+$') AS p95_latency_ms
       FROM analytics_events WHERE event_name = 'vision_request' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1, 2 ORDER BY requests DESC, model ASC, operation ASC
-    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    `, [geminiWindowStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<GeminiUsageModelRow>(`
       SELECT COALESCE(NULLIF(properties->>'model', ''), 'unknown') AS model,
         COALESCE(NULLIF(properties->>'operation', ''), 'unknown') AS operation,
         COALESCE(SUM(NULLIF(properties->>'totalTokenCount', '')::numeric), 0) AS total_tokens,
         SUM(NULLIF(properties->>'estimatedCostUsd', '')::numeric) AS estimated_cost_usd
       FROM analytics_events WHERE event_name = 'vision_usage' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1, 2
-    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    `, [geminiWindowStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<GeminiOperationRow>(`
       SELECT COALESCE(NULLIF(properties->>'operation', ''), 'unknown') AS operation, COUNT(*)::bigint AS requests,
         COUNT(*) FILTER (WHERE COALESCE(properties->>'outcome', 'success') <> 'success')::bigint AS errors,
@@ -279,7 +283,7 @@ export async function readDashboardOverview(
         percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'queueMs')::numeric) FILTER (WHERE properties->>'queueMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_queue_ms
       FROM analytics_events WHERE event_name = 'vision_request' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
       GROUP BY 1 ORDER BY requests DESC, operation ASC
-    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    `, [geminiWindowStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<GeminiDayOperationRow>(`
       SELECT date_trunc('day', occurred_at) AS day, COALESCE(NULLIF(properties->>'operation', ''), 'unknown') AS operation,
         COUNT(*)::bigint AS requests,
@@ -290,7 +294,7 @@ export async function readDashboardOverview(
         percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'queueMs')::numeric) FILTER (WHERE properties->>'queueMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_queue_ms
       FROM analytics_events WHERE event_name = 'vision_request' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
       GROUP BY 1, 2 ORDER BY day DESC, operation ASC
-    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    `, [sevenDayStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<ScannerRouteRow>(`
       SELECT COALESCE(NULLIF(properties->>'route', ''), 'unknown') AS route, COUNT(*)::bigint AS requests,
         COUNT(*) FILTER (WHERE properties->>'status' ~ '^[0-9]+$' AND (properties->>'status')::integer >= 400)::bigint AS errors,
@@ -299,7 +303,7 @@ export async function readDashboardOverview(
         percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'catalogMs')::numeric) FILTER (WHERE properties->>'catalogMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_catalog_ms
       FROM analytics_events WHERE event_name = 'scan_request' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
       GROUP BY 1 ORDER BY requests DESC, route ASC
-    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    `, [geminiWindowStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<ScannerExperienceRow>(`
       SELECT COUNT(*)::bigint AS completions,
         percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'captureReadyMs')::numeric) FILTER (WHERE properties->>'captureReadyMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_capture_ready_ms,
@@ -308,7 +312,7 @@ export async function readDashboardOverview(
         percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'analyzeRttMs')::numeric) FILTER (WHERE properties->>'analyzeRttMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_analyze_rtt_ms,
         percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'renderMs')::numeric) FILTER (WHERE properties->>'renderMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_render_ms
       FROM analytics_events WHERE event_name = 'scanner_completed' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
-    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    `, [geminiWindowStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<ScannerExperienceDayRow>(`
       SELECT date_trunc('day', occurred_at) AS day, COUNT(*)::bigint AS completions,
         percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'timeToFirstPreflightDispatchMs')::numeric) FILTER (WHERE properties->>'timeToFirstPreflightDispatchMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_first_preflight_dispatch_ms,
@@ -316,7 +320,17 @@ export async function readDashboardOverview(
         percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'analyzeRttMs')::numeric) FILTER (WHERE properties->>'analyzeRttMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_analyze_rtt_ms
       FROM analytics_events WHERE event_name = 'scanner_completed' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
       GROUP BY 1 ORDER BY day DESC
-    `, [weekStartsAt.toISOString(), endsAt.toISOString()]),
+    `, [sevenDayStartsAt.toISOString(), endsAt.toISOString()]),
+    db.query<ScannerRouteDayRow>(`
+      SELECT date_trunc('day', occurred_at) AS day, COALESCE(NULLIF(properties->>'route', ''), 'unknown') AS route,
+        COUNT(*)::bigint AS requests,
+        COUNT(*) FILTER (WHERE properties->>'status' ~ '^[0-9]+$' AND (properties->>'status')::integer >= 400)::bigint AS errors,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'durationMs')::numeric) FILTER (WHERE properties->>'durationMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_duration_ms,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'visionMs')::numeric) FILTER (WHERE properties->>'visionMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_vision_ms,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'catalogMs')::numeric) FILTER (WHERE properties->>'catalogMs' ~ '^[0-9]+(\\.[0-9]+)?$') AS p95_catalog_ms
+      FROM analytics_events WHERE event_name = 'scan_request' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz
+      GROUP BY 1, 2 ORDER BY day DESC, route ASC
+    `, [sevenDayStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<GuardRejectionRow>(`
       SELECT COALESCE(NULLIF(properties->>'scope', ''), 'unknown') AS scope,
         COALESCE(NULLIF(properties->>'guard', ''), 'unknown') AS guard,
@@ -401,6 +415,7 @@ export async function readDashboardOverview(
       routes: scannerRoutes.rows.map((row) => ({ route: row.route ?? "unknown", requests: numeric(row.requests), errors: numeric(row.errors), p95DurationMs: optional(row.p95_duration_ms), p95VisionMs: optional(row.p95_vision_ms), p95CatalogMs: optional(row.p95_catalog_ms) })),
       experience: { completions: numeric(experienceRow?.completions ?? null), p95CaptureReadyMs: optional(experienceRow?.p95_capture_ready_ms), p95FirstPreflightDispatchMs: optional(experienceRow?.p95_first_preflight_dispatch_ms), p95PreflightRttMs: optional(experienceRow?.p95_preflight_rtt_ms), p95AnalyzeRttMs: optional(experienceRow?.p95_analyze_rtt_ms), p95RenderMs: optional(experienceRow?.p95_render_ms) },
       dailyExperience: scannerDailyExperience.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), completions: numeric(row.completions), p95FirstPreflightDispatchMs: optional(row.p95_first_preflight_dispatch_ms), p95PreflightRttMs: optional(row.p95_preflight_rtt_ms), p95AnalyzeRttMs: optional(row.p95_analyze_rtt_ms) })),
+      dailyRoutes: scannerDailyRoutes.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), route: row.route ?? "unknown", requests: numeric(row.requests), errors: numeric(row.errors), p95DurationMs: optional(row.p95_duration_ms), p95VisionMs: optional(row.p95_vision_ms), p95CatalogMs: optional(row.p95_catalog_ms) })),
     },
   };
 }
