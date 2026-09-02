@@ -266,9 +266,7 @@ function promptFor(context: AnalyzeScanRequest["context"]) {
 
   return `You analyze packaged grocery products for a sugar-awareness app. ${contextInstruction}
 
-Return JSON only, matching the supplied schema. Each box_2d is [ymin, xmin, ymax, xmax] normalized to integers or decimals in 0..1000 relative to the entire image. Use only a box for a visible product package. Identify brand, product name, and pack size when legible. When a UPC/EAN/GTIN barcode number is clearly readable, return its digits in gtin; otherwise omit gtin. confidence reflects visual identification certainty, not nutrition certainty. Return an empty detections array when no qualifying packaged product is visible.
-
-For estimatedSugarPer100g: only set it when you can actually read a real sugar/nutrition value printed on the package or a barcode you can match to real data, and in that case set estimateSource to "label_or_barcode". Do not set estimatedSugarPer100g from a category-typical guess (for example, a bottle whose label is not visible, or a product you merely recognize the type of) -- if you can only guess a typical value for this kind of product without reading one, either set estimateSource to "typical_for_category" and leave estimatedSugarPer100g null, or omit both. A confident product identification with no visible nutrition data is still a valid detection; it just carries no sugar estimate.`;
+Return JSON only, matching the supplied schema. Each box_2d is [ymin, xmin, ymax, xmax] normalized to integers or decimals in 0..1000 relative to the entire image. Use only a box for a visible product package. Identify brand, product name, and pack size when legible. When a UPC/EAN/GTIN barcode number is clearly readable, return its digits in gtin; otherwise omit gtin. estimatedSugarPer100g is a visual estimate only; omit it when it cannot be responsibly inferred. confidence reflects visual identification certainty, not nutrition certainty. Return an empty detections array when no qualifying packaged product is visible.`;
 }
 
 function preflightPrompt() {
