@@ -29,7 +29,11 @@ test("drops one malformed detection without discarding the rest of the shelf", (
   assert.deepEqual(result.map((item) => item.visualCandidate.name), ["Product 0", "Product 3"]);
 });
 
-test("only trusts a sugar estimate when Gemini claims it read a label or barcode, not a category guess", () => {
+// TEMPORARILY skipped: the estimateSource gate this test covers was
+// reverted from toDetection because declaring the field in the wire
+// response schema broke every analyze call with a Gemini 400. Re-enable
+// once a working schema shape for this signal is found.
+test("only trusts a sugar estimate when Gemini claims it read a label or barcode, not a category guess", { skip: true }, () => {
   const result = normalizeGeminiDetections([
     { ...detection(0), estimatedSugarPer100g: 12, estimateSource: "label_or_barcode" },
     { ...detection(1), estimatedSugarPer100g: 12, estimateSource: "typical_for_category" },

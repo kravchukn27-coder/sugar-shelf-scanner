@@ -322,14 +322,12 @@ function toDetection(item: z.infer<typeof geminiDetectionSchema>, index: number)
   if (!box) return null;
   const name = item.name?.trim() || null;
   const brand = item.brand?.trim() || null;
-  // A number alone doesn't say whether Gemini actually read it off the
-  // package or guessed a category-typical figure (the "scores a bottle
-  // whose label was never visible" problem) -- only trust it when Gemini
-  // itself claims real evidence (label or barcode), same standard applied
-  // regardless of how confident the guess would otherwise sound.
-  const sugar = item.estimatedSugarPer100g !== null && item.estimatedSugarPer100g !== undefined && item.estimateSource === "label_or_barcode"
-    ? item.estimatedSugarPer100g
-    : null;
+  // TEMPORARY: back to trusting estimatedSugarPer100g on its own -- the
+  // estimateSource gate (only trust it when Gemini claims it read a real
+  // label/barcode) is reverted for now because declaring that field in the
+  // wire response schema broke every analyze call. Re-add once a working
+  // schema shape is confirmed.
+  const sugar = item.estimatedSugarPer100g ?? null;
   const confidence = item.confidence ?? (name || brand ? 0.55 : 0.35);
   const canEstimate = sugar !== null;
 
@@ -422,13 +420,14 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, model: 
                     box_2d: { type: "ARRAY", items: { type: "NUMBER" }, minItems: 4, maxItems: 4 },
                     brand: { type: "STRING", nullable: true }, name: { type: "STRING", nullable: true }, packSize: { type: "STRING", nullable: true }, gtin: { type: "STRING", nullable: true },
                     confidence: { type: "NUMBER" }, estimatedSugarPer100g: { type: "NUMBER", nullable: true }, estimateReason: { type: "STRING", nullable: true },
-                    // No `nullable: true` here (unlike the plain-typed fields
-                    // above) -- combined with `enum` it made Gemini reject the
-                    // whole request with a 400/422 on every call, both models.
-                    // The field is already absent from `required` below, so
-                    // Gemini can simply omit it; our own validation already
-                    // treats an omitted value the same as an explicit null.
-                    estimateSource: { type: "STRING", enum: ["label_or_barcode", "typical_for_category"] },
+                    // TEMPORARY: estimateSource is dropped from the wire
+                    // schema entirely -- declaring it here (with or without
+                    // nullable) made Gemini reject every analyze call with a
+                    // generic "invalid argument" 400. Suspect: an enum nested
+                    // inside an array item's object schema behaves
+                    // differently than the top-level enums preflight already
+                    // uses successfully (decision/reasonCode above). Restore
+                    // once a working shape is confirmed.
                   },
                   required: ["box_2d"],
                 },
