@@ -127,8 +127,6 @@ async function throwGeminiProviderError(response: Response, action: "analyze" | 
   const providerMessage = typeof payload?.error?.message === "string"
     ? payload.error.message.replace(/\s+/g, " ").slice(0, 240)
     : "No diagnostic message was returned.";
-  // TEMPORARY debug line, remove once the current analyze 422 is diagnosed.
-  console.error(JSON.stringify({ event: "gemini_provider_error_debug", action, status: response.status, providerMessage }));
   throw new VisionRequestError(
     `Vision provider could not ${action} this frame: ${providerMessage}`,
     response.status >= 400 && response.status < 500 ? 422 : 502,
