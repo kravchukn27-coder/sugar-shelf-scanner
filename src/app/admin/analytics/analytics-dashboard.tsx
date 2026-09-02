@@ -4,6 +4,14 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import styles from "./analytics-dashboard.module.css";
 import type { DashboardOverview } from "@/lib/analytics/dashboard";
 
+// Circuit-breaker status, joined in from Redis by the overview route
+// alongside the Postgres-backed dashboard data (see
+// src/lib/observability/circuit-breaker.ts for the source of truth). It's
+// optional here because a cached/older response, or a Redis hiccup on the
+// server, may omit it -- the UI must treat that as "no data", never crash.
+type BreakerOperationStatus = { state: "closed" | "open" | "probing"; sinceMs: number | null; currentModel: string | null };
+type OverviewResponse = DashboardOverview & { breaker?: Record<string, BreakerOperationStatus> };
+
 const REFRESH_MS = 30_000;
 type OverviewRange = "24h" | "3d" | "7d" | "all";
 const RANGE_LABELS: Record<OverviewRange, string> = { "24h": "Last 24 hours", "3d": "Last 3 days", "7d": "Last 7 days", all: "All time" };
@@ -89,6 +97,18 @@ function coverageLabel(daysWithData: number) {
   if (daysWithData >= 7) return "Last 7 days";
   if (daysWithData <= 1) return "Last 7 days · data from 1 day";
   return `Last 7 days · data from ${daysWithData} days`;
+}
+
+// The circuit breaker's "since" timestamp is meaningful across on-call
+// handoffs regardless of the viewer's local timezone, so it's rendered in
+// UTC explicitly rather than the browser's local time.
+function formatBreakerSince(sinceMs: number | null) {
+  if (sinceMs === null) return null;
+  return `${new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" }).format(new Date(sinceMs))} UTC`;
+}
+
+function formatOperationLabel(operation: string) {
+  return operation === "preflight" ? "Preflight" : operation === "analyze" ? "Analyze" : formatEventName(operation);
 }
 
 // Percentage-point delta against the archived healthy-baseline window, shown
@@ -199,7 +219,7 @@ function useOperationAverages(dailyOperations: { day: string; operation: string;
 
 export default function AnalyticsDashboard() {
   const [secret, setSecret] = useState("");
-  const [overview, setOverview] = useState<DashboardOverview | null>(null);
+  const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "unauthorized" | "unavailable">("idle");
   const [view, setView] = useState<"overview" | "gemini">("overview");
   const [range, setRange] = useState<OverviewRange>("24h");
@@ -214,7 +234,7 @@ export default function AnalyticsDashboard() {
       });
       if (response.status === 401) { setStatus("unauthorized"); return; }
       if (!response.ok) { setStatus("unavailable"); return; }
-      setOverview(await response.json() as DashboardOverview);
+      setOverview(await response.json() as OverviewResponse);
       setStatus("idle");
     } catch {
       setStatus("unavailable");
@@ -233,6 +253,7 @@ export default function AnalyticsDashboard() {
   const geminiDaysCovered = overview?.geminiHealth.days.length ?? 0;
   const healthyBaselineSuccessRate = overview?.geminiHealth.historicalComparisons.find((item) => item.period.includes("healthy baseline"))?.successRate ?? null;
   const operationAverages = useOperationAverages(overview?.geminiHealth.dailyOperations);
+  const breakerOperations = useMemo(() => (["preflight", "analyze"] as const).map((operation) => ({ operation, status: overview?.breaker?.[operation] ?? null })), [overview]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -328,6 +349,11 @@ export default function AnalyticsDashboard() {
 
     {view === "gemini" && <section className={styles.geminiHealth} aria-label="Gemini Health">
       <div className={styles.healthHeading}><div><p className={styles.eyebrow}>Gemini Health</p><h2>Seven-day speed and reliability</h2><p>Separate Gemini time from server work and the user’s actual scanner experience.</p></div><span>{coverageLabel(geminiDaysCovered)}</span></div>
+      <div className={styles.breakerRow}>{breakerOperations.map(({ operation, status }) => {
+        if (!status || status.state === "closed") return <span key={operation} className={styles.breakerBadgeClosed}>{formatOperationLabel(operation)}: {status?.currentModel ?? "primary model"} (primary)</span>;
+        if (status.state === "open") return <span key={operation} className={styles.breakerBadgeOpen}>{formatOperationLabel(operation)}: failover active — {status.currentModel ?? "fallback model"}{status.sinceMs !== null ? ` since ${formatBreakerSince(status.sinceMs)}` : ""}</span>;
+        return <span key={operation} className={styles.breakerBadgeProbing}>{formatOperationLabel(operation)}: testing {status.currentModel ?? "primary model"} again…</span>;
+      })}</div>
       <div className={styles.metrics}><article className={styles.metricCard}><p>Requests</p><strong>{geminiTotals.requests}</strong><span className={styles.neutral}>All operations</span></article><article className={styles.metricCard}><p>Error rate</p><strong>{formatPercent(geminiTotals.requests ? geminiTotals.errors / geminiTotals.requests : null)}</strong><span className={styles.neutral}>{geminiTotals.errors} failed</span></article><article className={styles.metricCard}><p>Provider tokens</p><strong>{formatValue(geminiTotals.tokens, "count")}</strong><span className={styles.neutral}>Usage-reported only</span></article><article className={styles.metricCard}><p>Estimated cost</p><strong>{formatBilling(geminiTotals.cost, "USD")}</strong><span className={styles.neutral}>Application estimate</span></article></div>
       <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Protection limits</p><h2>Where requests were blocked</h2></div><span>{RANGE_LABELS[range]}</span></div>{overview.guardRejections.length === 0 ? <p className={styles.empty}>No protection limit has blocked work in this window.</p> : <div className={styles.guardTable}><div className={styles.comparisonHeader}><span>Scope</span><span>Protection</span><span>Dimension</span><span>Blocked</span><span>Prior window</span></div>{overview.guardRejections.map((item) => <div key={`${item.scope}-${item.guard}-${item.dimension ?? "none"}`}><strong>{formatEventName(item.scope)}</strong><span>{formatGuardName(item.guard)}</span><span>{item.dimension ? formatEventName(item.dimension) : "—"}</span><strong className={styles.negative}>{item.current}</strong><span>{item.previous}</span></div>)}</div>}<p className={styles.panelNote}>Counts begin with this deployment. They are aggregate safety decisions only: no IP addresses, installation IDs, images, or request payloads are stored.</p></article>
       <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Historical Railway logs</p><h2>Baseline and incident comparison</h2></div><span>Archived aggregates</span></div><div className={styles.comparisonScroll}><div className={styles.historyTable}><div className={styles.comparisonHeader}><span>Window</span><span>Requests</span><span>Success</span><span>Pre-screen p50</span><span>Pre-screen timeout</span><span>Confidence</span></div>{overview.geminiHealth.historicalComparisons.map((item) => <div key={item.period}><strong>{item.period}</strong><span>{item.requests}</span><span>{formatPercent(item.successRate)}</span><span>{item.preflightP50Ms}</span><span>{formatPercent(item.preflightTimeoutRate)}</span><small>{item.note}</small></div>)}</div></div><p className={styles.panelNote}>These are verified aggregates from the August Railway investigation. Individual logs have expired, so p95, queue and Analyze splits are deliberately not inferred.</p></article>

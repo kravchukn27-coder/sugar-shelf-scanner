@@ -2,6 +2,7 @@ import { Pool } from "pg";
 import { isAnalyticsAdminRequest, isAnalyticsDashboardConfigured } from "@/lib/analytics/admin";
 import { readDashboardOverview } from "@/lib/analytics/dashboard";
 import { readCloudBillingSummary } from "@/lib/analytics/cloud-billing";
+import { readBreakerStatus, type BreakerStatus } from "@/lib/observability/circuit-breaker";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,9 +37,12 @@ export async function GET(request: Request) {
   if (!isAnalyticsAdminRequest(request)) return response({ error: "unauthorized" }, 401);
 
   try {
-    const cloudBilling = await readCloudBillingSummary();
+    const [cloudBilling, breaker] = await Promise.all([
+      readCloudBillingSummary(),
+      readBreakerStatus(["preflight", "analyze"]).catch(() => ({}) as Record<string, BreakerStatus>),
+    ]);
     const data = await readDashboardOverview(getPool(process.env.DATABASE_URL!), new Date(), readWindowHours(request), cloudBilling);
-    return response(data, 200);
+    return response({ ...data, breaker }, 200);
   } catch {
     // Keep database topology and query failures internal; the dashboard can
     // retry without pretending that zero is a valid live metric.
