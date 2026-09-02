@@ -32,6 +32,7 @@ import { anonymousInstallationId, reportResultMetric } from "@/lib/scan/result-m
 import { sampleLuma } from "@/lib/scan/frame-stillness";
 import { sampleFrameQuality } from "@/lib/scan/frame-quality";
 import { createInitialLiveFrameBaseline, decideLiveFrameSchedulerTick } from "@/lib/scan/live-frame-scheduler";
+import { cameraBecameLive, requestedCamera, shouldHoldNoSceneFailure, type CameraAimingWindow } from "@/lib/scan/no-scene-grace";
 import { decodeLocalBarcode, type RecoveryState } from "@/lib/recovery/local-recovery";
 import { reportLocalBarcodeDecode } from "@/lib/recovery/recovery-decode-metrics";
 import type { BarcodeRecoveryResponse, NutritionLabelDraft, NutritionLabelRecoveryResponse } from "@/lib/contracts/scan";
@@ -40,13 +41,6 @@ import { catalogProposalErrorMessage, catalogProposalSubmissionOutcome, GENERIC_
 import { getMockShelfScan, getSugarFitDemoScan, SUGAR_FIT_DEMO_IMAGE } from "@/lib/mock/scan-fixtures";
 
 const FRAME_INTERVAL = 650;
-// The first preflight answer lands roughly 650ms plus one Gemini round trip
-// after the camera opens — before the user has finished aiming. Treating that
-// answer as terminal turned "nothing in frame yet" into a blocking prompt the
-// user never had time to read. A negative verdict inside this window is
-// discarded and the scheduler keeps looking; the prompt stays reachable, it
-// just cannot pre-empt the user's first few seconds.
-const NO_SCENE_GRACE_MS = 4000;
 const ONBOARDING_SEEN_KEY = "sugar:onboarding-seen:v1";
 const PREFLIGHT_CANDIDATE_CONFIDENCE_THRESHOLD = 0.65;
 // Live-viewfinder hint copy. The default (idle) text is always visible
@@ -164,7 +158,7 @@ export default function HomePage() {
   const videoRef = useRef<HTMLVideoElement>(null), uploadPreviewRef = useRef<HTMLImageElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), livePreviewRef = useRef<HTMLDivElement>(null), liveCanvasRef = useRef<HTMLCanvasElement>(null), streamRef = useRef<MediaStream | null>(null), abortRef = useRef<AbortController | null>(null), inFlight = useRef(false), activeRequestKind = useRef<"preflight" | "analyze" | null>(null), session = useRef(0), frame = useRef(0), recoveryAttempt = useRef(0), preferredCameraDeviceId = useRef<string | null>(null), scannerMetrics = useRef(createScannerMetrics()), scannerMetricsEnabled = useRef(false), resultMetrics = useRef({ source: null as "camera" | "upload" | null, started: false, resultShown: false, productOpened: false, recommendationOpened: false }), stillnessFingerprint = useRef<Uint8ClampedArray | null>(null), stillnessCanvas = useRef<HTMLCanvasElement | null>(null), qualitySkipStreak = useRef(0), motionSkipStreak = useRef(0), preflightRetryStreak = useRef(0), liveHintStreak = useRef<{ reason: LiveHintReason | null; count: number }>({ reason: null, count: 0 });
   const [state, setState] = useState<ScannerLifecycleState>("camera_off");
   const [canvasPreviewActive, setCanvasPreviewActive] = useState(false);
-  const liveSearchStartedAt = useRef(0);
+  const cameraAiming = useRef<CameraAimingWindow>(requestedCamera());
   // live_searching and the two prompt states share one preview loop. Keying the
   // loop on this instead of on `state` means crossing that boundary does not
   // restart it: a restart would blank canvasPreviewActive for the frame or two
@@ -495,7 +489,7 @@ export default function HomePage() {
         const isUpload = source instanceof HTMLImageElement;
         if (isUpload) setUploadBusy(false);
         if (!isUpload && result.decision === "uncertain") { noteLiveHint("uncertain"); return; }
-        if (!isUpload && Date.now() - liveSearchStartedAt.current < NO_SCENE_GRACE_MS) { noteLiveHint(null); return; }
+        if (!isUpload && shouldHoldNoSceneFailure(cameraAiming.current, Date.now())) { noteLiveHint(null); return; }
         noteLiveHint(null);
         setFailure(result.decision === "uncertain" ? "Move closer to a packaged product" : "No packaged products detected\nMove your camera closer");
         reportNoDetectionResult();
@@ -589,7 +583,7 @@ export default function HomePage() {
   const start = useCallback(async () => {
     if (paywallEnabled && readEntitlement(browserStorage(), new Date()).mustPay) { openPaywall(); return; }
     setAccessBanner(null);
-    const id = ++session.current; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; setLiveHint(null); stopStream(); clearResult(); resetScanMetrics("camera"); setUploadUrl(null); setCameraKey((key) => key + 1); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
+    const id = ++session.current; stillnessFingerprint.current = null; qualitySkipStreak.current = 0; motionSkipStreak.current = 0; preflightRetryStreak.current = 0; liveHintStreak.current = { reason: null, count: 0 }; cameraAiming.current = requestedCamera(); setLiveHint(null); stopStream(); clearResult(); resetScanMetrics("camera"); setUploadUrl(null); setCameraKey((key) => key + 1); setState((current) => transitionScannerLifecycle(current, current === "camera_off" ? "START" : "RETRY"));
     try {
       // A device ID is a best-effort way to keep the same browser-selected rear
       // source across retry. If iOS no longer exposes it, fall back to rear.
@@ -610,6 +604,9 @@ export default function HomePage() {
       setTorchAvailable(controls.torchAvailable); setCameraDiagnostics(getCameraDiagnosticSnapshot(track)); videoRef.current.srcObject = stream; await videoRef.current.play();
       if (id === session.current) {
         scannerMetrics.current.markCaptureReady();
+        // Not when the user tapped: everything up to here was the browser's
+        // permission sheet, and the grace window is about aiming time.
+        cameraAiming.current = cameraBecameLive(cameraAiming.current, Date.now());
         stillnessFingerprint.current = createInitialLiveFrameBaseline(immediateBaselineEnabled, sampleLiveFrame(videoRef.current)?.luma ?? null);
       }
       if (id !== session.current) { stream.getTracks().forEach((t) => t.stop()); if (videoRef.current) videoRef.current.srcObject = null; streamRef.current = null; }
@@ -797,10 +794,6 @@ export default function HomePage() {
     image.src = uploadUrl;
     return () => { cancelled = true; image.onload = null; image.onerror = null; };
   }, [analyze, dispatch, sheet, state, uploadUrl]);
-  // Stamped when the scanner actually reaches the live state, not when the
-  // user taps: a camera-permission dialog can sit in front of the scene for
-  // seconds, and the grace window is about the user's aiming time.
-  useEffect(() => { if (state === "live_searching") liveSearchStartedAt.current = Date.now(); }, [state]);
   const failed = state === "no_scene" || state === "error";
   const showAnalysisSpinner = state === "captured_analyzing" || (uploadUrl !== null && uploadBusy && state === "live_searching");
   const recoveryActive = recoveryCamera !== null;
