@@ -12,6 +12,16 @@ function detection(index: number) {
   };
 }
 
+function deferred<Value>() {
+  let resolve!: (value: Value | PromiseLike<Value>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<Value>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 test("keeps up to twenty valid detections from an over-complete shelf response", () => {
   const result = normalizeGeminiDetections(Array.from({ length: 28 }, (_, index) => detection(index)));
   assert.equal(result.length, 20);
@@ -195,7 +205,7 @@ test("a small expectedProductCount fires a hedge after the delay and takes which
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const originalFetch = globalThis.fetch;
   let calls = 0;
-  const primaryGate = Promise.withResolvers<void>();
+  const primaryGate = deferred<void>();
   globalThis.fetch = async () => {
     calls += 1;
     if (calls === 1) {
