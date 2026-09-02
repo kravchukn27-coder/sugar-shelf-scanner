@@ -420,7 +420,13 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, model: 
                     box_2d: { type: "ARRAY", items: { type: "NUMBER" }, minItems: 4, maxItems: 4 },
                     brand: { type: "STRING", nullable: true }, name: { type: "STRING", nullable: true }, packSize: { type: "STRING", nullable: true }, gtin: { type: "STRING", nullable: true },
                     confidence: { type: "NUMBER" }, estimatedSugarPer100g: { type: "NUMBER", nullable: true }, estimateReason: { type: "STRING", nullable: true },
-                    estimateSource: { type: "STRING", enum: ["label_or_barcode", "typical_for_category"], nullable: true },
+                    // No `nullable: true` here (unlike the plain-typed fields
+                    // above) -- combined with `enum` it made Gemini reject the
+                    // whole request with a 400/422 on every call, both models.
+                    // The field is already absent from `required` below, so
+                    // Gemini can simply omit it; our own validation already
+                    // treats an omitted value the same as an explicit null.
+                    estimateSource: { type: "STRING", enum: ["label_or_barcode", "typical_for_category"] },
                   },
                   required: ["box_2d"],
                 },
