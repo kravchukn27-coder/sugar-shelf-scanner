@@ -13,6 +13,7 @@ For a local demo quickstart, current scope, and privacy caveats, start at the
 | Review-pending catalog proposal handling | [catalog-proposals.md](catalog-proposals.md) |
 | Paywall hypothesis, success thresholds and access mechanics | [monetization-test.md](monetization-test.md) |
 | Railway activation, deploy and observability operations | [operations.md](operations.md) |
+| Branch flow, release approval, staging verification and rollback | [release-workflow.md](release-workflow.md) |
 | Scanner timings, Gemini request logs, token measurement, and telemetry privacy boundary | [gemini-usage-observability.md](gemini-usage-observability.md) |
 | P0 result-funnel and result-quality telemetry verification | [p0-funnel-quality-telemetry-verification.md](p0-funnel-quality-telemetry-verification.md) |
 | Gemini speed/quality/token-efficiency research (closed) | [appendix/gemini-speed-token-efficiency-research.md](appendix/gemini-speed-token-efficiency-research.md) |
