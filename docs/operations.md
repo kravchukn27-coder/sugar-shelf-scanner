@@ -125,6 +125,35 @@ compare actual tokens/cost against the Gemini budget, then revise the global
 request caps with recorded evidence. Test Redis failure, exhausted analyze
 quota and an exhausted global Gemini quota in staging before sending traffic.
 
+## Gemini model circuit breaker
+
+`src/lib/observability/circuit-breaker.ts` picks between a primary and a
+fallback Gemini model for `preflight`/`analyze`, per-operation, based on a
+Redis-backed rolling window of recent outcomes. It shares the same Redis
+instance as the rate limits above but is a separate, optional mechanism: an
+unconfigured deployment (none of the vars below set) always uses
+`GEMINI_PREFLIGHT_MODEL`/`GEMINI_ANALYZE_MODEL`, identical to having no
+breaker at all. Unlike the rate limiter above, a Redis problem here **fails
+open** (keeps using the primary model), not closed — this is a speed/cost
+optimization, not an abuse boundary, so it must never be able to block a scan.
+
+```text
+GEMINI_PREFLIGHT_MODEL_FALLBACK=gemini-3.6-flash
+GEMINI_ANALYZE_MODEL_FALLBACK=gemini-3.6-flash
+```
+
+Both default to `GEMINI_VISION_MODEL` when unset. The trip/recovery
+thresholds (`GEMINI_BREAKER_MIN_SAMPLES_PREFLIGHT`,
+`GEMINI_BREAKER_MIN_SAMPLES_ANALYZE`, `GEMINI_BREAKER_FAILURE_THRESHOLD`,
+`GEMINI_BREAKER_COOLDOWN_MS`, `GEMINI_BREAKER_PROBE_INTERVAL_MS`,
+`GEMINI_BREAKER_RECOVER_STREAK`, `GEMINI_BREAKER_MIN_TRANSITION_INTERVAL_MS`,
+`GEMINI_BREAKER_PROBE_LOCK_FLOOR_MS_PREFLIGHT`,
+`GEMINI_BREAKER_PROBE_LOCK_FLOOR_MS_ANALYZE`) all have defaults tuned for
+this app's current traffic volume — see the module's own comments for the
+reasoning before changing any of them. Live per-operation status (which
+model is currently serving, and since when if failed over) is visible on
+`/admin/analytics` next to Gemini Health.
+
 ## Deploy gate
 
 Before each deploy run:

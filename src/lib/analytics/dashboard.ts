@@ -354,8 +354,10 @@ export async function readDashboardOverview(
   });
   // Keyed by model+operation, not just model: the same model has very
   // different latency/success characteristics on a cheap preflight gate vs a
-  // full analyze call, and averaging them together hid exactly the signal an
-  // A/B split (see GEMINI_PREFLIGHT_MODEL_VARIANT_B / _ANALYZE_) exists to show.
+  // full analyze call, and averaging them together hid exactly the signal
+  // this breakdown exists to show -- now also what the circuit breaker (see
+  // GEMINI_PREFLIGHT_MODEL_FALLBACK / GEMINI_ANALYZE_MODEL_FALLBACK,
+  // src/lib/observability/circuit-breaker.ts) is failing over between.
   const usageByModel = new Map(geminiUsageModels.rows.map((row) => [`${row.model ?? "unknown"}:${row.operation ?? "unknown"}`, row]));
   const geminiModels = geminiRequestModels.rows.map((row) => {
     const model = row.model ?? "unknown";
