@@ -428,6 +428,7 @@ async function attemptAnalyze(input: AnalyzeScanRequest, env: ServerEnv, model: 
       if (!detection.visualCandidate.name || detection.visualCandidate.brand) continue;
       logUnbrandedDetectionNameForReview({
         operation: "analyze",
+        model,
         name: detection.visualCandidate.name,
         confidence: detection.confidence,
         hasSugarEstimate: detection.score.sugarPer100g !== null,

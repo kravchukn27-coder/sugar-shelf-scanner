@@ -66,12 +66,19 @@ export function logVisionUsageTelemetry(metric: VisionUsageTelemetry) {
  * didn't split into a separate brand field" before changing any filtering
  * logic — a decision from real examples, not a guess.
  *
+ * `model` was added 2026-09-02 after gemini-3.5-flash-lite became the
+ * primary model: real 09-02 traffic showed a shelf of regional (Baltic)
+ * candy brands Gemini couldn't classify, and without knowing which model
+ * produced each row there was no way to tell whether this is a
+ * gemini-3.5-flash-lite-specific weakness (a lighter model knowing fewer
+ * niche brands) or true of Gemini generally.
+ *
  * Delete this function, its call site in gemini.ts, and the accumulated
  * `detection_unbranded_name` rows (analytics_events table) by ~2026-09-16
  * (15 days). Do not let this become a permanent logging path — the name
  * text is exactly what the rule above exists to keep out of retained logs.
  */
-export function logUnbrandedDetectionNameForReview(input: { operation: "analyze"; name: string; confidence: number; hasSugarEstimate: boolean }) {
+export function logUnbrandedDetectionNameForReview(input: { operation: "analyze"; model: string; name: string; confidence: number; hasSugarEstimate: boolean }) {
   console.info(JSON.stringify({ event: "detection_unbranded_name", ...input }));
   queueAnalyticsEvent({ eventName: "detection_unbranded_name", source: "server", properties: input });
 }
