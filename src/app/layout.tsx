@@ -1,4 +1,6 @@
 import type { Metadata, Viewport } from "next";
+import MetaPixel from "@/components/meta-pixel";
+import { metaPixelId } from "@/lib/marketing/meta-pixel";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -24,9 +26,10 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  const pixelId = metaPixelId(process.env.NEXT_PUBLIC_META_PIXEL_ID);
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>{children}{pixelId && <MetaPixel pixelId={pixelId} />}</body>
     </html>
   );
 }
