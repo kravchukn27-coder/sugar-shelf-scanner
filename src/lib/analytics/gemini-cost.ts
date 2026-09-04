@@ -31,11 +31,18 @@ export function estimateGeminiCost(model: string, usage: GeminiUsageCounters): G
   if (!pricing) return null;
   const inputTokens = positiveInteger(usage.promptTokenCount);
   const candidateTokens = positiveInteger(usage.candidatesTokenCount);
-  const thoughtTokens = positiveInteger(usage.thoughtsTokenCount);
+  // Confirmed against real production responses (2026-09-04): at
+  // thinkingLevel "minimal" (preflight's setting), Gemini omits
+  // thoughtsTokenCount entirely rather than reporting 0 -- treating that as
+  // "cannot price" silently dropped the majority of traffic (preflight is
+  // most of the call volume) out of every cost total. Missing means zero
+  // thinking tokens, not an unpriceable response.
+  const thoughtTokens = positiveInteger(usage.thoughtsTokenCount) ?? 0;
 
-  // A response that reports only total tokens cannot be priced accurately by
-  // direction. Keep it visible as usage, but do not invent a dollar amount.
-  if (inputTokens === null || candidateTokens === null || thoughtTokens === null) return null;
+  // A response missing the core input/output counters cannot be priced
+  // accurately by direction. Keep it visible as usage, but do not invent a
+  // dollar amount.
+  if (inputTokens === null || candidateTokens === null) return null;
   const outputTokens = candidateTokens + thoughtTokens;
   return {
     pricingVersion: pricing.version,
