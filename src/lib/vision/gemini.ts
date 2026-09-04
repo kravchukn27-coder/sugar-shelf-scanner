@@ -225,6 +225,14 @@ function logGeminiUsage(
   if (!isVisionUsageMetricsEnabled()) return;
   const usage = extractGeminiUsageMetadata(payload);
   const estimate = usage ? estimateGeminiCost(model, usage) : null;
+  // TEMPORARY: diagnosing why gemini-3.5-flash-lite never prices despite
+  // having a pricing table entry -- estimateGeminiCost requires all three
+  // directional counters, so this logs exactly which one Gemini omits for
+  // this model. Token counts only, no prompt/image/output content. Remove
+  // once the cause is confirmed and estimateGeminiCost is adjusted.
+  if (!estimate) {
+    console.error(JSON.stringify({ event: "gemini_cost_estimate_debug", model, usage: usage ?? null }));
+  }
   logVisionUsageTelemetry({
     operation,
     model,
