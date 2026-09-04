@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import styles from "./analytics-dashboard.module.css";
 import type { DashboardOverview } from "@/lib/analytics/dashboard";
+import type { CloudBillingSummary } from "@/lib/analytics/cloud-billing";
 
 // Circuit-breaker status, joined in from Redis by the overview route
 // alongside the Postgres-backed dashboard data (see
@@ -76,6 +77,17 @@ function formatMinor(value: number, currency: string) {
 
 function formatBilling(value: number | null, currency: string | null) {
   return value === null ? "—" : new Intl.NumberFormat("en-US", { style: "currency", currency: currency || "USD", maximumFractionDigits: 2 }).format(value);
+}
+
+// A per-request Gemini cost is routinely a fraction of a cent -- the
+// standard 2-decimal formatBilling above would round every real value to
+// "$0.00" and say nothing. Switches to enough decimals to show a nonzero
+// digit, capped so a genuinely zero cost still reads as a clean "$0.00".
+function formatMicroBilling(value: number | null, currency: string | null) {
+  if (value === null) return "—";
+  if (value === 0) return formatBilling(0, currency);
+  const decimals = value < 0.01 ? 4 : 2;
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: currency || "USD", minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(value);
 }
 
 // Sub-second values (queue time, render time) stay in milliseconds, where
@@ -339,6 +351,85 @@ function PanelRangeToggle({ value, onChange }: { value: GeminiRange; onChange: (
   </div>;
 }
 
+function daysInMonthUtc(date: Date): number {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+}
+
+/** 1-indexed: the 1st of the month counts as day 1 already elapsed, so a same-day projection doesn't divide by zero. */
+function daysElapsedInMonthUtc(date: Date): number {
+  return date.getUTCDate();
+}
+
+/** Simple flat-bar spend chart -- no charting library, matching the rest of this dashboard's hand-rolled visuals (see .qualityList's bars). */
+function DailySpendChart({ days, currency }: { days: { day: string; costUsd: number }[]; currency: string | null }) {
+  if (days.length === 0) return <p className={styles.empty}>No daily Gemini cost rows in this window yet.</p>;
+  const max = Math.max(...days.map((entry) => entry.costUsd), 0.01);
+  return <div className={styles.dailySpendChart}>
+    {days.map((entry) => {
+      const label = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(new Date(`${entry.day}T00:00:00Z`));
+      return <div key={entry.day} className={styles.dailySpendBar} title={`${label}: ${formatBilling(entry.costUsd, currency)}`}>
+        <b style={{ height: `${Math.max(2, (entry.costUsd / max) * 100)}%` }} />
+      </div>;
+    })}
+  </div>;
+}
+
+/**
+ * Redesigned 2026-09-04 to answer "is this normal, and are we close to our
+ * limit" the way the AI Studio Gemini Spend page does -- but built only from
+ * what Google actually exposes programmatically. The AI Studio spend-cap
+ * progress bar and prepay balance have no public API (confirmed against
+ * ai.google.dev/gemini-api/docs/billing); "Your configured monthly cap"
+ * below is read from GEMINI_MONTHLY_SPEND_CAP_USD, an env var the operator
+ * sets to match whatever they configured in AI Studio, not fetched live.
+ */
+function CloudBillingPanel({ billing, generatedAt, sevenDayRequestTotal }: { billing: CloudBillingSummary; generatedAt: string; sevenDayRequestTotal: number }) {
+  const [chartRange, setChartRange] = useState<"7d" | "28d">("28d");
+  const emptyReason = billing.state === "waiting_for_export" ? "Google has not published a billing table yet. It can take several hours after enabling export."
+    : billing.state === "no_data" ? "The billing table exists, but it has no reported cost rows for this project yet."
+    : billing.state === "not_configured" ? "Connect the read-only BigQuery service account to show billed spend."
+    : "BigQuery could not be reached; the dashboard will retry automatically.";
+  if (billing.state !== "available" && billing.state !== "stale") {
+    return <article className={styles.widePanel}>
+      <div className={styles.panelHeading}><div><p className={styles.eyebrow}>Cloud Billing</p><h2>Real spend and budget</h2></div><span>{billing.state.replaceAll("_", " ")}</span></div>
+      <p className={styles.empty}>{emptyReason}</p>
+    </article>;
+  }
+
+  const now = new Date(generatedAt);
+  const dailyByDay = new Map(billing.dailyGeminiCostUsd.map((entry) => [entry.day, entry.costUsd]));
+  const yesterdayKey = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+  const dayBeforeKey = new Date(now.getTime() - 2 * 86_400_000).toISOString().slice(0, 10);
+  const yesterday = dailyByDay.get(yesterdayKey) ?? null;
+  const dayBefore = dailyByDay.get(dayBeforeKey) ?? null;
+  const avgPerRequest = sevenDayRequestTotal > 0 && billing.geminiLast7Days !== null ? billing.geminiLast7Days / sevenDayRequestTotal : null;
+  const daysElapsed = daysElapsedInMonthUtc(now);
+  const daysInMonth = daysInMonthUtc(now);
+  const projectedMonthEnd = billing.geminiMonthToDate !== null && daysElapsed > 0 ? (billing.geminiMonthToDate / daysElapsed) * daysInMonth : null;
+  const monthLabel = new Intl.DateTimeFormat("en", { month: "long" }).format(now);
+  const capPercent = billing.monthlySpendCapUsd && billing.geminiMonthToDate !== null ? Math.min(100, (billing.geminiMonthToDate / billing.monthlySpendCapUsd) * 100) : null;
+  const chartDays = billing.dailyGeminiCostUsd.slice(chartRange === "7d" ? -7 : -28);
+
+  return <article className={styles.widePanel}>
+    <div className={styles.panelHeading}><div><p className={styles.eyebrow}>Cloud Billing</p><h2>Real spend and budget</h2></div><span>Reconciled with a delay</span></div>
+    {billing.state === "stale" && <p className={styles.qualityAlert}>Warning: this export is more than 36 hours old.</p>}
+    <div className={styles.billingMetrics}>
+      <article className={styles.metricCard}><p>Month to date</p><strong>{formatBilling(billing.geminiMonthToDate, billing.currency)}</strong><span className={styles.neutral}>Since {monthLabel} 1</span></article>
+      <article className={styles.metricCard}><p>Yesterday</p><strong>{formatBilling(yesterday, billing.currency)}</strong><span className={yesterday === null || dayBefore === null ? styles.neutral : relativeDeltaTone(yesterday, dayBefore)}>{yesterday === null ? "No cost rows yet" : dayBefore === null ? "No prior day yet" : `${formatRelativeDelta(yesterday, dayBefore) ?? "—"} vs day before`}</span></article>
+      <article className={styles.metricCard}><p>Avg per request</p><strong>{formatMicroBilling(avgPerRequest, billing.currency)}</strong><span className={styles.neutral}>{avgPerRequest === null ? "No requests in this window" : `${formatBilling(avgPerRequest * 100, billing.currency)} per 100 calls`}</span></article>
+      <article className={styles.metricCard}><p>Projected month end</p><strong>{formatBilling(projectedMonthEnd, billing.currency)}</strong><span className={styles.neutral}>At current daily pace</span></article>
+    </div>
+    {billing.monthlySpendCapUsd !== null && <div className={styles.billingCap}>
+      <div><span>Your configured monthly cap</span><span><strong>{formatBilling(billing.geminiMonthToDate, billing.currency)}</strong> / {formatBilling(billing.monthlySpendCapUsd, billing.currency)}</span></div>
+      <i><b style={{ width: `${capPercent ?? 0}%` }} /></i>
+      <p className={styles.panelNote}>Cap is set manually (GEMINI_MONTHLY_SPEND_CAP_USD) — Google has no public API for the AI Studio spend cap or prepay balance.</p>
+    </div>}
+    <div className={styles.panelToggleRow}><span className={styles.panelToggleLabel}>Daily Gemini spend</span><div className={styles.panelRangeTabs} aria-label="Chart date range"><button className={chartRange === "7d" ? styles.rangeActive : undefined} onClick={() => setChartRange("7d")}>7d</button><button className={chartRange === "28d" ? styles.rangeActive : undefined} onClick={() => setChartRange("28d")}>28d</button></div></div>
+    <DailySpendChart days={chartDays} currency={billing.currency} />
+    <p className={styles.panelNote}>Actual billed amounts include credits; the Gemini subset is matched from billing service/SKU names. Latest reported usage: {billing.latestUsageAt ? new Date(billing.latestUsageAt).toLocaleString() : "—"}.</p>
+  </article>;
+}
+
 export default function AnalyticsDashboard() {
   const [secret, setSecret] = useState("");
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
@@ -414,6 +505,10 @@ export default function AnalyticsDashboard() {
     return { ...totals, allPriced };
   }, [metricsHeadline]);
   const scoreYieldRate = metricsHeadline?.scoreYield.total ? (metricsHeadline.scoreYield.confirmed + metricsHeadline.scoreYield.estimate) / metricsHeadline.scoreYield.total : null;
+  // Always the 7d headline regardless of any panel's own toggle -- pairs
+  // with Cloud Billing's geminiLast7Days for a real $/request figure, and
+  // that BigQuery-sourced number only has a fixed 7d window to match against.
+  const sevenDayGeminiRequestTotal = overview?.geminiHealth.headline["7d"].models.reduce((total, model) => total + model.requests, 0) ?? 0;
   // Framed as "model-confident" (higher is better) rather than "fallback
   // rate" -- inverse of confidenceStats.defaultConfidenceCount, which counts
   // the cases where Gemini omitted its own confidence and our default stood in.
@@ -505,11 +600,8 @@ export default function AnalyticsDashboard() {
         <div className={styles.operationGrid}><div><span>Requests</span><strong>{overview.operations.visionRequests}</strong></div><div><span>Error rate</span><strong>{formatPercent(overview.operations.visionErrorRate)}</strong></div><div><span>p95 latency</span><strong>{overview.operations.visionP95Ms === null ? "—" : `${Math.round(overview.operations.visionP95Ms)} ms`}</strong></div></div>
         <button className={styles.panelLink} onClick={() => setView("gemini")}>Open 7-day Gemini Health →</button>
       </article>
-      <article className={styles.panel}>
-        <div className={styles.panelHeading}><div><p className={styles.eyebrow}>Cloud Billing</p><h2>Actual billed spend</h2></div><span>{overview.cloudBilling.state === "available" ? "Daily export" : overview.cloudBilling.state.replaceAll("_", " ")}</span></div>
-        {overview.cloudBilling.state === "not_configured" || overview.cloudBilling.state === "waiting_for_export" || overview.cloudBilling.state === "no_data" || overview.cloudBilling.state === "unavailable" ? <p className={styles.empty}>{overview.cloudBilling.state === "waiting_for_export" ? "Google has not published a billing table yet. It can take several hours after enabling export." : overview.cloudBilling.state === "no_data" ? "The billing table exists, but it has no reported cost rows for this project yet." : overview.cloudBilling.state === "not_configured" ? "Connect the read-only BigQuery service account to show billed spend." : "BigQuery could not be reached; the dashboard will retry automatically."}</p> : <><div className={styles.operationGrid}><div><span>Google · 24h</span><strong>{formatBilling(overview.cloudBilling.actualGoogleLast24Hours, overview.cloudBilling.currency)}</strong></div><div><span>Gemini · 24h</span><strong>{formatBilling(overview.cloudBilling.geminiLast24Hours, overview.cloudBilling.currency)}</strong></div><div><span>Gemini · 30d</span><strong>{formatBilling(overview.cloudBilling.geminiLast30Days, overview.cloudBilling.currency)}</strong></div></div><p className={styles.panelNote}>{overview.cloudBilling.state === "stale" ? "Warning: this export is more than 36 hours old. " : ""}Actual billed amounts include credits; the Gemini subset is matched from billing service/SKU names. Latest reported usage: {overview.cloudBilling.latestUsageAt ? new Date(overview.cloudBilling.latestUsageAt).toLocaleString() : "—"}.</p></>}
-      </article>
     </section>
+    <CloudBillingPanel billing={overview.cloudBilling} generatedAt={overview.generatedAt} sevenDayRequestTotal={sevenDayGeminiRequestTotal} />
     <p className={styles.note}>Gemini spend is an application-side estimate from recorded token usage. Cloud Billing reconciliation can be added later and may arrive with a delay.</p>
     </>}
 
