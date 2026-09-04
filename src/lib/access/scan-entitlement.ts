@@ -13,7 +13,7 @@
  * storage is never the only copy of something a user paid for.
  */
 
-export const FREE_SCAN_LIMIT = 3;
+export const FREE_SCAN_LIMIT = 2;
 export const FREE_SCANS_KEY = "sugar:free-scans:v1";
 export const ACCESS_PASS_KEY = "sugar:access-pass:v1";
 
