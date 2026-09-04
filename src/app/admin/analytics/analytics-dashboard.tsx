@@ -360,17 +360,70 @@ function daysElapsedInMonthUtc(date: Date): number {
   return date.getUTCDate();
 }
 
-/** Simple flat-bar spend chart -- no charting library, matching the rest of this dashboard's hand-rolled visuals (see .qualityList's bars). */
+// Rounds a value up to a "nice" 1/2/5 * 10^n step, so the Y axis max reads
+// as a clean number ($0.50, $2, $5 ...) instead of an arbitrary max cost.
+function niceAxisMax(value: number) {
+  if (value <= 0) return 1;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
+  const residual = value / magnitude;
+  const niceResidual = residual <= 1 ? 1 : residual <= 2 ? 2 : residual <= 5 ? 5 : 10;
+  return niceResidual * magnitude;
+}
+
+// Path for a bar with rounded top corners only (flat bottom, sitting flush on the axis).
+function topRoundedBarPath(x: number, y: number, w: number, h: number, r: number) {
+  if (h <= 0) return "";
+  const radius = Math.max(0, Math.min(r, w / 2, h));
+  return `M${x},${y + h} V${y + radius} Q${x},${y} ${x + radius},${y} H${x + w - radius} Q${x + w},${y} ${x + w},${y + radius} V${y + h} Z`;
+}
+
+/** Inline SVG spend chart -- no charting library, matching the rest of this dashboard's hand-rolled visuals (see .qualityList's bars). */
 function DailySpendChart({ days, currency }: { days: { day: string; costUsd: number }[]; currency: string | null }) {
   if (days.length === 0) return <p className={styles.empty}>No daily Gemini cost rows in this window yet.</p>;
-  const max = Math.max(...days.map((entry) => entry.costUsd), 0.01);
+
+  const width = 700;
+  const height = 150;
+  const marginLeft = 46;
+  const marginRight = 6;
+  const marginTop = 10;
+  const marginBottom = 22;
+  const chartWidth = width - marginLeft - marginRight;
+  const chartHeight = height - marginTop - marginBottom;
+
+  const rawMax = Math.max(...days.map((entry) => entry.costUsd), 0);
+  const axisMax = niceAxisMax(Math.max(rawMax, 0.01));
+  const yFor = (value: number) => marginTop + chartHeight - (value / axisMax) * chartHeight;
+  const gridValues = [0, axisMax / 2, axisMax];
+
+  // 7-day view labels every bar; wider windows space labels out so they don't overlap.
+  const labelStep = days.length <= 7 ? 1 : Math.ceil(days.length / 7);
+
+  const slotWidth = chartWidth / days.length;
+  const barWidth = Math.max(2, Math.min(slotWidth * 0.55, 40));
+
   return <div className={styles.dailySpendChart}>
-    {days.map((entry) => {
-      const label = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(new Date(`${entry.day}T00:00:00Z`));
-      return <div key={entry.day} className={styles.dailySpendBar} title={`${label}: ${formatBilling(entry.costUsd, currency)}`}>
-        <b style={{ height: `${Math.max(2, (entry.costUsd / max) * 100)}%` }} />
-      </div>;
-    })}
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height="150" role="img" aria-label="Daily Gemini spend">
+      {gridValues.map((value, i) => {
+        const y = yFor(value);
+        return <g key={i}>
+          <line className={styles.dailySpendGridLine} x1={marginLeft} x2={width - marginRight} y1={y} y2={y} />
+          <text className={styles.dailySpendAxisLabel} x={marginLeft - 6} y={y} textAnchor="end" dominantBaseline={i === 0 ? "text-bottom" : "middle"}>{formatBilling(value, currency)}</text>
+        </g>;
+      })}
+      {days.map((entry, i) => {
+        const label = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(new Date(`${entry.day}T00:00:00Z`));
+        const x = marginLeft + i * slotWidth + (slotWidth - barWidth) / 2;
+        const barHeight = (entry.costUsd / axisMax) * chartHeight;
+        const y = yFor(entry.costUsd);
+        const showLabel = i % labelStep === 0 || i === days.length - 1;
+        return <g key={entry.day}>
+          <path className={styles.dailySpendBar} d={topRoundedBarPath(x, y, barWidth, Math.max(barHeight, entry.costUsd > 0 ? 2 : 0), 2)}>
+            <title>{`${label}: ${formatBilling(entry.costUsd, currency)}`}</title>
+          </path>
+          {showLabel && <text className={styles.dailySpendAxisLabel} x={x + barWidth / 2} y={height - 4} textAnchor="middle">{label}</text>}
+        </g>;
+      })}
+    </svg>
   </div>;
 }
 
@@ -416,7 +469,7 @@ function CloudBillingPanel({ billing, generatedAt, sevenDayRequestTotal }: { bil
     <div className={styles.billingMetrics}>
       <article className={styles.metricCard}><p>Month to date</p><strong>{formatBilling(billing.geminiMonthToDate, billing.currency)}</strong><span className={styles.neutral}>Since {monthLabel} 1</span></article>
       <article className={styles.metricCard}><p>Yesterday</p><strong>{formatBilling(yesterday, billing.currency)}</strong><span className={yesterday === null || dayBefore === null ? styles.neutral : relativeDeltaTone(yesterday, dayBefore)}>{yesterday === null ? "No cost rows yet" : dayBefore === null ? "No prior day yet" : `${formatRelativeDelta(yesterday, dayBefore) ?? "—"} vs day before`}</span></article>
-      <article className={styles.metricCard}><p>Avg per request</p><strong>{formatMicroBilling(avgPerRequest, billing.currency)}</strong><span className={styles.neutral}>{avgPerRequest === null ? "No requests in this window" : `${formatBilling(avgPerRequest * 100, billing.currency)} per 100 calls`}</span></article>
+      <article className={styles.metricCard}><p>Avg per request · last 7 days</p><strong>{formatMicroBilling(avgPerRequest, billing.currency)}</strong><span className={styles.neutral}>{avgPerRequest === null ? "No requests in this window" : `${formatBilling(avgPerRequest * 100, billing.currency)} per 100 calls`}</span></article>
       <article className={styles.metricCard}><p>Projected month end</p><strong>{formatBilling(projectedMonthEnd, billing.currency)}</strong><span className={styles.neutral}>At current daily pace</span></article>
     </div>
     {billing.monthlySpendCapUsd !== null && <div className={styles.billingCap}>
