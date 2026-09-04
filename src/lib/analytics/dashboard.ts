@@ -172,6 +172,17 @@ function ratio(numerator: number, denominator: number): number | null {
 }
 
 /**
+ * Midnight UTC of `date`'s own calendar day. "24h" windows are fixed to
+ * this (today so far, not a rolling 24-hour lookback) so a Gemini spike at
+ * 23:50 doesn't linger in the headline for another 24 hours after
+ * midnight -- matching how "Month to date" already works in the Cloud
+ * Billing panel. 3d/7d/all-time windows are intentionally left rolling.
+ */
+function startOfUtcDay(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+/**
  * Everything toggle-driven, for one window. Called twice per request (24h
  * and 7d) so the frontend can let each panel independently pick which of
  * the two to render with no extra round trip -- see GeminiHeadline's doc
@@ -318,8 +329,8 @@ export async function readDashboardOverview(
 ): Promise<DashboardOverview> {
   const endsAt = now;
   const allTime = windowHours === null;
-  const startsAt = allTime ? new Date(0) : new Date(endsAt.getTime() - windowHours * 3_600_000);
-  const previousStartsAt = allTime ? startsAt : new Date(startsAt.getTime() - windowHours * 3_600_000);
+  const startsAt = allTime ? new Date(0) : windowHours === 24 ? startOfUtcDay(endsAt) : new Date(endsAt.getTime() - windowHours * 3_600_000);
+  const previousStartsAt = allTime ? startsAt : windowHours === 24 ? new Date(startsAt.getTime() - 24 * 3_600_000) : new Date(startsAt.getTime() - windowHours * 3_600_000);
 
   const metrics = await db.query<MetricRow>(`
     WITH metric_events AS (
@@ -493,7 +504,7 @@ export async function readDashboardOverview(
       WHERE event_name = 'guard_rejection' AND occurred_at >= $3::timestamptz AND occurred_at < $2::timestamptz
       GROUP BY 1, 2, 3 ORDER BY current_value DESC, scope ASC, guard ASC
     `, [startsAt.toISOString(), endsAt.toISOString(), previousStartsAt.toISOString()]),
-    readGeminiHeadline(db, new Date(endsAt.getTime() - 24 * 3_600_000), endsAt),
+    readGeminiHeadline(db, startOfUtcDay(endsAt), endsAt),
     readGeminiHeadline(db, new Date(endsAt.getTime() - 168 * 3_600_000), endsAt),
   ]);
 

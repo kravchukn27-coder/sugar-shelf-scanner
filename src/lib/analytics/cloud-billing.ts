@@ -11,6 +11,11 @@ export type CloudBillingDailyCost = { day: string; costUsd: number };
 export type CloudBillingSummary = {
   state: "not_configured" | "waiting_for_export" | "no_data" | "stale" | "available" | "unavailable";
   currency: string | null;
+  // Despite the name, these are calendar-day-to-date (UTC midnight to now),
+  // not a rolling 24-hour lookback -- kept the existing field name to avoid
+  // a wider API rename, but see startOfUtcDay's doc comment in dashboard.ts
+  // for why this dashboard fixes "24h" to the calendar day everywhere it
+  // appears. Currently unused by the redesigned Cloud Billing panel UI.
   actualGoogleLast24Hours: number | null;
   actualGoogleLast30Days: number | null;
   geminiLast24Hours: number | null;
@@ -109,9 +114,9 @@ function summaryQuery(projectId: string, datasetId: string, tableId: string) {
         AND usage_start_time >= LEAST(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY), TIMESTAMP_TRUNC(CURRENT_TIMESTAMP(), MONTH))
     )
     SELECT currency, MAX(usage_end_time) AS latest_usage_at,
-      SUM(IF(usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY), net_cost, 0)) AS google_24h,
+      SUM(IF(usage_start_time >= TIMESTAMP_TRUNC(CURRENT_TIMESTAMP(), DAY), net_cost, 0)) AS google_24h,
       SUM(net_cost) AS google_30d,
-      SUM(IF(is_gemini AND usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY), net_cost, 0)) AS gemini_24h,
+      SUM(IF(is_gemini AND usage_start_time >= TIMESTAMP_TRUNC(CURRENT_TIMESTAMP(), DAY), net_cost, 0)) AS gemini_24h,
       SUM(IF(is_gemini AND usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY), net_cost, 0)) AS gemini_7d,
       SUM(IF(is_gemini, net_cost, 0)) AS gemini_30d,
       SUM(IF(is_gemini AND usage_start_time >= TIMESTAMP_TRUNC(CURRENT_TIMESTAMP(), MONTH), net_cost, 0)) AS gemini_month_to_date
