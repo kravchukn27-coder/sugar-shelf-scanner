@@ -60,6 +60,7 @@ test("dashboard overview fills missing metrics and returns aggregate-only event 
   assert.deepEqual(overview.geminiHealth.dailyRoutes, [{ day: "2026-08-31", route: "preflight", requests: 7, errors: 1, p95DurationMs: 1050, p95VisionMs: 900, p95CatalogMs: 60 }]);
   assert.deepEqual(overview.geminiHealth.dailyScoreYield, [{ day: "2026-08-31", confirmed: 3, estimate: 2, unknown: 1, total: 6 }]);
   assert.deepEqual(overview.geminiHealth.dailyConfidenceStats, [{ day: "2026-08-31", defaultConfidenceCount: 2, total: 6 }]);
+  assert.deepEqual(overview.geminiHealth.dailyTokens, [{ day: "2026-08-31", totalTokens: 1200 }]);
   assert.deepEqual(overview.guardRejections, [{ scope: "analyze", guard: "request_rate_limit", dimension: "installation", current: 3, previous: 1 }]);
 
   for (const window of ["24h", "7d"] as const) {

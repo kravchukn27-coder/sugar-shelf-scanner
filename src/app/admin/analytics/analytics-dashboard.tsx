@@ -378,7 +378,7 @@ function topRoundedBarPath(x: number, y: number, w: number, h: number, r: number
 }
 
 /** Inline SVG spend chart -- no charting library, matching the rest of this dashboard's hand-rolled visuals (see .qualityList's bars). */
-function DailySpendChart({ days, currency }: { days: { day: string; costUsd: number }[]; currency: string | null }) {
+function DailySpendChart({ days, currency }: { days: { day: string; costUsd: number; totalTokens: number | null }[]; currency: string | null }) {
   if (days.length === 0) return <p className={styles.empty}>No daily Gemini cost rows in this window yet.</p>;
 
   const width = 700;
@@ -418,7 +418,7 @@ function DailySpendChart({ days, currency }: { days: { day: string; costUsd: num
         const showLabel = i % labelStep === 0 || i === days.length - 1;
         return <g key={entry.day}>
           <path className={styles.dailySpendBar} d={topRoundedBarPath(x, y, barWidth, Math.max(barHeight, entry.costUsd > 0 ? 2 : 0), 2)}>
-            <title>{`${label}: ${formatMicroBilling(entry.costUsd, currency)}`}</title>
+            <title>{`${label}: ${formatMicroBilling(entry.costUsd, currency)}${entry.totalTokens === null ? "" : ` · ${new Intl.NumberFormat("en-US").format(entry.totalTokens)} tokens`}`}</title>
           </path>
           {showLabel && <text className={styles.dailySpendAxisLabel} x={x + barWidth / 2} y={height - 4} textAnchor="middle">{label}</text>}
         </g>;
@@ -436,7 +436,7 @@ function DailySpendChart({ days, currency }: { days: { day: string; costUsd: num
  * below is read from GEMINI_MONTHLY_SPEND_CAP_USD, an env var the operator
  * sets to match whatever they configured in AI Studio, not fetched live.
  */
-function CloudBillingPanel({ billing, generatedAt, sevenDayRequestTotal }: { billing: CloudBillingSummary; generatedAt: string; sevenDayRequestTotal: number }) {
+function CloudBillingPanel({ billing, generatedAt, sevenDayRequestTotal, dailyTokens }: { billing: CloudBillingSummary; generatedAt: string; sevenDayRequestTotal: number; dailyTokens: { day: string; totalTokens: number }[] }) {
   const [chartRange, setChartRange] = useState<"7d" | "28d">("28d");
   const emptyReason = billing.state === "waiting_for_export" ? "Google has not published a billing table yet. It can take several hours after enabling export."
     : billing.state === "no_data" ? "The billing table exists, but it has no reported cost rows for this project yet."
@@ -461,7 +461,8 @@ function CloudBillingPanel({ billing, generatedAt, sevenDayRequestTotal }: { bil
   const projectedMonthEnd = billing.geminiMonthToDate !== null && daysElapsed > 0 ? (billing.geminiMonthToDate / daysElapsed) * daysInMonth : null;
   const monthLabel = new Intl.DateTimeFormat("en", { month: "long" }).format(now);
   const capPercent = billing.monthlySpendCapUsd && billing.geminiMonthToDate !== null ? Math.min(100, (billing.geminiMonthToDate / billing.monthlySpendCapUsd) * 100) : null;
-  const chartDays = billing.dailyGeminiCostUsd.slice(chartRange === "7d" ? -7 : -28);
+  const tokensByDay = new Map(dailyTokens.map((entry) => [entry.day, entry.totalTokens]));
+  const chartDays = billing.dailyGeminiCostUsd.slice(chartRange === "7d" ? -7 : -28).map((entry) => ({ ...entry, totalTokens: tokensByDay.get(entry.day) ?? null }));
 
   return <article className={styles.widePanel}>
     <div className={styles.panelHeading}><div><p className={styles.eyebrow}>Cloud Billing</p><h2>Real spend and budget</h2></div><span>Reconciled with a delay</span></div>
@@ -661,7 +662,7 @@ export default function AnalyticsDashboard() {
         <button className={styles.panelLink} onClick={() => setView("gemini")}>Open 7-day Gemini Health →</button>
       </article>
     </section>
-    <CloudBillingPanel billing={overview.cloudBilling} generatedAt={overview.generatedAt} sevenDayRequestTotal={sevenDayGeminiRequestTotal} />
+    <CloudBillingPanel billing={overview.cloudBilling} generatedAt={overview.generatedAt} sevenDayRequestTotal={sevenDayGeminiRequestTotal} dailyTokens={overview.geminiHealth.dailyTokens} />
     <p className={styles.note}>Gemini spend is an application-side estimate from recorded token usage. Cloud Billing reconciliation can be added later and may arrive with a delay.</p>
     </>}
 
