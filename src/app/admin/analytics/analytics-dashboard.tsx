@@ -81,8 +81,7 @@ function formatBilling(value: number | null, currency: string | null) {
 // Sub-second values (queue time, render time) stay in milliseconds, where
 // "94 ms" is a precise, meaningful number — rounding that to "0.1 s" loses
 // exactly the "this is basically nothing" read it's meant to give. Anything
-// a full second or slower switches to seconds, matching the "2.7 s" style
-// already used in the Historical Railway logs table above.
+// a full second or slower switches to seconds.
 function formatMs(value: number | null) {
   if (value === null) return "—";
   if (value < 1000) return `${Math.round(value)} ms`;
@@ -168,8 +167,7 @@ function relativeDeltaTone(current: number | null, baseline: number | null, lowe
 // because the table is brand new. Rather than show no comparison at all
 // until a real prior day accumulates, fall back to the figures already
 // hand-verified from raw Railway logs during the healthy 2026-08-26/27
-// window (see the Historical Railway logs table above and
-// docs/scan-performance-changelog.md). analyze's success/timeout split
+// window (see docs/scan-performance-changelog.md). analyze's success/timeout split
 // wasn't cleanly isolated in that investigation (only the overall
 // scan_request rate was, and "timeouts concentrated in preflight" was noted
 // qualitatively) — p50 is the one number solid enough to carry over as-is,
@@ -386,9 +384,7 @@ export default function AnalyticsDashboard() {
   }, [refresh, secret, range]);
 
   const totalQuality = useMemo(() => overview?.quality.reduce((total, item) => total + item.value, 0) ?? 0, [overview]);
-  const geminiTotals = useMemo(() => overview?.geminiHealth.days.reduce((total, day) => ({ requests: total.requests + day.requests, errors: total.errors + day.errors, tokens: total.tokens + day.totalTokens, cost: total.cost === null || day.estimatedCostUsd === null ? null : total.cost + day.estimatedCostUsd }), { requests: 0, errors: 0, tokens: 0, cost: 0 as number | null }) ?? { requests: 0, errors: 0, tokens: 0, cost: null }, [overview]);
   const geminiDaysCovered = overview?.geminiHealth.days.length ?? 0;
-  const healthyBaselineSuccessRate = overview?.geminiHealth.historicalComparisons.find((item) => item.period.includes("healthy baseline"))?.successRate ?? null;
   const operationAverages = useOperationAverages(overview?.geminiHealth.dailyOperations);
   const experienceComparison = useExperienceComparison(overview?.geminiHealth.dailyExperience, overview?.generatedAt);
   const routeComparisons = useRouteComparisons(overview?.geminiHealth.dailyRoutes, overview?.generatedAt);
@@ -397,6 +393,26 @@ export default function AnalyticsDashboard() {
   const breakerHeadline = overview?.geminiHealth.headline[effectiveRange("breakerRow")];
   const performanceHeadline = overview?.geminiHealth.headline[effectiveRange("performance")];
   const modelsHeadline = overview?.geminiHealth.headline[effectiveRange("models")];
+  // Sourced from the same toggle-aware per-model breakdown as the Models
+  // table below, not the always-7-day `days` timeline -- otherwise these
+  // cards silently ignored both the global and per-panel 24h/7d toggle.
+  // Cost is summed only from models that have a price (see gemini-cost.ts);
+  // an unpriced model no longer collapses the whole total to "Unpriced" --
+  // it just narrows what the total covers, which allPriced below reports.
+  const geminiTotals = useMemo(() => {
+    const models = metricsHeadline?.models ?? [];
+    let allPriced = models.length > 0;
+    const totals = models.reduce((total, model) => {
+      if (model.estimatedCostUsd === null) allPriced = false;
+      return {
+        requests: total.requests + model.requests,
+        errors: total.errors + model.errors,
+        tokens: total.tokens + model.totalTokens,
+        cost: model.estimatedCostUsd === null ? total.cost : (total.cost ?? 0) + model.estimatedCostUsd,
+      };
+    }, { requests: 0, errors: 0, tokens: 0, cost: null as number | null });
+    return { ...totals, allPriced };
+  }, [metricsHeadline]);
   const scoreYieldRate = metricsHeadline?.scoreYield.total ? (metricsHeadline.scoreYield.confirmed + metricsHeadline.scoreYield.estimate) / metricsHeadline.scoreYield.total : null;
   // Framed as "model-confident" (higher is better) rather than "fallback
   // rate" -- inverse of confidenceStats.defaultConfidenceCount, which counts
@@ -510,9 +526,8 @@ export default function AnalyticsDashboard() {
         return <span key={operation} className={styles.breakerBadgeProbing}>{formatOperationLabel(operation)}: testing {status.currentModel ?? "primary model"} again…{history}</span>;
       })}{breakerHeadline?.hedgeStats.map((stat) => <span key={stat.operation} className={styles.breakerBadgeClosed}>{formatOperationLabel(stat.operation)} hedge: won {stat.won}/{stat.eligible} ({formatPercent(stat.eligible ? stat.won / stat.eligible : null)})</span>)}{!!breakerHeadline?.confidenceStats.total && <span className={styles.breakerBadgeClosed}>Model-confident: {formatPercent(modelConfidenceRate)} ({breakerHeadline.confidenceStats.total - breakerHeadline.confidenceStats.defaultConfidenceCount}/{breakerHeadline.confidenceStats.total})</span>}{!!breakerHeadline?.unbrandedDetectionCount && <span className={styles.breakerBadgeProbing} title="Temporary diagnostic, removed ~2026-09-16">Unbranded names logged: {breakerHeadline.unbrandedDetectionCount}</span>}</div>
       <div className={styles.panelToggleRow}><span className={styles.panelToggleLabel}>Headline metrics</span><PanelRangeToggle value={effectiveRange("metrics")} onChange={(value) => setPanelRange("metrics", value)} /></div>
-      <div className={styles.metrics}><article className={styles.metricCard}><p>Requests</p><strong>{geminiTotals.requests}</strong><span className={styles.neutral}>All operations</span></article><article className={styles.metricCard}><p>Error rate</p><strong>{formatPercent(geminiTotals.requests ? geminiTotals.errors / geminiTotals.requests : null)}</strong><span className={styles.neutral}>{geminiTotals.errors} failed</span></article><article className={styles.metricCard}><p>Provider tokens</p><strong>{formatValue(geminiTotals.tokens, "count")}</strong><span className={styles.neutral}>Usage-reported only</span></article><article className={styles.metricCard}><p>Estimated cost</p><strong>{formatBilling(geminiTotals.cost, "USD")}</strong><span className={styles.neutral}>Application estimate</span></article><article className={styles.metricCard}><p>Score yield</p><strong>{formatPercent(scoreYieldRate)}</strong><ComparisonBadges current={scoreYieldRate} yesterday={scoreYieldComparison.yesterday} average={scoreYieldComparison.average} lowerIsBetter={false} /><span className={styles.neutral}>{(metricsHeadline?.scoreYield.confirmed ?? 0) + (metricsHeadline?.scoreYield.estimate ?? 0)} of {metricsHeadline?.scoreYield.total ?? 0} detections scored</span></article></div>
+      <div className={styles.metrics}><article className={styles.metricCard}><p>Requests</p><strong>{geminiTotals.requests}</strong><span className={styles.neutral}>All operations</span></article><article className={styles.metricCard}><p>Error rate</p><strong>{formatPercent(geminiTotals.requests ? geminiTotals.errors / geminiTotals.requests : null)}</strong><span className={styles.neutral}>{geminiTotals.errors} failed</span></article><article className={styles.metricCard}><p>Provider tokens</p><strong>{formatValue(geminiTotals.tokens, "count")}</strong><span className={styles.neutral}>Usage-reported only</span></article><article className={styles.metricCard}><p>Estimated cost</p><strong>{formatBilling(geminiTotals.cost, "USD")}</strong><span className={styles.neutral}>{geminiTotals.allPriced ? "Application estimate" : "Application estimate · priced models only"}</span></article><article className={styles.metricCard}><p>Score yield</p><strong>{formatPercent(scoreYieldRate)}</strong><ComparisonBadges current={scoreYieldRate} yesterday={scoreYieldComparison.yesterday} average={scoreYieldComparison.average} lowerIsBetter={false} /><span className={styles.neutral}>{(metricsHeadline?.scoreYield.confirmed ?? 0) + (metricsHeadline?.scoreYield.estimate ?? 0)} of {metricsHeadline?.scoreYield.total ?? 0} detections scored</span></article></div>
       <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Protection limits</p><h2>Where requests were blocked</h2></div><span>{RANGE_LABELS[range]}</span></div>{overview.guardRejections.length === 0 ? <p className={styles.empty}>No protection limit has blocked work in this window.</p> : <div className={styles.guardTable}><div className={styles.comparisonHeader}><span>Scope</span><span>Protection</span><span>Dimension</span><span>Blocked</span><span>Prior window</span></div>{overview.guardRejections.map((item) => <div key={`${item.scope}-${item.guard}-${item.dimension ?? "none"}`}><strong>{formatEventName(item.scope)}</strong><span>{formatGuardName(item.guard)}</span><span>{item.dimension ? formatEventName(item.dimension) : "—"}</span><strong className={styles.negative}>{item.current}</strong><span>{item.previous}</span></div>)}</div>}<p className={styles.panelNote}>Counts begin with this deployment. They are aggregate safety decisions only: no IP addresses, installation IDs, images, or request payloads are stored.</p></article>
-      <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Historical Railway logs</p><h2>Baseline and incident comparison</h2></div><span>Archived aggregates</span></div><div className={styles.comparisonScroll}><div className={styles.historyTable}><div className={styles.comparisonHeader}><span>Window</span><span>Requests</span><span>Success</span><span>Pre-screen p50</span><span>Pre-screen timeout</span><span>Confidence</span></div>{overview.geminiHealth.historicalComparisons.map((item) => <div key={item.period}><strong>{item.period}</strong><span>{item.requests}</span><span>{formatPercent(item.successRate)}</span><span>{item.preflightP50Ms}</span><span>{formatPercent(item.preflightTimeoutRate)}</span><small>{item.note}</small></div>)}</div></div><p className={styles.panelNote}>These are verified aggregates from the August Railway investigation. Individual logs have expired, so p95, queue and Analyze splits are deliberately not inferred.</p></article>
       <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Day-to-day comparison</p><h2>Gemini speed by operation</h2></div><span>UTC · newest first</span></div>{overview.geminiHealth.dailyOperations.length === 0 ? <p className={styles.empty}>No persisted Gemini events in this window yet.</p> : <div className={styles.comparisonScroll}><div className={styles.comparisonTable}><div className={styles.comparisonHeader}><span>Day</span><span>Stage</span><span>Requests</span><span>Success</span><span>Timeout</span><span>p50 Gemini</span><span>p95 Gemini</span><span>p95 queue</span></div>{overview.geminiHealth.dailyOperations.map((item) => {
                 const successRate = item.requests ? item.successes / item.requests : null;
                 const timeoutRate = item.requests ? item.timeoutErrors / item.requests : null;

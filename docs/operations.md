@@ -2,7 +2,7 @@
 
 ## Production
 
-- Service: `https://sugar-api-production.up.railway.app`
+- Service: `https://sugar-shelf-scanner.up.railway.app`
 - Source branch: `main`
 - Health endpoint: `/api/health`
 - Required server credentials remain server-only. Never expose Gemini keys,
@@ -36,7 +36,7 @@ are SEV2 and investigated within one hour.
 Free external checks:
 
 1. Create an UptimeRobot Free HTTP monitor for
-   `https://sugar-api-production.up.railway.app/api/health`; it checks every
+   `https://sugar-shelf-scanner.up.railway.app/api/health`; it checks every
    five minutes and sends email as an independent fallback.
 2. Create a Sentry Developer project for the Next.js service and add its DSN
    only after the project exists. The free tier is a secondary stack-trace
@@ -240,7 +240,7 @@ step.
    unrestorable by its buyer.
 
 3. **Check the routes answer before showing anyone a wall.** With the paywall
-   still off, `curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"email":"nobody@example.com"}' https://sugar-api-production.up.railway.app/api/access/restore`
+   still off, `curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"email":"nobody@example.com"}' https://sugar-shelf-scanner.up.railway.app/api/access/restore`
    should return **404** ("no active pass for that address"), not 503. A 503
    means step 1 or step 2 is incomplete — the routes fail closed on purpose
    rather than half-working.

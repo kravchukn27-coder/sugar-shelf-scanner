@@ -56,7 +56,6 @@ test("dashboard overview fills missing metrics and returns aggregate-only event 
   assert.deepEqual(overview.recentEvents, [{ occurredAt: "2026-08-31T10:15:00.000Z", eventName: "vision_usage", source: "server" }]);
   assert.equal(overview.geminiHealth.days.at(-1)?.requests, 8);
   assert.deepEqual(overview.geminiHealth.dailyOperations, [{ day: "2026-08-31", operation: "preflight", requests: 8, successes: 6, timeoutErrors: 1, p50LatencyMs: 400, p95LatencyMs: 900, p95QueueMs: 40 }]);
-  assert.deepEqual(overview.geminiHealth.historicalComparisons[0], { period: "Aug 26–27 · healthy baseline", requests: 291, successRate: 0.811, preflightP50Ms: "2.7 s", preflightTimeoutRate: 0.124, note: "Archived Railway summary" });
   assert.deepEqual(overview.geminiHealth.dailyExperience, [{ day: "2026-08-31", completions: 6, p95FirstPreflightDispatchMs: 330, p95PreflightRttMs: 1100, p95AnalyzeRttMs: 1600 }]);
   assert.deepEqual(overview.geminiHealth.dailyRoutes, [{ day: "2026-08-31", route: "preflight", requests: 7, errors: 1, p95DurationMs: 1050, p95VisionMs: 900, p95CatalogMs: 60 }]);
   assert.deepEqual(overview.geminiHealth.dailyScoreYield, [{ day: "2026-08-31", confirmed: 3, estimate: 2, unknown: 1, total: 6 }]);
