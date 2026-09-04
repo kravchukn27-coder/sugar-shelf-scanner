@@ -407,7 +407,7 @@ function DailySpendChart({ days, currency }: { days: { day: string; costUsd: num
         const y = yFor(value);
         return <g key={i}>
           <line className={styles.dailySpendGridLine} x1={marginLeft} x2={width - marginRight} y1={y} y2={y} />
-          <text className={styles.dailySpendAxisLabel} x={marginLeft - 6} y={y} textAnchor="end" dominantBaseline={i === 0 ? "text-bottom" : "middle"}>{formatBilling(value, currency)}</text>
+          <text className={styles.dailySpendAxisLabel} x={marginLeft - 6} y={y} textAnchor="end" dominantBaseline={i === 0 ? "text-after-edge" : "middle"}>{formatMicroBilling(value, currency)}</text>
         </g>;
       })}
       {days.map((entry, i) => {
@@ -418,7 +418,7 @@ function DailySpendChart({ days, currency }: { days: { day: string; costUsd: num
         const showLabel = i % labelStep === 0 || i === days.length - 1;
         return <g key={entry.day}>
           <path className={styles.dailySpendBar} d={topRoundedBarPath(x, y, barWidth, Math.max(barHeight, entry.costUsd > 0 ? 2 : 0), 2)}>
-            <title>{`${label}: ${formatBilling(entry.costUsd, currency)}`}</title>
+            <title>{`${label}: ${formatMicroBilling(entry.costUsd, currency)}`}</title>
           </path>
           {showLabel && <text className={styles.dailySpendAxisLabel} x={x + barWidth / 2} y={height - 4} textAnchor="middle">{label}</text>}
         </g>;
@@ -592,7 +592,7 @@ export default function AnalyticsDashboard() {
   return <main className={styles.page}>
     <div className={styles.stickyBar}>
       <header className={styles.header}>
-        <div><p className={styles.eyebrow}>Sugar Camera · Internal</p><h1>Product pulse</h1><p className={styles.subhead}>{RANGE_LABELS[range]} · refreshes every 30 seconds</p></div>
+        <div><p className={styles.eyebrow}>Sugar Camera · Internal</p>{view === "overview" && <><h1>Product pulse</h1><p className={styles.subhead}>{RANGE_LABELS[range]} · refreshes every 30 seconds</p></>}</div>
         <div className={styles.freshness}><span className={styles.liveDot} /> Updated {new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(overview.generatedAt))}<button onClick={() => void refresh(secret, range)} disabled={status === "loading"}>{status === "loading" ? "Refreshing…" : "Refresh"}</button></div>
       </header>
 
@@ -613,6 +613,7 @@ export default function AnalyticsDashboard() {
         <span className={overview.window.allTime ? styles.neutral : deltaTone(metric.value, metric.previousValue, metric.key)}>{overview.window.allTime ? "All recorded data" : formatDelta(metric.value, metric.previousValue)}</span>
       </article>)}
     </section>
+    <p className={styles.note}>“Scans started” and “Results shown” mark the start and the completion of the same flow, not two counts of the same thing. A scan that is abandoned or errors out before a result renders lowers “Results shown” without lowering “Scans started” — the two are not meant to always match.</p>
     <p className={styles.metricsGroupLabel}>Gemini reliability</p>
     <section aria-label="Gemini reliability metrics" className={styles.metrics}>
       {overview.metrics.filter((metric) => GEMINI_METRIC_KEYS.has(metric.key)).map((metric) => <article className={styles.metricCard} key={metric.key}>
@@ -628,7 +629,6 @@ export default function AnalyticsDashboard() {
           const tooFewSamples = step.denominator < MIN_RATE_SAMPLE;
           return <div key={step.label}><div><span>{step.label}</span><strong className={tooFewSamples ? styles.lowConfidence : undefined}>{formatPercent(step.rate)}</strong></div><small>{step.numerator} of {step.denominator} · {tooFewSamples ? "too few samples to trust yet" : overview.window.allTime || step.previousRate === null || step.rate === null ? "No prior baseline" : `${step.rate >= step.previousRate ? "+" : ""}${((step.rate - step.previousRate) * 100).toFixed(1)}pp`}</small></div>;
         })}</div>
-        <p className={styles.panelNote}>"Scans started" and "results shown" mark the start and the completion of the same flow, not two counts of the same thing. A scan that is abandoned or errors out before a result renders lowers "results shown" without lowering "scans started" — the two are not meant to always match.</p>
       </article>
       <article className={styles.panel}>
         <div className={styles.panelHeading}><div><p className={styles.eyebrow}>Quality</p><h2>Result quality mix</h2></div><span>{totalQuality} shown</span></div>
