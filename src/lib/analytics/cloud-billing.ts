@@ -139,6 +139,16 @@ function numberField(row: { f?: Array<{ v?: unknown }> } | undefined, index: num
   return Number.isFinite(value) ? value : null;
 }
 
+// BigQuery's REST API returns TIMESTAMP columns as Unix epoch seconds (often
+// in scientific notation, e.g. "1.7885052E9"), not an ISO string -- passing
+// that straight to `new Date(...)`/`Date.parse(...)` silently produces
+// "Invalid Date", which also broke the stale-export check below (an
+// unparseable date always looked "stale", regardless of real freshness).
+function timestampField(row: { f?: Array<{ v?: unknown }> } | undefined, index: number): string | null {
+  const seconds = numberField(row, index);
+  return seconds === null ? null : new Date(seconds * 1000).toISOString();
+}
+
 export async function readCloudBillingSummary(
   environment: NodeJS.ProcessEnv = process.env,
   now = new Date(),
@@ -172,7 +182,7 @@ export async function readCloudBillingSummary(
     const dailyResult = await runQuery(projectId, token, fetcher, dailyGeminiCostQuery(projectId, datasetId, tableId));
     const dailyGeminiCostUsd: CloudBillingDailyCost[] = dailyResult?.jobComplete === false ? [] : (dailyResult?.rows ?? []).map((dailyRow) => ({ day: field(dailyRow, 0) ?? "", costUsd: numberField(dailyRow, 1) ?? 0 })).filter((entry) => entry.day);
 
-    const latestUsageAt = field(row, 1);
+    const latestUsageAt = timestampField(row, 1);
     const latestUsageMs = latestUsageAt ? Date.parse(latestUsageAt) : Number.NaN;
     const state = !Number.isFinite(latestUsageMs) || now.getTime() - latestUsageMs > STALE_AFTER_MS ? "stale" : "available";
     return cacheResult({

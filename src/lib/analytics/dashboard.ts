@@ -107,6 +107,7 @@ export type GeminiHeadline = {
   unbrandedDetectionCount: number;
   breakerTransitions: BreakerTransitionStats[];
 };
+export type GeminiHealthDailyTokens = { day: string; totalTokens: number };
 export type GeminiHealth = {
   days: GeminiHealthDay[];
   dailyOperations: GeminiHealthDayOperation[];
@@ -114,6 +115,10 @@ export type GeminiHealth = {
   dailyRoutes: ScannerRouteDay[];
   dailyScoreYield: ScoreYieldDay[];
   dailyConfidenceStats: ConfidenceStatsDay[];
+  // 28 days, oldest first -- wider than the other daily* arrays above
+  // (fixed at 7 days) specifically to back the Cloud Billing chart's
+  // hover tooltip, which can show up to 28 days.
+  dailyTokens: GeminiHealthDailyTokens[];
   headline: { "24h": GeminiHeadline; "7d": GeminiHeadline };
 };
 /** Aggregate protection decisions only; no client identity or request contents. */
@@ -410,7 +415,11 @@ export async function readDashboardOverview(
   `, [startsAt.toISOString(), endsAt.toISOString(), new Date(endsAt.getTime() - 7 * 86_400_000).toISOString(), new Date(endsAt.getTime() - 30 * 86_400_000).toISOString()]);
 
   const sevenDayStartsAt = new Date(endsAt.getTime() - 7 * 86_400_000);
-  const [geminiRequestDays, geminiUsageDays, geminiDailyOperations, scannerDailyExperience, scannerDailyRoutes, dailyScoreYield, dailyConfidenceStats, guardRejections, headline24h, headline7d] = await Promise.all([
+  // Wider than sevenDayStartsAt specifically to back the Cloud Billing daily
+  // spend chart's hover tooltip, which can show up to 28 days -- token
+  // counts for those older days aren't otherwise fetched anywhere.
+  const twentyEightDayStartsAt = new Date(endsAt.getTime() - 28 * 86_400_000);
+  const [geminiRequestDays, geminiUsageDays, geminiUsageDays28, geminiDailyOperations, scannerDailyExperience, scannerDailyRoutes, dailyScoreYield, dailyConfidenceStats, guardRejections, headline24h, headline7d] = await Promise.all([
     db.query<GeminiRequestDayRow>(`
       SELECT date_trunc('day', occurred_at) AS day, COUNT(*)::bigint AS requests,
         COUNT(*) FILTER (WHERE COALESCE(properties->>'outcome', 'success') <> 'success')::bigint AS errors,
@@ -424,6 +433,11 @@ export async function readDashboardOverview(
         SUM(NULLIF(properties->>'estimatedCostUsd', '')::numeric) AS estimated_cost_usd
       FROM analytics_events WHERE event_name = 'vision_usage' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1 ORDER BY 1 ASC
     `, [sevenDayStartsAt.toISOString(), endsAt.toISOString()]),
+    db.query<GeminiUsageDayRow>(`
+      SELECT date_trunc('day', occurred_at) AS day, COALESCE(SUM(NULLIF(properties->>'totalTokenCount', '')::numeric), 0) AS total_tokens,
+        SUM(NULLIF(properties->>'estimatedCostUsd', '')::numeric) AS estimated_cost_usd
+      FROM analytics_events WHERE event_name = 'vision_usage' AND occurred_at >= $1::timestamptz AND occurred_at < $2::timestamptz GROUP BY 1 ORDER BY 1 ASC
+    `, [twentyEightDayStartsAt.toISOString(), endsAt.toISOString()]),
     db.query<GeminiDayOperationRow>(`
       SELECT date_trunc('day', occurred_at) AS day, COALESCE(NULLIF(properties->>'operation', ''), 'unknown') AS operation,
         COUNT(*)::bigint AS requests,
@@ -526,6 +540,7 @@ export async function readDashboardOverview(
       dailyRoutes: scannerDailyRoutes.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), route: row.route ?? "unknown", requests: numeric(row.requests), errors: numeric(row.errors), p95DurationMs: optional(row.p95_duration_ms), p95VisionMs: optional(row.p95_vision_ms), p95CatalogMs: optional(row.p95_catalog_ms) })),
       dailyScoreYield: dailyScoreYield.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), confirmed: numeric(row.confirmed), estimate: numeric(row.estimate), unknown: numeric(row.unknown), total: numeric(row.total) })),
       dailyConfidenceStats: dailyConfidenceStats.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), defaultConfidenceCount: numeric(row.default_confidence_count), total: numeric(row.total) })),
+      dailyTokens: geminiUsageDays28.rows.map((row) => ({ day: new Date(row.day).toISOString().slice(0, 10), totalTokens: numeric(row.total_tokens) })),
       headline: { "24h": headline24h, "7d": headline7d },
     },
   };

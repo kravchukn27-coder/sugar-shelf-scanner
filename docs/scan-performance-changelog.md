@@ -537,3 +537,17 @@ no extra request.
 skip), `npm run build` all pass. New `cloud-billing.test.ts` coverage for
 the daily-breakdown query and the manually-configured cap. Not yet
 verified live against production BigQuery data.
+
+### 2026-09-04 — pending commit — Billing panel: BigQuery timestamp bug, chart overlap, sticky-header redesign, token tooltips
+
+**BigQuery TIMESTAMP parsing bug (real, pre-dated this week's work):** production showed "Latest reported usage: Invalid Date" on the Cloud Billing panel, and the "stale" warning fired unconditionally. Root cause: `cloud-billing.ts`'s `field()` helper returns BigQuery TIMESTAMP columns as a raw string, but the REST API actually encodes them as Unix epoch seconds — often in scientific notation, e.g. `"1.7885052E9"` — not an ISO string. `new Date("1.7885052E9")` / `Date.parse(...)` both silently return `Invalid Date`, which also made `!Number.isFinite(latestUsageMs)` always true, so the "stale" branch fired regardless of actual freshness. **Fix:** new `timestampField()` helper multiplies by 1000 and converts to a real ISO string; test fixtures updated to use epoch-seconds values matching real API responses instead of the ISO strings they'd been (incorrectly) written with.
+
+**Chart/metrics overlap:** `.panelToggleRow`'s `-4px` top margin (tuned for its other usages, which sit directly under a heading) ate into `.billingMetrics`'s card grid when there was no `billingCap` block between them (i.e. no `GEMINI_MONTHLY_SPEND_CAP_USD` configured) — the "Since September 1" caption visually collided with the "Daily Gemini spend" label right below it. Fixed by giving `.billingMetrics` its own `22px` bottom margin, netting a clean gap regardless of whether `billingCap` renders.
+
+**Sticky header redesign:** the sticky bar from the prior entry read as a hard-edged rectangle floating awkwardly inset on the page's gradient background — because it inherited `.page`'s `28px` horizontal padding, its opaque backdrop stopped short of the viewport edges with visible gradient strips on both sides, unlike the old non-sticky header which just sat directly on the gradient with no visible box at all. Fixed by making `.stickyBar` break out to full viewport width (`width:100vw` + negative margins via `calc(50% - 50vw)`) with padding computed to keep its inner content aligned to the same column as the rest of the page, paired with a lighter, more translucent blurred background (`rgba(...,.72)` + `blur(16px) saturate(160%)`, no hard border) so it reads as a floating glass bar rather than a boxed card.
+
+**Tooltip now includes tokens, not just cost:** the daily spend chart's per-bar hover tooltip previously showed only date + cost. Added a new 28-day-wide Postgres query (`dashboard.ts`, `geminiUsageDays28`, exposed as `geminiHealth.dailyTokens`) reusing the app's own already-tracked per-day token counts (the same source as the "Provider tokens" card elsewhere), joined client-side by day against the BigQuery-sourced daily cost array. Real billed cost (BigQuery) and real app-reported tokens (Postgres) come from two different systems with no shared join key beyond the calendar day, so this is a client-side merge, not a database join — a day present in one array and absent in the other renders with tokens omitted from the tooltip rather than guessing.
+
+**Result:** ✅ `npm run typecheck`, `npm test` (298 tests, 1 pre-existing
+skip), `npm run build` all pass. Not yet verified live in the browser
+against production data (deploy pending).
