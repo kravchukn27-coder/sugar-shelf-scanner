@@ -411,3 +411,50 @@ default) on the model's own identifications. Whether `estimate: 0` rates
 actually improve for regional/unfamiliar products under the restored
 contract needs a fresh log pull once more real traffic accumulates — not
 yet measured post-fix.
+
+### 2026-09-04 — pending commit — Gemini Health dashboard: missing `gemini-3.5-flash-lite` pricing, and headline cards not following the 24h/7d toggle
+
+**Bug 1 — Estimated cost showing "—" almost always:** `estimateGeminiCost()`
+(`src/lib/analytics/gemini-cost.ts`) had a single-model audited pricing
+table hardcoded to `gemini-3.6-flash` only. When `gemini-3.5-flash-lite`
+was promoted to primary on 2026-09-02 (see above), its pricing was never
+added — so essentially all current traffic returned `estimatedCostUsd:
+null`. The dashboard's "Estimated cost" card then compounded this: it
+summed cost across a trailing 7-day window and *any single day with a
+null cost collapsed the whole running total to null*, so the card read
+"Unpriced" the moment one day in the window had no priced traffic.
+**Fix:** added `gemini-3.5-flash-lite` to the pricing table ($0.30/$2.50
+per 1M input/output tokens, confirmed against
+[ai.google.dev/gemini-api/docs/pricing](https://ai.google.dev/gemini-api/docs/pricing)
+on 2026-09-04) and changed the dashboard's cost aggregation
+(`analytics-dashboard.tsx`) to sum only the models that have a price,
+surfacing "priced models only" in the card's caption when some models in
+the window are still unpriced, instead of losing the whole total.
+
+**Bug 2 — Requests / Error rate / Provider tokens cards ignoring the 24h/7d
+toggle (global and per-panel):** these three cards were sourced from
+`geminiHealth.days`, a fixed trailing-7-day per-day timeline that predates
+both the global toggle (this session, earlier) and the per-panel toggle
+(this session, immediately before this fix) — neither ever touched it.
+Only "Score yield" in that same row read from the toggle-aware
+`geminiHealth.headline[range]` data, which is why it was the only card in
+the row that visibly changed. **Fix:** re-sourced all four cards
+(Requests, Error rate, Provider tokens, Estimated cost) from
+`metricsHeadline.models` (the same per-model breakdown the Models table
+below already uses), so the whole row now follows the "metrics" panel's
+effective range like the rest of the toggle-aware panels.
+
+**Also removed:** the "Historical Railway logs · Baseline and incident
+comparison" panel and its backing `geminiHealth.historicalComparisons`
+field/query. It held four hand-transcribed archived aggregates from the
+2026-08-26–30 Railway log investigation, kept around while the persisted
+`analytics_events` table was too new to have its own real history. Now
+that real data spans multiple days, the archived numbers are no longer
+needed as a stand-in — removed the type, the constant, the panel's JSX and
+CSS, and the corresponding test assertion. `ARCHIVED_OPERATION_BASELINE`
+in `analytics-dashboard.tsx` (the Day-to-day comparison table's per-day
+fallback baseline) is a separate, still-used mechanism and was left alone.
+
+**Result:** ✅ `npm run typecheck`, `npm test` (296 tests, 1 pre-existing
+skip), and `npm run build` all pass. Not yet verified live in the browser
+against production data.
