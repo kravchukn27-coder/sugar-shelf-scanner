@@ -309,7 +309,7 @@ export async function readDashboardOverview(
   db: SqlQueryExecutor,
   now: Date = new Date(),
   windowHours: number | null = 24,
-  cloudBilling: CloudBillingSummary = { state: "not_configured", currency: null, actualGoogleLast24Hours: null, actualGoogleLast30Days: null, geminiLast24Hours: null, geminiLast30Days: null, latestUsageAt: null },
+  cloudBilling: CloudBillingSummary = { state: "not_configured", currency: null, actualGoogleLast24Hours: null, actualGoogleLast30Days: null, geminiLast24Hours: null, geminiLast7Days: null, geminiLast30Days: null, geminiMonthToDate: null, latestUsageAt: null, dailyGeminiCostUsd: [], monthlySpendCapUsd: null },
 ): Promise<DashboardOverview> {
   const endsAt = now;
   const allTime = windowHours === null;
