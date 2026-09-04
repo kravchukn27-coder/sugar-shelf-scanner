@@ -458,3 +458,40 @@ fallback baseline) is a separate, still-used mechanism and was left alone.
 **Result:** ✅ `npm run typecheck`, `npm test` (296 tests, 1 pre-existing
 skip), and `npm run build` all pass. Not yet verified live in the browser
 against production data.
+
+### 2026-09-04 — pending commit — `estimateGeminiCost` silently dropped preflight from every cost total
+
+**Root cause, confirmed with real production logs:** the 2026-09-04 pricing
+fix above (adding `gemini-3.5-flash-lite`) didn't actually restore accurate
+cost totals in production. A temporary diagnostic log
+(`gemini_cost_estimate_debug`, added and removed same day) caught the exact
+difference between a priced and an unpriced call:
+- **Preflight** (`thinkingConfigFor(model, "minimal")`) usageMetadata:
+  `{promptTokenCount: 791, candidatesTokenCount: 44, totalTokenCount: 835}`
+  — **no `thoughtsTokenCount` field at all.**
+- **Analyze** (`thinkingConfigFor(model, "medium")`) usageMetadata:
+  `{promptTokenCount: 1272, candidatesTokenCount: 5, thoughtsTokenCount:
+  149, totalTokenCount: 1426}` — priced fine, `estimatedCostUsd:
+  0.0007666`.
+
+`estimateGeminiCost` required all three directional counters
+(`promptTokenCount`, `candidatesTokenCount`, `thoughtsTokenCount`) to be
+present, treating a missing one as "cannot price." At `minimal` thinking
+level Gemini omits `thoughtsTokenCount` from the response entirely instead
+of reporting `0` — so **every preflight call** (the majority of total
+volume) silently priced out to `null`, leaving only analyze's small
+per-call output cost in any total. That's why "Estimated cost" read $0.00–
+$0.01 in production despite real spend being visibly higher on the Google
+side.
+
+**Fix:** `thoughtsTokenCount` is no longer required — a missing value now
+defaults to `0` thinking tokens (a legitimate outcome of `minimal`
+thinking, not an error). Only `promptTokenCount` and `candidatesTokenCount`
+missing still returns `null`, since those two are the actual core
+input/output counters a response should always carry. Added a regression
+test (`gemini-cost.test.ts`) using the exact preflight payload captured
+above.
+
+**Result:** ✅ `npm run typecheck`, `npm test` (297 tests, 1 pre-existing
+skip), `npm run build` all pass. Temporary diagnostic log removed in the
+same change.
