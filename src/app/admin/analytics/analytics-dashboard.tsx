@@ -15,7 +15,9 @@ type OverviewResponse = DashboardOverview & { breaker?: Record<string, BreakerOp
 
 const REFRESH_MS = 30_000;
 type OverviewRange = "24h" | "3d" | "7d" | "all";
-const RANGE_LABELS: Record<OverviewRange, string> = { "24h": "Last 24 hours", "3d": "Last 3 days", "7d": "Last 7 days", all: "All time" };
+// "24h" is fixed to the calendar day (UTC midnight to now), not a rolling
+// 24-hour lookback -- see startOfUtcDay's doc comment in dashboard.ts.
+const RANGE_LABELS: Record<OverviewRange, string> = { "24h": "Today", "3d": "Last 3 days", "7d": "Last 7 days", all: "All time" };
 // The top metrics row mixed product/business counters with Gemini
 // reliability counters in one undifferentiated grid — split by this set so a
 // quick scan doesn't have to parse "is this a business or a technical
@@ -35,11 +37,15 @@ function formatValue(value: number | null, unit: "count" | "usd") {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
 }
 
-function formatDelta(current: number | null, previous: number | null) {
+// "24h" compares against yesterday (the prior calendar day, now that "24h"
+// is fixed to today-so-far rather than a rolling lookback); 3d/7d stay
+// rolling windows, so "prior 3d"/"prior 7d" is still the accurate label.
+function formatDelta(current: number | null, previous: number | null, range: OverviewRange) {
   if (current === null || previous === null) return "No priced usage";
   if (previous === 0) return current === 0 ? "No change" : "New";
   const percentage = ((current - previous) / previous) * 100;
-  return `${percentage > 0 ? "+" : ""}${percentage.toFixed(0)}% vs prior 24h`;
+  const comparisonLabel = range === "24h" ? "vs yesterday" : `vs prior ${range}`;
+  return `${percentage > 0 ? "+" : ""}${percentage.toFixed(0)}% ${comparisonLabel}`;
 }
 
 function deltaTone(current: number | null, previous: number | null, metricKey: string) {
@@ -601,7 +607,7 @@ export default function AnalyticsDashboard() {
 
       {view === "overview" && <div className={styles.rangeTabs} aria-label="Product pulse date range">{(Object.keys(RANGE_LABELS) as OverviewRange[]).map((item) => <button key={item} className={range === item ? styles.rangeActive : undefined} onClick={() => setRange(item)}>{item === "all" ? "All time" : item}</button>)}</div>}
 
-      {view === "gemini" && <div className={styles.healthHeading}><div><p className={styles.eyebrow}>Gemini Health</p><h2>{geminiRange === "24h" ? "Last-24-hour" : "Seven-day"} speed and reliability</h2><p>Separate Gemini time from server work and the user’s actual scanner experience.</p></div><div className={styles.rangeTabs} aria-label="Gemini Health date range"><button className={geminiRange === "24h" ? styles.rangeActive : undefined} onClick={() => setGlobalGeminiRange("24h")}>24h</button><button className={geminiRange === "7d" ? styles.rangeActive : undefined} onClick={() => setGlobalGeminiRange("7d")}>7d</button></div><span>{coverageLabel(geminiDaysCovered)}</span></div>}
+      {view === "gemini" && <div className={styles.healthHeading}><div><p className={styles.eyebrow}>Gemini Health</p><h2>{geminiRange === "24h" ? "Today's" : "Seven-day"} speed and reliability</h2><p>Separate Gemini time from server work and the user’s actual scanner experience.</p></div><div className={styles.rangeTabs} aria-label="Gemini Health date range"><button className={geminiRange === "24h" ? styles.rangeActive : undefined} onClick={() => setGlobalGeminiRange("24h")}>24h</button><button className={geminiRange === "7d" ? styles.rangeActive : undefined} onClick={() => setGlobalGeminiRange("7d")}>7d</button></div><span>{coverageLabel(geminiDaysCovered)}</span></div>}
     </div>
 
     {status === "unavailable" && <p className={styles.inlineError} role="alert">The last refresh failed; values below are from the previous successful update.</p>}
@@ -611,7 +617,7 @@ export default function AnalyticsDashboard() {
     <section aria-label="Product funnel metrics" className={styles.metrics}>
       {overview.metrics.filter((metric) => !GEMINI_METRIC_KEYS.has(metric.key)).map((metric) => <article className={styles.metricCard} key={metric.key}>
         <p>{metric.label}</p><strong>{formatValue(metric.value, metric.unit)}</strong>
-        <span className={overview.window.allTime ? styles.neutral : deltaTone(metric.value, metric.previousValue, metric.key)}>{overview.window.allTime ? "All recorded data" : formatDelta(metric.value, metric.previousValue)}</span>
+        <span className={overview.window.allTime ? styles.neutral : deltaTone(metric.value, metric.previousValue, metric.key)}>{overview.window.allTime ? "All recorded data" : formatDelta(metric.value, metric.previousValue, range)}</span>
       </article>)}
     </section>
     <p className={styles.note}>“Scans started” and “Results shown” mark the start and the completion of the same flow, not two counts of the same thing. A scan that is abandoned or errors out before a result renders lowers “Results shown” without lowering “Scans started” — the two are not meant to always match.</p>
@@ -619,7 +625,7 @@ export default function AnalyticsDashboard() {
     <section aria-label="Gemini reliability metrics" className={styles.metrics}>
       {overview.metrics.filter((metric) => GEMINI_METRIC_KEYS.has(metric.key)).map((metric) => <article className={styles.metricCard} key={metric.key}>
         <p>{metric.label}</p><strong>{formatValue(metric.value, metric.unit)}</strong>
-        <span className={overview.window.allTime ? styles.neutral : deltaTone(metric.value, metric.previousValue, metric.key)}>{overview.window.allTime ? "All recorded data" : formatDelta(metric.value, metric.previousValue)}</span>
+        <span className={overview.window.allTime ? styles.neutral : deltaTone(metric.value, metric.previousValue, metric.key)}>{overview.window.allTime ? "All recorded data" : formatDelta(metric.value, metric.previousValue, range)}</span>
       </article>)}
     </section>
 
@@ -707,7 +713,7 @@ export default function AnalyticsDashboard() {
           (confirmed live during the 09-01 A/B — gemini-3.6-flash was ~0%
           success on preflight the same hour it was 100% on analyze), and an
           averaged single row hid exactly that. */}
-      <details className={styles.widePanel} open={(modelsHeadline?.models.length ?? 0) > 1}><summary className={styles.panelHeading}><div><p className={styles.eyebrow}>Models</p><h2>{effectiveRange("models") === "24h" ? "Last-24-hour" : "Seven-day"} breakdown, by operation</h2></div><span>{new Set(modelsHeadline?.models.map((model) => model.model)).size} model(s) seen</span></summary><div className={styles.panelToggleRow}><span className={styles.panelToggleLabel}>By model</span><PanelRangeToggle value={effectiveRange("models")} onChange={(value) => setPanelRange("models", value)} /></div>{!modelsHeadline?.models.length ? <p className={styles.empty}>No Gemini provider events in this window yet.</p> : <div className={`${styles.comparisonScroll} ${styles.modelsScroll}`}><div className={styles.comparisonTable}><div className={styles.comparisonHeader}><span>Model</span><span>Operation</span><span>Requests</span><span>Success</span><span>Timeout</span><span>p50</span><span>p95</span><span>Tokens · cost</span></div>{modelsHeadline.models.map((model) => <div key={`${model.model}-${model.operation}`}><strong>{model.model}</strong><span>{formatEventName(model.operation)}</span><span>{model.requests}</span><span>{formatPercent(model.successRate)}</span><span>{model.requests ? formatPercent(model.timeoutErrors / model.requests) : "—"}</span><span>{formatMs(model.p50LatencyMs)}</span><span>{formatMs(model.p95LatencyMs)}</span><span>{formatValue(model.totalTokens, "count")} · {formatBilling(model.estimatedCostUsd, "USD")}</span></div>)}</div></div>}<p className={styles.panelNote}>Broken down by model and operation together, not per model alone — the same model can perform very differently on the cheap preflight check than on the full analyze call.</p></details>
+      <details className={styles.widePanel} open={(modelsHeadline?.models.length ?? 0) > 1}><summary className={styles.panelHeading}><div><p className={styles.eyebrow}>Models</p><h2>{effectiveRange("models") === "24h" ? "Today's" : "Seven-day"} breakdown, by operation</h2></div><span>{new Set(modelsHeadline?.models.map((model) => model.model)).size} model(s) seen</span></summary><div className={styles.panelToggleRow}><span className={styles.panelToggleLabel}>By model</span><PanelRangeToggle value={effectiveRange("models")} onChange={(value) => setPanelRange("models", value)} /></div>{!modelsHeadline?.models.length ? <p className={styles.empty}>No Gemini provider events in this window yet.</p> : <div className={`${styles.comparisonScroll} ${styles.modelsScroll}`}><div className={styles.comparisonTable}><div className={styles.comparisonHeader}><span>Model</span><span>Operation</span><span>Requests</span><span>Success</span><span>Timeout</span><span>p50</span><span>p95</span><span>Tokens · cost</span></div>{modelsHeadline.models.map((model) => <div key={`${model.model}-${model.operation}`}><strong>{model.model}</strong><span>{formatEventName(model.operation)}</span><span>{model.requests}</span><span>{formatPercent(model.successRate)}</span><span>{model.requests ? formatPercent(model.timeoutErrors / model.requests) : "—"}</span><span>{formatMs(model.p50LatencyMs)}</span><span>{formatMs(model.p95LatencyMs)}</span><span>{formatValue(model.totalTokens, "count")} · {formatBilling(model.estimatedCostUsd, "USD")}</span></div>)}</div></div>}<p className={styles.panelNote}>Broken down by model and operation together, not per model alone — the same model can perform very differently on the cheap preflight check than on the full analyze call.</p></details>
       <p className={styles.note}>The panel reads aggregate telemetry only. Provider usage metadata can be absent for failed or cancelled calls; Cloud Billing remains the reconciliation source for actual spend.</p>
     </section>}
   </main>;
