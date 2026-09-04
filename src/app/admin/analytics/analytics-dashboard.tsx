@@ -360,17 +360,70 @@ function daysElapsedInMonthUtc(date: Date): number {
   return date.getUTCDate();
 }
 
-/** Simple flat-bar spend chart -- no charting library, matching the rest of this dashboard's hand-rolled visuals (see .qualityList's bars). */
+// Rounds a value up to a "nice" 1/2/5 * 10^n step, so the Y axis max reads
+// as a clean number ($0.50, $2, $5 ...) instead of an arbitrary max cost.
+function niceAxisMax(value: number) {
+  if (value <= 0) return 1;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(value)));
+  const residual = value / magnitude;
+  const niceResidual = residual <= 1 ? 1 : residual <= 2 ? 2 : residual <= 5 ? 5 : 10;
+  return niceResidual * magnitude;
+}
+
+// Path for a bar with rounded top corners only (flat bottom, sitting flush on the axis).
+function topRoundedBarPath(x: number, y: number, w: number, h: number, r: number) {
+  if (h <= 0) return "";
+  const radius = Math.max(0, Math.min(r, w / 2, h));
+  return `M${x},${y + h} V${y + radius} Q${x},${y} ${x + radius},${y} H${x + w - radius} Q${x + w},${y} ${x + w},${y + radius} V${y + h} Z`;
+}
+
+/** Inline SVG spend chart -- no charting library, matching the rest of this dashboard's hand-rolled visuals (see .qualityList's bars). */
 function DailySpendChart({ days, currency }: { days: { day: string; costUsd: number }[]; currency: string | null }) {
   if (days.length === 0) return <p className={styles.empty}>No daily Gemini cost rows in this window yet.</p>;
-  const max = Math.max(...days.map((entry) => entry.costUsd), 0.01);
+
+  const width = 700;
+  const height = 150;
+  const marginLeft = 46;
+  const marginRight = 6;
+  const marginTop = 10;
+  const marginBottom = 22;
+  const chartWidth = width - marginLeft - marginRight;
+  const chartHeight = height - marginTop - marginBottom;
+
+  const rawMax = Math.max(...days.map((entry) => entry.costUsd), 0);
+  const axisMax = niceAxisMax(Math.max(rawMax, 0.01));
+  const yFor = (value: number) => marginTop + chartHeight - (value / axisMax) * chartHeight;
+  const gridValues = [0, axisMax / 2, axisMax];
+
+  // 7-day view labels every bar; wider windows space labels out so they don't overlap.
+  const labelStep = days.length <= 7 ? 1 : Math.ceil(days.length / 7);
+
+  const slotWidth = chartWidth / days.length;
+  const barWidth = Math.max(2, Math.min(slotWidth * 0.55, 40));
+
   return <div className={styles.dailySpendChart}>
-    {days.map((entry) => {
-      const label = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(new Date(`${entry.day}T00:00:00Z`));
-      return <div key={entry.day} className={styles.dailySpendBar} title={`${label}: ${formatBilling(entry.costUsd, currency)}`}>
-        <b style={{ height: `${Math.max(2, (entry.costUsd / max) * 100)}%` }} />
-      </div>;
-    })}
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height="150" role="img" aria-label="Daily Gemini spend">
+      {gridValues.map((value, i) => {
+        const y = yFor(value);
+        return <g key={i}>
+          <line className={styles.dailySpendGridLine} x1={marginLeft} x2={width - marginRight} y1={y} y2={y} />
+          <text className={styles.dailySpendAxisLabel} x={marginLeft - 6} y={y} textAnchor="end" dominantBaseline={i === 0 ? "text-after-edge" : "middle"}>{formatMicroBilling(value, currency)}</text>
+        </g>;
+      })}
+      {days.map((entry, i) => {
+        const label = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(new Date(`${entry.day}T00:00:00Z`));
+        const x = marginLeft + i * slotWidth + (slotWidth - barWidth) / 2;
+        const barHeight = (entry.costUsd / axisMax) * chartHeight;
+        const y = yFor(entry.costUsd);
+        const showLabel = i % labelStep === 0 || i === days.length - 1;
+        return <g key={entry.day}>
+          <path className={styles.dailySpendBar} d={topRoundedBarPath(x, y, barWidth, Math.max(barHeight, entry.costUsd > 0 ? 2 : 0), 2)}>
+            <title>{`${label}: ${formatMicroBilling(entry.costUsd, currency)}`}</title>
+          </path>
+          {showLabel && <text className={styles.dailySpendAxisLabel} x={x + barWidth / 2} y={height - 4} textAnchor="middle">{label}</text>}
+        </g>;
+      })}
+    </svg>
   </div>;
 }
 
@@ -416,7 +469,7 @@ function CloudBillingPanel({ billing, generatedAt, sevenDayRequestTotal }: { bil
     <div className={styles.billingMetrics}>
       <article className={styles.metricCard}><p>Month to date</p><strong>{formatBilling(billing.geminiMonthToDate, billing.currency)}</strong><span className={styles.neutral}>Since {monthLabel} 1</span></article>
       <article className={styles.metricCard}><p>Yesterday</p><strong>{formatBilling(yesterday, billing.currency)}</strong><span className={yesterday === null || dayBefore === null ? styles.neutral : relativeDeltaTone(yesterday, dayBefore)}>{yesterday === null ? "No cost rows yet" : dayBefore === null ? "No prior day yet" : `${formatRelativeDelta(yesterday, dayBefore) ?? "—"} vs day before`}</span></article>
-      <article className={styles.metricCard}><p>Avg per request</p><strong>{formatMicroBilling(avgPerRequest, billing.currency)}</strong><span className={styles.neutral}>{avgPerRequest === null ? "No requests in this window" : `${formatBilling(avgPerRequest * 100, billing.currency)} per 100 calls`}</span></article>
+      <article className={styles.metricCard}><p>Avg per request · last 7 days</p><strong>{formatMicroBilling(avgPerRequest, billing.currency)}</strong><span className={styles.neutral}>{avgPerRequest === null ? "No requests in this window" : `${formatBilling(avgPerRequest * 100, billing.currency)} per 100 calls`}</span></article>
       <article className={styles.metricCard}><p>Projected month end</p><strong>{formatBilling(projectedMonthEnd, billing.currency)}</strong><span className={styles.neutral}>At current daily pace</span></article>
     </div>
     {billing.monthlySpendCapUsd !== null && <div className={styles.billingCap}>
@@ -537,17 +590,22 @@ export default function AnalyticsDashboard() {
   }
 
   return <main className={styles.page}>
-    <header className={styles.header}>
-      <div><p className={styles.eyebrow}>Sugar Camera · Internal</p><h1>Product pulse</h1><p className={styles.subhead}>{RANGE_LABELS[range]} · refreshes every 30 seconds</p></div>
-      <div className={styles.freshness}><span className={styles.liveDot} /> Updated {new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(overview.generatedAt))}<button onClick={() => void refresh(secret, range)} disabled={status === "loading"}>{status === "loading" ? "Refreshing…" : "Refresh"}</button></div>
-    </header>
+    <div className={styles.stickyBar}>
+      <header className={styles.header}>
+        <div><p className={styles.eyebrow}>Sugar Camera · Internal</p>{view === "overview" && <><h1>Product pulse</h1><p className={styles.subhead}>{RANGE_LABELS[range]} · refreshes every 30 seconds</p></>}</div>
+        <div className={styles.freshness}><span className={styles.liveDot} /> Updated {new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(overview.generatedAt))}<button onClick={() => void refresh(secret, range)} disabled={status === "loading"}>{status === "loading" ? "Refreshing…" : "Refresh"}</button></div>
+      </header>
+
+      <nav className={styles.tabs} aria-label="Analytics views"><button className={view === "overview" ? styles.tabActive : undefined} onClick={() => setView("overview")}>Product pulse</button><button className={view === "gemini" ? styles.tabActive : undefined} onClick={() => setView("gemini")}>Gemini Health</button></nav>
+
+      {view === "overview" && <div className={styles.rangeTabs} aria-label="Product pulse date range">{(Object.keys(RANGE_LABELS) as OverviewRange[]).map((item) => <button key={item} className={range === item ? styles.rangeActive : undefined} onClick={() => setRange(item)}>{item === "all" ? "All time" : item}</button>)}</div>}
+
+      {view === "gemini" && <div className={styles.healthHeading}><div><p className={styles.eyebrow}>Gemini Health</p><h2>{geminiRange === "24h" ? "Last-24-hour" : "Seven-day"} speed and reliability</h2><p>Separate Gemini time from server work and the user’s actual scanner experience.</p></div><div className={styles.rangeTabs} aria-label="Gemini Health date range"><button className={geminiRange === "24h" ? styles.rangeActive : undefined} onClick={() => setGlobalGeminiRange("24h")}>24h</button><button className={geminiRange === "7d" ? styles.rangeActive : undefined} onClick={() => setGlobalGeminiRange("7d")}>7d</button></div><span>{coverageLabel(geminiDaysCovered)}</span></div>}
+    </div>
 
     {status === "unavailable" && <p className={styles.inlineError} role="alert">The last refresh failed; values below are from the previous successful update.</p>}
 
-    <nav className={styles.tabs} aria-label="Analytics views"><button className={view === "overview" ? styles.tabActive : undefined} onClick={() => setView("overview")}>Product pulse</button><button className={view === "gemini" ? styles.tabActive : undefined} onClick={() => setView("gemini")}>Gemini Health</button></nav>
-
     {view === "overview" && <>
-    <div className={styles.rangeTabs} aria-label="Product pulse date range">{(Object.keys(RANGE_LABELS) as OverviewRange[]).map((item) => <button key={item} className={range === item ? styles.rangeActive : undefined} onClick={() => setRange(item)}>{item === "all" ? "All time" : item}</button>)}</div>
     <p className={styles.metricsGroupLabel}>Product funnel</p>
     <section aria-label="Product funnel metrics" className={styles.metrics}>
       {overview.metrics.filter((metric) => !GEMINI_METRIC_KEYS.has(metric.key)).map((metric) => <article className={styles.metricCard} key={metric.key}>
@@ -555,6 +613,7 @@ export default function AnalyticsDashboard() {
         <span className={overview.window.allTime ? styles.neutral : deltaTone(metric.value, metric.previousValue, metric.key)}>{overview.window.allTime ? "All recorded data" : formatDelta(metric.value, metric.previousValue)}</span>
       </article>)}
     </section>
+    <p className={styles.note}>“Scans started” and “Results shown” mark the start and the completion of the same flow, not two counts of the same thing. A scan that is abandoned or errors out before a result renders lowers “Results shown” without lowering “Scans started” — the two are not meant to always match.</p>
     <p className={styles.metricsGroupLabel}>Gemini reliability</p>
     <section aria-label="Gemini reliability metrics" className={styles.metrics}>
       {overview.metrics.filter((metric) => GEMINI_METRIC_KEYS.has(metric.key)).map((metric) => <article className={styles.metricCard} key={metric.key}>
@@ -598,6 +657,7 @@ export default function AnalyticsDashboard() {
       <article className={styles.panel}>
         <div className={styles.panelHeading}><div><p className={styles.eyebrow}>Gemini health</p><h2>Availability</h2></div><span>24h</span></div>
         <div className={styles.operationGrid}><div><span>Requests</span><strong>{overview.operations.visionRequests}</strong></div><div><span>Error rate</span><strong>{formatPercent(overview.operations.visionErrorRate)}</strong></div><div><span>p95 latency</span><strong>{overview.operations.visionP95Ms === null ? "—" : `${Math.round(overview.operations.visionP95Ms)} ms`}</strong></div></div>
+        <p className={styles.panelNote}>Requests counts individual Gemini API calls (the quick preflight check plus the full analyze call), not user scans — one scan can trigger several of these, so this number naturally runs higher than "Scans started" above.</p>
         <button className={styles.panelLink} onClick={() => setView("gemini")}>Open 7-day Gemini Health →</button>
       </article>
     </section>
@@ -606,7 +666,6 @@ export default function AnalyticsDashboard() {
     </>}
 
     {view === "gemini" && <section className={styles.geminiHealth} aria-label="Gemini Health">
-      <div className={styles.healthHeading}><div><p className={styles.eyebrow}>Gemini Health</p><h2>{geminiRange === "24h" ? "Last-24-hour" : "Seven-day"} speed and reliability</h2><p>Separate Gemini time from server work and the user’s actual scanner experience.</p></div><div className={styles.rangeTabs} aria-label="Gemini Health date range"><button className={geminiRange === "24h" ? styles.rangeActive : undefined} onClick={() => setGlobalGeminiRange("24h")}>24h</button><button className={geminiRange === "7d" ? styles.rangeActive : undefined} onClick={() => setGlobalGeminiRange("7d")}>7d</button></div><span>{coverageLabel(geminiDaysCovered)}</span></div>
       <div className={styles.panelToggleRow}><span className={styles.panelToggleLabel}>Breaker &amp; quality signals</span><PanelRangeToggle value={effectiveRange("breakerRow")} onChange={(value) => setPanelRange("breakerRow", value)} /></div>
       <div className={styles.breakerRow}>{breakerOperations.map(({ operation, status, transitions }) => {
         // A flapping breaker can currently read "closed" and still be worth
@@ -617,8 +676,10 @@ export default function AnalyticsDashboard() {
         if (status.state === "open") return <span key={operation} className={styles.breakerBadgeOpen}>{formatOperationLabel(operation)}: failover active — {status.currentModel ?? "fallback model"}{status.sinceMs !== null ? ` since ${formatBreakerSince(status.sinceMs)}` : ""}{history}</span>;
         return <span key={operation} className={styles.breakerBadgeProbing}>{formatOperationLabel(operation)}: testing {status.currentModel ?? "primary model"} again…{history}</span>;
       })}{breakerHeadline?.hedgeStats.map((stat) => <span key={stat.operation} className={styles.breakerBadgeClosed}>{formatOperationLabel(stat.operation)} hedge: won {stat.won}/{stat.eligible} ({formatPercent(stat.eligible ? stat.won / stat.eligible : null)})</span>)}{!!breakerHeadline?.confidenceStats.total && <span className={styles.breakerBadgeClosed}>Model-confident: {formatPercent(modelConfidenceRate)} ({breakerHeadline.confidenceStats.total - breakerHeadline.confidenceStats.defaultConfidenceCount}/{breakerHeadline.confidenceStats.total})</span>}{!!breakerHeadline?.unbrandedDetectionCount && <span className={styles.breakerBadgeProbing} title="Temporary diagnostic, removed ~2026-09-16">Unbranded names logged: {breakerHeadline.unbrandedDetectionCount}</span>}</div>
+      <p className={styles.panelNote}>"Hedge won X/Y" is a duplicate speculative Gemini call that sometimes finishes first. "Model-confident" is how often Gemini reported its own confidence score rather than the app substituting a default. "Unbranded names logged" is a temporary diagnostic.</p>
       <div className={styles.panelToggleRow}><span className={styles.panelToggleLabel}>Headline metrics</span><PanelRangeToggle value={effectiveRange("metrics")} onChange={(value) => setPanelRange("metrics", value)} /></div>
       <div className={styles.metrics}><article className={styles.metricCard}><p>Requests</p><strong>{geminiTotals.requests}</strong><span className={styles.neutral}>All operations</span></article><article className={styles.metricCard}><p>Error rate</p><strong>{formatPercent(geminiTotals.requests ? geminiTotals.errors / geminiTotals.requests : null)}</strong><span className={styles.neutral}>{geminiTotals.errors} failed</span></article><article className={styles.metricCard}><p>Provider tokens</p><strong>{formatValue(geminiTotals.tokens, "count")}</strong><span className={styles.neutral}>Usage-reported only</span></article><article className={styles.metricCard}><p>Estimated cost</p><strong>{formatBilling(geminiTotals.cost, "USD")}</strong><span className={styles.neutral}>{geminiTotals.allPriced ? "Application estimate" : "Application estimate · priced models only"}</span></article><article className={styles.metricCard}><p>Score yield</p><strong>{formatPercent(scoreYieldRate)}</strong><ComparisonBadges current={scoreYieldRate} yesterday={scoreYieldComparison.yesterday} average={scoreYieldComparison.average} lowerIsBetter={false} /><span className={styles.neutral}>{(metricsHeadline?.scoreYield.confirmed ?? 0) + (metricsHeadline?.scoreYield.estimate ?? 0)} of {metricsHeadline?.scoreYield.total ?? 0} detections scored</span></article></div>
+      <p className={styles.panelNote}>Requests counts individual Gemini API calls (preflight plus analyze), not user scans — preflight is normally the majority of them.</p>
       <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Protection limits</p><h2>Where requests were blocked</h2></div><span>{RANGE_LABELS[range]}</span></div>{overview.guardRejections.length === 0 ? <p className={styles.empty}>No protection limit has blocked work in this window.</p> : <div className={styles.guardTable}><div className={styles.comparisonHeader}><span>Scope</span><span>Protection</span><span>Dimension</span><span>Blocked</span><span>Prior window</span></div>{overview.guardRejections.map((item) => <div key={`${item.scope}-${item.guard}-${item.dimension ?? "none"}`}><strong>{formatEventName(item.scope)}</strong><span>{formatGuardName(item.guard)}</span><span>{item.dimension ? formatEventName(item.dimension) : "—"}</span><strong className={styles.negative}>{item.current}</strong><span>{item.previous}</span></div>)}</div>}<p className={styles.panelNote}>Counts begin with this deployment. They are aggregate safety decisions only: no IP addresses, installation IDs, images, or request payloads are stored.</p></article>
       <article className={styles.widePanel}><div className={styles.panelHeading}><div><p className={styles.eyebrow}>Day-to-day comparison</p><h2>Gemini speed by operation</h2></div><span>UTC · newest first</span></div>{overview.geminiHealth.dailyOperations.length === 0 ? <p className={styles.empty}>No persisted Gemini events in this window yet.</p> : <div className={styles.comparisonScroll}><div className={styles.comparisonTable}><div className={styles.comparisonHeader}><span>Day</span><span>Stage</span><span>Requests</span><span>Success</span><span>Timeout</span><span>p50 Gemini</span><span>p95 Gemini</span><span>p95 queue</span></div>{overview.geminiHealth.dailyOperations.map((item) => {
                 const successRate = item.requests ? item.successes / item.requests : null;
@@ -645,7 +706,7 @@ export default function AnalyticsDashboard() {
           (confirmed live during the 09-01 A/B — gemini-3.6-flash was ~0%
           success on preflight the same hour it was 100% on analyze), and an
           averaged single row hid exactly that. */}
-      <details className={styles.widePanel} open={(modelsHeadline?.models.length ?? 0) > 1}><summary className={styles.panelHeading}><div><p className={styles.eyebrow}>Models</p><h2>{effectiveRange("models") === "24h" ? "Last-24-hour" : "Seven-day"} breakdown, by operation</h2></div><span>{new Set(modelsHeadline?.models.map((model) => model.model)).size} model(s) seen</span></summary><div className={styles.panelToggleRow}><span className={styles.panelToggleLabel}>By model</span><PanelRangeToggle value={effectiveRange("models")} onChange={(value) => setPanelRange("models", value)} /></div>{!modelsHeadline?.models.length ? <p className={styles.empty}>No Gemini provider events in this window yet.</p> : <div className={`${styles.comparisonScroll} ${styles.modelsScroll}`}><div className={styles.comparisonTable}><div className={styles.comparisonHeader}><span>Model</span><span>Operation</span><span>Requests</span><span>Success</span><span>Timeout</span><span>p50</span><span>p95</span><span>Tokens · cost</span></div>{modelsHeadline.models.map((model) => <div key={`${model.model}-${model.operation}`}><strong>{model.model}</strong><span>{formatEventName(model.operation)}</span><span>{model.requests}</span><span>{formatPercent(model.successRate)}</span><span>{model.requests ? formatPercent(model.timeoutErrors / model.requests) : "—"}</span><span>{formatMs(model.p50LatencyMs)}</span><span>{formatMs(model.p95LatencyMs)}</span><span>{formatValue(model.totalTokens, "count")} · {formatBilling(model.estimatedCostUsd, "USD")}</span></div>)}</div></div>}</details>
+      <details className={styles.widePanel} open={(modelsHeadline?.models.length ?? 0) > 1}><summary className={styles.panelHeading}><div><p className={styles.eyebrow}>Models</p><h2>{effectiveRange("models") === "24h" ? "Last-24-hour" : "Seven-day"} breakdown, by operation</h2></div><span>{new Set(modelsHeadline?.models.map((model) => model.model)).size} model(s) seen</span></summary><div className={styles.panelToggleRow}><span className={styles.panelToggleLabel}>By model</span><PanelRangeToggle value={effectiveRange("models")} onChange={(value) => setPanelRange("models", value)} /></div>{!modelsHeadline?.models.length ? <p className={styles.empty}>No Gemini provider events in this window yet.</p> : <div className={`${styles.comparisonScroll} ${styles.modelsScroll}`}><div className={styles.comparisonTable}><div className={styles.comparisonHeader}><span>Model</span><span>Operation</span><span>Requests</span><span>Success</span><span>Timeout</span><span>p50</span><span>p95</span><span>Tokens · cost</span></div>{modelsHeadline.models.map((model) => <div key={`${model.model}-${model.operation}`}><strong>{model.model}</strong><span>{formatEventName(model.operation)}</span><span>{model.requests}</span><span>{formatPercent(model.successRate)}</span><span>{model.requests ? formatPercent(model.timeoutErrors / model.requests) : "—"}</span><span>{formatMs(model.p50LatencyMs)}</span><span>{formatMs(model.p95LatencyMs)}</span><span>{formatValue(model.totalTokens, "count")} · {formatBilling(model.estimatedCostUsd, "USD")}</span></div>)}</div></div>}<p className={styles.panelNote}>Broken down by model and operation together, not per model alone — the same model can perform very differently on the cheap preflight check than on the full analyze call.</p></details>
       <p className={styles.note}>The panel reads aggregate telemetry only. Provider usage metadata can be absent for failed or cancelled calls; Cloud Billing remains the reconciliation source for actual spend.</p>
     </section>}
   </main>;
