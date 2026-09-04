@@ -36,7 +36,9 @@ test("cloud billing reads an aggregate Gemini and Google spend summary plus the 
     if (calls === 2) return new Response(JSON.stringify({ tables: [{ type: "TABLE", tableReference: { tableId: "gcp_billing_export_v1_AAA_BBB_CCC" } }] }));
     if (calls === 3) {
       summaryQueryText = JSON.parse(String(init?.body)).query;
-      return new Response(JSON.stringify({ rows: [{ f: [{ v: "USD" }, { v: "2026-08-31T10:00:00Z" }, { v: "1.25" }, { v: "15.5" }, { v: "1" }, { v: "5" }, { v: "12" }, { v: "2.41" }] }] }));
+      // BigQuery's REST API returns TIMESTAMP columns as Unix epoch seconds
+      // (1788170400 = 2026-08-31T10:00:00Z), not an ISO string.
+      return new Response(JSON.stringify({ rows: [{ f: [{ v: "USD" }, { v: "1788170400" }, { v: "1.25" }, { v: "15.5" }, { v: "1" }, { v: "5" }, { v: "12" }, { v: "2.41" }] }] }));
     }
     dailyQueryText = JSON.parse(String(init?.body)).query;
     return new Response(JSON.stringify({ rows: [{ f: [{ v: "2026-08-30" }, { v: "0.61" }] }, { f: [{ v: "2026-08-31" }, { v: "0.4" }] }] }));
@@ -49,7 +51,7 @@ test("cloud billing reads an aggregate Gemini and Google spend summary plus the 
   assert.deepEqual(result, {
     state: "available",
     currency: "USD",
-    latestUsageAt: "2026-08-31T10:00:00Z",
+    latestUsageAt: "2026-08-31T10:00:00.000Z",
     actualGoogleLast24Hours: 1.25,
     actualGoogleLast30Days: 15.5,
     geminiLast24Hours: 1,
@@ -84,7 +86,7 @@ test("cloud billing preserves but marks an export older than 36 hours stale", as
     calls += 1;
     if (calls === 1) return new Response(JSON.stringify({ access_token: "token" }));
     if (calls === 2) return new Response(JSON.stringify({ tables: [{ type: "TABLE", tableReference: { tableId: "gcp_billing_export_v1_AAA_BBB_CCC" } }] }));
-    if (calls === 3) return new Response(JSON.stringify({ rows: [{ f: [{ v: "USD" }, { v: "2026-08-29T00:00:00Z" }, { v: "0" }, { v: "4" }, { v: "0" }, { v: "1" }, { v: "4" }, { v: "1" }] }] }));
+    if (calls === 3) return new Response(JSON.stringify({ rows: [{ f: [{ v: "USD" }, { v: "1787961600" }, { v: "0" }, { v: "4" }, { v: "0" }, { v: "1" }, { v: "4" }, { v: "1" }] }] }));
     return new Response(JSON.stringify({ rows: [] }));
   }) as typeof fetch;
   const result = await readCloudBillingSummary(environment, new Date("2026-08-31T12:00:00Z"), fetcher, {});
