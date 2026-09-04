@@ -458,3 +458,82 @@ fallback baseline) is a separate, still-used mechanism and was left alone.
 **Result:** ✅ `npm run typecheck`, `npm test` (296 tests, 1 pre-existing
 skip), and `npm run build` all pass. Not yet verified live in the browser
 against production data.
+### 2026-09-04 — [`ce2e20e`](../../commit/ce2e20e) — `estimateGeminiCost` silently dropped preflight from every cost total
+
+**Root cause, confirmed with real production logs:** the 2026-09-04 pricing
+fix above (adding `gemini-3.5-flash-lite`) didn't actually restore accurate
+cost totals in production. A temporary diagnostic log
+(`gemini_cost_estimate_debug`, added and removed same day) caught the exact
+difference between a priced and an unpriced call:
+- **Preflight** (`thinkingConfigFor(model, "minimal")`) usageMetadata:
+  `{promptTokenCount: 791, candidatesTokenCount: 44, totalTokenCount: 835}`
+  — **no `thoughtsTokenCount` field at all.**
+- **Analyze** (`thinkingConfigFor(model, "medium")`) usageMetadata:
+  `{promptTokenCount: 1272, candidatesTokenCount: 5, thoughtsTokenCount:
+  149, totalTokenCount: 1426}` — priced fine, `estimatedCostUsd:
+  0.0007666`.
+
+`estimateGeminiCost` required all three directional counters
+(`promptTokenCount`, `candidatesTokenCount`, `thoughtsTokenCount`) to be
+present, treating a missing one as "cannot price." At `minimal` thinking
+level Gemini omits `thoughtsTokenCount` from the response entirely instead
+of reporting `0` — so **every preflight call** (the majority of total
+volume) silently priced out to `null`, leaving only analyze's small
+per-call output cost in any total. That's why "Estimated cost" read $0.00–
+$0.01 in production despite real spend being visibly higher on the Google
+side.
+
+**Fix:** `thoughtsTokenCount` is no longer required — a missing value now
+defaults to `0` thinking tokens (a legitimate outcome of `minimal`
+thinking, not an error). Only `promptTokenCount` and `candidatesTokenCount`
+missing still returns `null`, since those two are the actual core
+input/output counters a response should always carry. Added a regression
+test (`gemini-cost.test.ts`) using the exact preflight payload captured
+above.
+
+**Result:** ✅ `npm run typecheck`, `npm test` (297 tests, 1 pre-existing
+skip), `npm run build` all pass. Temporary diagnostic log removed in the
+same change.
+
+### 2026-09-04 — pending commit — Cloud Billing panel redesign: daily spend, month-to-date, and a manually-configured cap
+
+**Why:** the old "Actual billed spend" card only showed 24h/30d aggregates
+— no day-by-day trend, no month-to-date, no sense of "are we close to our
+limit." Researched what Google actually exposes programmatically before
+designing anything: confirmed against
+[ai.google.dev/gemini-api/docs/billing](https://ai.google.dev/gemini-api/docs/billing)
+that the AI Studio "Gemini API Spend" page's monthly spend cap and prepay
+credit balance have **no public API** — UI-only. The Cloud Billing Budgets
+API was also ruled out: it only returns a budget's configuration, never
+live spend, and would need billing-account-level IAM beyond what this
+integration already has.
+
+**What's real vs. operator-provided, made explicit in the UI:**
+- Month to date, yesterday, and the daily chart are real numbers from the
+  already-connected BigQuery billing export (`cloud-billing.ts`), extended
+  with a day-bucketed Gemini-only query (last 28 days) and a calendar-month
+  (not rolling 30d) sum to match how Google itself frames "month to date."
+- "Avg per request" divides that real 7-day Gemini spend by our own 7-day
+  `vision_request` count (`geminiHealth.headline["7d"]`) — a genuine
+  blended $/request figure, not the app-side token estimate.
+- "Projected month end" is a simple linear extrapolation
+  (month-to-date ÷ elapsed days × days in month), labeled "at current daily
+  pace" so it doesn't read as a promise.
+- "Your configured monthly cap" reads `GEMINI_MONTHLY_SPEND_CAP_USD`, an
+  env var the operator sets to match what they configured in AI Studio —
+  the panel copy says explicitly that this is manual, not fetched live,
+  since Google won't give us the real number.
+- Deliberately no "Today" card and no "Google account balance" card — the
+  export has no freshness guarantee (commonly 1-2 days behind, sometimes
+  the "stale >36h" case already in this dashboard), and a prepay balance
+  has no API at all. Showing either would be fabricating data.
+
+**Chart:** hand-rolled flat-bar chart (`DailySpendChart`, matching this
+dashboard's existing no-dependency visuals rather than adding Chart.js),
+with a 7d/28d toggle that just slices the already-fetched 28-day array —
+no extra request.
+
+**Result:** ✅ `npm run typecheck`, `npm test` (298 tests, 1 pre-existing
+skip), `npm run build` all pass. New `cloud-billing.test.ts` coverage for
+the daily-breakdown query and the manually-configured cap. Not yet
+verified live against production BigQuery data.
