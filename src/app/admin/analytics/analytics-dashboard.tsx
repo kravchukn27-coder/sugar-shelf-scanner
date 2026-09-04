@@ -592,16 +592,22 @@ export default function AnalyticsDashboard() {
 
   return <main className={styles.page}>
     <div className={styles.stickyBar}>
-      <header className={styles.header}>
-        <div><p className={styles.eyebrow}>Sugar Camera · Internal</p>{view === "overview" && <><h1>Product pulse</h1><p className={styles.subhead}>{RANGE_LABELS[range]} · refreshes every 30 seconds</p></>}</div>
-        <div className={styles.freshness}><span className={styles.liveDot} /> Updated {new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(overview.generatedAt))}<button onClick={() => void refresh(secret, range)} disabled={status === "loading"}>{status === "loading" ? "Refreshing…" : "Refresh"}</button></div>
+      <header className={styles.stickyIdentity}>
+        <p className={styles.eyebrow}>Sugar Camera · Internal</p>
+        <div className={styles.stickyTitleLine}>
+          <h1>{view === "overview" ? "Product pulse" : "Gemini Health"}</h1>
+          <p className={styles.subhead}>{view === "overview" ? `${RANGE_LABELS[range]} · refreshes every 30 seconds` : `${geminiRange === "24h" ? "Last-24-hour" : "Seven-day"} speed and reliability`}</p>
+        </div>
       </header>
 
       <nav className={styles.tabs} aria-label="Analytics views"><button className={view === "overview" ? styles.tabActive : undefined} onClick={() => setView("overview")}>Product pulse</button><button className={view === "gemini" ? styles.tabActive : undefined} onClick={() => setView("gemini")}>Gemini Health</button></nav>
 
-      {view === "overview" && <div className={styles.rangeTabs} aria-label="Product pulse date range">{(Object.keys(RANGE_LABELS) as OverviewRange[]).map((item) => <button key={item} className={range === item ? styles.rangeActive : undefined} onClick={() => setRange(item)}>{item === "all" ? "All time" : item}</button>)}</div>}
+      <div className={styles.stickyRange}>
+        {view === "overview" && <div className={styles.rangeTabs} aria-label="Product pulse date range">{(Object.keys(RANGE_LABELS) as OverviewRange[]).map((item) => <button key={item} className={range === item ? styles.rangeActive : undefined} onClick={() => setRange(item)}>{item === "all" ? "All time" : item}</button>)}</div>}
+        {view === "gemini" && <><div className={styles.rangeTabs} aria-label="Gemini Health date range"><button className={geminiRange === "24h" ? styles.rangeActive : undefined} onClick={() => setGlobalGeminiRange("24h")}>24h</button><button className={geminiRange === "7d" ? styles.rangeActive : undefined} onClick={() => setGlobalGeminiRange("7d")}>7d</button></div><span className={styles.coverageBadge}>{coverageLabel(geminiDaysCovered)}</span></>}
+      </div>
 
-      {view === "gemini" && <div className={styles.healthHeading}><div><p className={styles.eyebrow}>Gemini Health</p><h2>{geminiRange === "24h" ? "Last-24-hour" : "Seven-day"} speed and reliability</h2><p>Separate Gemini time from server work and the user’s actual scanner experience.</p></div><div className={styles.rangeTabs} aria-label="Gemini Health date range"><button className={geminiRange === "24h" ? styles.rangeActive : undefined} onClick={() => setGlobalGeminiRange("24h")}>24h</button><button className={geminiRange === "7d" ? styles.rangeActive : undefined} onClick={() => setGlobalGeminiRange("7d")}>7d</button></div><span>{coverageLabel(geminiDaysCovered)}</span></div>}
+      <div className={styles.freshness}><span className={styles.liveDot} /> <span>Updated {new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(overview.generatedAt))}</span><button onClick={() => void refresh(secret, range)} disabled={status === "loading"}>{status === "loading" ? "Refreshing…" : "Refresh"}</button></div>
     </div>
 
     {status === "unavailable" && <p className={styles.inlineError} role="alert">The last refresh failed; values below are from the previous successful update.</p>}
