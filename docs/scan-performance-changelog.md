@@ -551,3 +551,46 @@ verified live against production BigQuery data.
 **Result:** ✅ `npm run typecheck`, `npm test` (298 tests, 1 pre-existing
 skip), `npm run build` all pass. Not yet verified live in the browser
 against production data (deploy pending).
+
+### 2026-09-04 — pending commit — "24h" windows fixed to the calendar day, not a rolling lookback
+
+**Why:** the operator asked whether the dashboard's "24h" toggle counts from
+midnight or is a rolling 24-hour lookback. It was rolling everywhere except
+Cloud Billing's "Month to date" (deliberately calendar-aligned, matching
+how AI Studio itself frames it). Decision: make "24h" consistently mean
+"today so far" (UTC midnight to now) across the whole dashboard, matching
+that existing precedent, rather than "the last 24 hours regardless of
+clock time."
+
+**Changed:**
+- `dashboard.ts`: new `startOfUtcDay()` helper. `readDashboardOverview`'s
+  `windowHours === 24` case now starts at midnight UTC instead of
+  `endsAt - 24h`; its "previous window" comparison becomes yesterday's
+  full calendar day (`startsAt - 24h`) instead of the 24h before that.
+  3d/7d/all-time windows are untouched — intentionally still rolling.
+  `readGeminiHeadline`'s `"24h"` call now starts at midnight UTC; the
+  `"7d"` call is untouched (still a rolling 168h lookback, by design —
+  there's no "week to date" concept here).
+- `cloud-billing.ts`: `google_24h`/`gemini_24h` switched from
+  `TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)` to
+  `TIMESTAMP_TRUNC(CURRENT_TIMESTAMP(), DAY)`. These two fields aren't
+  currently rendered by the redesigned Cloud Billing panel, but are part
+  of the public `CloudBillingSummary` type and were fixed for consistency
+  rather than left rolling while everything else became fixed.
+- Frontend text updated to stop implying a rolling window: `RANGE_LABELS`
+  `"24h"` badge "Last 24 hours" → "Today"; the Gemini Health subhead and
+  the Models table heading "Last-24-hour" → "Today's"; `formatDelta`'s
+  hardcoded "vs prior 24h" suffix is now range-aware — "vs yesterday" for
+  24h (since the comparison window is now literally yesterday's calendar
+  day), "vs prior 3d"/"vs prior 7d" unchanged for the still-rolling
+  windows (this incidentally fixes those two, which were already showing
+  the wrong "vs prior 24h" text regardless of the selected range).
+
+**New test:** `dashboard.test.ts` gained a params-capturing mock (the
+existing SQL-text-matching mock doesn't inspect date params) asserting
+the exact UTC midnight boundaries for a fixed clock, for both the
+Product-pulse metrics query and the Gemini Health "24h" headline call.
+
+**Result:** ✅ `npm run typecheck`, `npm test` (299 tests, 1 pre-existing
+skip), `npm run build` all pass. Not yet verified live in the browser
+against production data (deploy pending).
