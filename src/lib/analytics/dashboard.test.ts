@@ -76,3 +76,27 @@ test("dashboard overview fills missing metrics and returns aggregate-only event 
     assert.deepEqual(headline.breakerTransitions, [{ operation: "preflight", opened: 2, closed: 1 }]);
   }
 });
+
+// "24h" windows are fixed to the calendar day (UTC midnight to now), not a
+// rolling 24-hour lookback -- see startOfUtcDay's doc comment in
+// dashboard.ts. This test captures the actual query params passed for a
+// fixed "now" to verify the boundary math directly, since the RULES-based
+// mock above only checks SQL text, not the date params.
+test("24h windows are fixed to the current UTC calendar day, not a rolling lookback", async () => {
+  const calls: { sql: string; params: unknown[] }[] = [];
+  const db = {
+    async query(sql: string, params: unknown[] = []) {
+      calls.push({ sql, params });
+      const rule = RULES.find((candidate) => candidate.match(sql));
+      return { rows: rule?.rows ?? [] };
+    },
+  };
+  await readDashboardOverview(db as unknown as SqlQueryExecutor, new Date("2026-08-31T15:42:07.000Z"));
+
+  const metricsCall = calls.find((call) => call.sql.includes("metric_events"));
+  assert.deepEqual(metricsCall?.params, ["2026-08-31T00:00:00.000Z", "2026-08-31T15:42:07.000Z", "2026-08-30T00:00:00.000Z"]);
+
+  const headlineModelCalls = calls.filter((call) => call.sql.includes("event_name = 'vision_request'") && call.sql.includes("model"));
+  const headlineStarts = headlineModelCalls.map((call) => call.params[0]).sort();
+  assert.deepEqual(headlineStarts, ["2026-08-24T15:42:07.000Z", "2026-08-31T00:00:00.000Z"]);
+});
